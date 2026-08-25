@@ -1,8 +1,10 @@
 import asyncio
+import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+from x402.http.utils import decode_payment_required_header
 from x402.schemas import SupportedKind, SupportedResponse
 
 from smartfetch.payments import X402Settings
@@ -205,6 +207,80 @@ class FastAPICompatibilityTests(unittest.TestCase):
             response.json()['request_id'], response.headers['x-request-id']
         )
         self.assertEqual(health.status_code, 200)
+
+
+class UvicornProxyConfigurationTests(unittest.TestCase):
+    def decoded_resource_url(self, environ):
+        supported = SupportedResponse(kinds=[SupportedKind(
+            x402Version=2,
+            scheme='exact',
+            network='eip155:84532',
+        )])
+        settings = X402Settings(
+            True,
+            '0x1111111111111111111111111111111111111111',
+            '$0.005',
+            'eip155:84532',
+        )
+        test_environ = dict(os.environ)
+        test_environ.pop('FORWARDED_ALLOW_IPS', None)
+        test_environ.pop('RAILWAY_ENVIRONMENT_ID', None)
+        test_environ.update(environ)
+        with (
+            patch.dict(os.environ, test_environ, clear=True),
+            patch(
+                'x402.http.HTTPFacilitatorClient.get_supported',
+                return_value=supported,
+            ),
+        ):
+            config = server.create_uvicorn_config(server.create_app(settings))
+            config.load()
+            with TestClient(
+                config.loaded_app,
+                base_url='http://test-host.example',
+            ) as client:
+                response = client.post(
+                    '/fetch',
+                    json={'url': 'https://example.com'},
+                    headers={
+                        'Host': 'test-host.example',
+                        'X-Forwarded-For': '203.0.113.10',
+                        'X-Forwarded-Proto': 'https',
+                    },
+                )
+
+        self.assertEqual(response.status_code, 402)
+        payment_required = decode_payment_required_header(
+            response.headers['payment-required']
+        )
+        return str(payment_required.resource.url)
+
+    def test_railway_forwarded_https_is_advertised_by_x402(self):
+        resource_url = self.decoded_resource_url({
+            'RAILWAY_ENVIRONMENT_ID': 'test-environment-id',
+        })
+
+        self.assertEqual(resource_url, 'https://test-host.example/fetch')
+
+    def test_explicit_forwarded_allow_ips_overrides_railway_default(self):
+        resource_url = self.decoded_resource_url({
+            'RAILWAY_ENVIRONMENT_ID': 'test-environment-id',
+            'FORWARDED_ALLOW_IPS': '127.0.0.1',
+        })
+
+        self.assertEqual(resource_url, 'http://test-host.example/fetch')
+
+    def test_explicit_forwarded_allow_ips_is_honored_outside_railway(self):
+        resource_url = self.decoded_resource_url({
+            'FORWARDED_ALLOW_IPS': '*',
+        })
+
+        self.assertEqual(resource_url, 'https://test-host.example/fetch')
+
+    def test_non_railway_keeps_uvicorn_localhost_proxy_default(self):
+        resource_url = self.decoded_resource_url({})
+
+        self.assertEqual(resource_url, 'http://test-host.example/fetch')
 
 
 if __name__ == '__main__':

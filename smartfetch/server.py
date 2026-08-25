@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import threading
 import time
 import uuid
@@ -308,12 +309,25 @@ def create_app(
 app = create_app()
 
 
+def create_uvicorn_config(application=None) -> uvicorn.Config:
+    forwarded_allow_ips = os.environ.get('FORWARDED_ALLOW_IPS')
+    if forwarded_allow_ips is None and os.environ.get('RAILWAY_ENVIRONMENT_ID'):
+        forwarded_allow_ips = '*'
+    return uvicorn.Config(
+        app if application is None else application,
+        host=HOST,
+        port=PORT,
+        proxy_headers=True,
+        forwarded_allow_ips=forwarded_allow_ips,
+    )
+
+
 def main():
     print(
         f'{SERVICE_NAME} {SERVICE_VERSION} listening on http://{HOST}:{PORT}',
         flush=True,
     )
-    uvicorn.run(app, host=HOST, port=PORT)
+    uvicorn.Server(create_uvicorn_config()).run()
 
 
 if __name__ == '__main__':
