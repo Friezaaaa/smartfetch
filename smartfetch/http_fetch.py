@@ -9,6 +9,7 @@ from .security import validate_public_url
 MAX_BYTES = int(os.getenv('MAX_RESPONSE_BYTES', '3000000'))
 TIMEOUT = float(os.getenv('FETCH_TIMEOUT_SECONDS', '12'))
 MAX_REDIRECTS = 5
+TRANSIENT_STATUS_CODES = {502, 503, 504}
 
 SESSION = requests.Session()
 SESSION.trust_env = False
@@ -19,11 +20,33 @@ SESSION.headers.update({
 })
 
 
+def _request_with_retry(url: str):
+    for attempt in range(2):
+        try:
+            response = SESSION.get(
+                url,
+                allow_redirects=False,
+                timeout=TIMEOUT,
+                stream=True,
+            )
+        except (requests.ConnectionError, requests.Timeout):
+            if attempt == 0:
+                continue
+            raise
+
+        if response.status_code in TRANSIENT_STATUS_CODES and attempt == 0:
+            response.close()
+            continue
+        return response
+
+    raise RuntimeError('Transient request retry exhausted')
+
+
 def http_fetch(url: str) -> dict:
     current = validate_public_url(url)
 
     for _ in range(MAX_REDIRECTS + 1):
-        response = SESSION.get(current, allow_redirects=False, timeout=TIMEOUT, stream=True)
+        response = _request_with_retry(current)
 
         if response.status_code in {301, 302, 303, 307, 308}:
             location = response.headers.get('Location')

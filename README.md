@@ -1,20 +1,16 @@
-# SmartFetch V1.2 — deployable API
+# SmartFetch V1.3 — payment-ready API
 
 SmartFetch takes a public web URL and returns clean agent-ready text, Markdown, links, metadata, and the retrieval method used. It tries cheap HTTP retrieval first and falls back to a real Chromium browser when needed.
 
-## What changed from V1.1
+## What changed from V1.2
 
-- Public binding (`0.0.0.0`) for container deployment.
-- Output caps: default 20,000 chars, hard max 50,000 chars per text field.
-- Links capped at 50.
-- Total request timeout (25s default).
-- Bounded fetch/browser concurrency so one burst cannot spawn unlimited Chrome processes.
-- Conservative unauthenticated rate limiter until x402 is added.
-- Stronger SSRF target validation: blocks localhost, private/link-local/metadata addresses, credentials, non-HTTP(S), and nonstandard ports.
-- Request IDs and structured error codes.
-- `/health` and `/meta` endpoints.
-- Dockerfile + Railway config.
-- Remote 20-URL test that calls the deployed API instead of importing the Python function directly.
+- FastAPI + Uvicorn now provide the API boundary while preserving the V1.2 response contract.
+- Upstream connection/timeout failures and HTTP 502, 503, or 504 responses receive one retry.
+- Official x402 middleware can protect only `POST /fetch`; it is disabled by default.
+- V1.3 payment configuration is restricted to Base Sepolia testnet and the fixed, configurable `$0.005` default price.
+- FastAPI, Uvicorn, and x402 are exactly pinned so infrastructure upgrades are explicit.
+
+The retrieval engine, extraction/browser behavior, SSRF protections, request limits, rate limiting, and concurrency controls are unchanged.
 
 ## API
 
@@ -56,7 +52,7 @@ Example response fields:
   "truncated": false,
   "elapsed_ms": 350,
   "request_id": "…",
-  "service_version": "1.2.0"
+  "service_version": "1.3.0"
 }
 ```
 
@@ -78,6 +74,25 @@ curl -X POST http://127.0.0.1:8787/fetch \
 
 Windows users can run `setup_windows.bat`, then `start_windows.bat`.
 
+With `X402_ENABLED` unset or false, startup requires no payment settings and `/fetch` remains free for local and remote testing.
+
+## Base Sepolia x402 test mode
+
+V1.3 supports Base Sepolia only. Configure the public receiving address and enable payment explicitly:
+
+```text
+X402_ENABLED=true
+X402_PAY_TO=0xYOUR_PUBLIC_RECEIVING_ADDRESS
+X402_PRICE=$0.005
+X402_NETWORK=eip155:84532
+```
+
+`X402_PRICE` and `X402_NETWORK` use the values shown when omitted. When payment is enabled, SmartFetch validates the entire configuration and initializes the official x402 middleware and testnet facilitator before serving. Any invalid address, price, network, unsupported facilitator response, or initialization failure aborts startup; `/fetch` never silently falls back to free access.
+
+Only `POST /fetch` is protected. `/health`, `/`, and `/meta` always remain free. Base mainnet (`eip155:8453`) and every other network are rejected in V1.3.
+
+SmartFetch needs only the public receiving address. Never provide a seller private key to this service: SmartFetch does not require, read, accept, log, or store one.
+
 ## Local validation
 
 ```bash
@@ -90,8 +105,8 @@ python tests/api_local_smoke.py
 ## Container
 
 ```bash
-docker build -t smartfetch:v1.2 .
-docker run --rm -p 8787:8787 smartfetch:v1.2
+docker build -t smartfetch:v1.3 .
+docker run --rm -p 8787:8787 smartfetch:v1.3
 ```
 
 The container installs Chromium automatically.
@@ -112,6 +127,7 @@ BROWSER_TIMEOUT_SECONDS=15
 TOTAL_REQUEST_TIMEOUT_SECONDS=25
 RATE_LIMIT_PER_MINUTE=30
 RATE_LIMIT_BURST=10
+X402_ENABLED=false
 ```
 
 Do **not** set `ALLOW_PRIVATE_NETWORK=1` in production.
@@ -132,6 +148,6 @@ python tests/remote_20.py https://YOUR-PUBLIC-URL
 
 Our deployment gate remains **18/20 minimum**, including all five forced-browser requests.
 
-## Next milestone
+## Payment launch status
 
-Once the remote API passes, add x402 to `/fetch`, publish payment/discovery metadata, complete the first settlement, and then test outside-agent discovery.
+V1.3 is testnet infrastructure only. Do not configure real or mainnet payments yet. Validate the Railway deployment and Base Sepolia payment flow before any future mainnet milestone.

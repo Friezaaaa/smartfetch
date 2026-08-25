@@ -24,7 +24,7 @@ fixture = ThreadingHTTPServer(('127.0.0.1', PORT_FIXTURE), Fixture)
 threading.Thread(target=fixture.serve_forever, daemon=True).start()
 
 env = dict(os.environ)
-env.update({'ALLOW_PRIVATE_NETWORK':'1','HOST':'127.0.0.1','PORT':str(PORT_API),'DEFAULT_MAX_OUTPUT_CHARS':'1000'})
+env.update({'ALLOW_PRIVATE_NETWORK':'1','HOST':'127.0.0.1','PORT':str(PORT_API),'DEFAULT_MAX_OUTPUT_CHARS':'1000','X402_ENABLED':'false'})
 proc = subprocess.Popen([sys.executable,'-m','smartfetch.server'], cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 try:
     deadline=time.time()+8
@@ -35,6 +35,10 @@ try:
         except Exception: time.sleep(0.1)
     else: raise RuntimeError('API did not start')
 
+    with urlopen(f'http://127.0.0.1:{PORT_API}/meta', timeout=2) as r:
+        meta=json.load(r)
+    assert meta['payment']=='not-enabled-yet'
+
     payload=json.dumps({'url':f'http://127.0.0.1:{PORT_FIXTURE}/redirect','max_chars':1000}).encode()
     req=Request(f'http://127.0.0.1:{PORT_API}/fetch',data=payload,headers={'Content-Type':'application/json'},method='POST')
     with urlopen(req, timeout=10) as r:
@@ -43,10 +47,11 @@ try:
     assert out['status_code']==200
     assert out['render_method']=='http'
     assert 'SmartFetch local API test' in out['content']
-    assert out['service_version']=='1.2.0'
+    assert out['service_version']=='1.3.0'
     assert out['max_chars']==1000
     assert out['request_id']
     print('PASS /health')
+    print('PASS /meta free mode')
     print('PASS /fetch end-to-end')
     print(json.dumps({k:out[k] for k in ['status_code','render_method','elapsed_ms','word_count','truncated','request_id']},indent=2))
 finally:
