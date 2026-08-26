@@ -1,18 +1,17 @@
-# SmartFetch V1.7 — native remote MCP
+# SmartFetch V1.8 — MCP discoverability
 
 SmartFetch takes a public web URL and returns clean agent-ready text, Markdown, links, metadata, and the retrieval method used. It tries cheap HTTP retrieval first and falls back to a real Chromium browser when needed.
 
-## What changed in V1.7
+## What changed in V1.8
 
-- Native MCP Streamable HTTP is available at exactly `/mcp`.
-- MCP exposes exactly one tool, `fetch_webpage`, which calls the existing
-  SmartFetch retrieval engine internally.
-- MCP initialization and `tools/list` are free. When x402 is enabled, only
-  `fetch_webpage` execution requires and settles the same configured payment as
-  `POST /fetch`.
-- `/meta` now describes the MCP path, transport, and tool.
+- The paid MCP `fetch_webpage` tool now declares official x402 Bazaar metadata
+  for agent discovery without changing its execution or payment behavior.
+- The root `server.json` advertises the existing `/mcp` Streamable HTTP endpoint
+  as a remote-only server for the Official MCP Registry.
+- No Registry publication, deployment, Railway variable change, or payment is
+  performed by this repository update.
 
-All V1.6 HTTP payment and Bazaar behavior remains unchanged:
+All V1.7 HTTP payment, Bazaar, and native MCP behavior remains unchanged:
 
 - Base Sepolia remains the default x402 network and continues to use `https://x402.org/facilitator` without CDP credentials.
 - Base mainnet can use Coinbase's authenticated CDP facilitator when explicitly selected.
@@ -62,7 +61,7 @@ Example response fields:
   "truncated": false,
   "elapsed_ms": 350,
   "request_id": "…",
-  "service_version": "1.7.0"
+  "service_version": "1.8.0"
 }
 ```
 
@@ -94,6 +93,17 @@ challenge. A valid payment is verified before retrieval and settled once after
 successful tool execution. The network, public payee, and price come from
 `X402_NETWORK`, `X402_PAY_TO`, and `X402_PRICE`. No seller private key or wallet
 secret is accepted or required.
+
+The unpaid MCP payment challenge includes a Bazaar declaration for
+`fetch_webpage` with transport `streamable-http`, the existing input contract,
+and a representative SmartFetch output. Its payment resource remains
+`mcp://tool/fetch_webpage`. The existing HTTP Bazaar resource for `POST /fetch`
+is separate and unchanged.
+
+The root `server.json` describes the public remote endpoint at
+`https://smartfetch-production-ea53.up.railway.app/mcp`. Registry publication is
+a separate authenticated operator action; adding the manifest does not publish
+or deploy the service.
 
 ## Run locally
 
@@ -157,8 +167,8 @@ python tests/api_local_smoke.py
 ## Container
 
 ```bash
-docker build -t smartfetch:v1.7 .
-docker run --rm -p 8787:8787 smartfetch:v1.7
+docker build -t smartfetch:v1.8 .
+docker run --rm -p 8787:8787 smartfetch:v1.8
 ```
 
 The container installs Chromium automatically.
@@ -202,4 +212,4 @@ Our deployment gate remains **18/20 minimum**, including all five forced-browser
 
 ## Payment launch status
 
-V1.7 preserves the existing Base Sepolia and Base mainnet payment configuration. This repository change does not itself deploy the service or modify Railway variables. The active payment network is controlled by X402_NETWORK: eip155:84532 for Base Sepolia or eip155:8453 for Base mainnet.
+V1.8 preserves the existing Base Sepolia and Base mainnet payment configuration. This repository change does not itself publish to the MCP Registry, deploy the service, or modify Railway variables. The active payment network is controlled by X402_NETWORK: eip155:84532 for Base Sepolia or eip155:8453 for Base mainnet.

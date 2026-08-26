@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.friezaaaa/smartfetch",
+  "title": "SmartFetch",
+  "description": "Fetch public webpages as clean text, Markdown, links, and metadata, with browser rendering.",
+  "version": "1.8.0",
+  "repository": {
+    "url": "https://github.com/Friezaaaa/smartfetch",
+    "source": "github"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://smartfetch-production-ea53.up.railway.app/mcp"
+    }
+  ]
+}

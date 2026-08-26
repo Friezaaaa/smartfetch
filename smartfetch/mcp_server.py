@@ -9,7 +9,7 @@ from pydantic import Field
 from starlette.routing import Route
 from x402.schemas import PaymentRequirements, ResourceInfo
 
-from .bazaar import FETCH_DESCRIPTION
+from .bazaar import FETCH_DESCRIPTION, fetch_mcp_discovery_extension
 from .config import (
     HOST,
     MAX_REQUEST_BODY_BYTES,
@@ -46,7 +46,10 @@ def _initialize_payment(settings: X402Settings):
     try:
         from x402.server import ResourceConfig
 
-        resource_server = create_x402_resource_server(settings)
+        resource_server = create_x402_resource_server(
+            settings,
+            register_bazaar=True,
+        )
         resource_server.initialize()
         accepts = resource_server.build_payment_requirements(ResourceConfig(
             scheme="exact",
@@ -102,6 +105,7 @@ def create_smartfetch_mcp(
                 mimeType="application/json",
                 serviceName="SmartFetch",
             ),
+            extensions=fetch_mcp_discovery_extension(),
         )
         tool_handler = payment_wrapper(tool_handler)
 
