@@ -24,7 +24,12 @@ from .config import (
     TOTAL_REQUEST_TIMEOUT_SECONDS,
 )
 from .core import smart_fetch
-from .payments import X402Settings, install_x402, load_x402_settings
+from .payments import (
+    BASE_MAINNET,
+    X402Settings,
+    install_x402,
+    load_x402_settings,
+)
 
 
 _EXECUTOR = ThreadPoolExecutor(
@@ -119,6 +124,15 @@ def create_app(
     payment_settings: Optional[X402Settings] = None,
 ) -> FastAPI:
     settings = payment_settings or load_x402_settings()
+    payment_mode = (
+        'not-enabled-yet'
+        if not settings.enabled
+        else (
+            'x402-enabled-mainnet'
+            if settings.network == BASE_MAINNET
+            else 'x402-enabled-testnet'
+        )
+    )
     application = FastAPI(
         title=SERVICE_NAME,
         docs_url=None,
@@ -155,11 +169,7 @@ def create_app(
                 'max_chars': 20000,
                 'force_browser': False,
             },
-            'payment': (
-                'x402-enabled-testnet'
-                if settings.enabled
-                else 'not-enabled-yet'
-            ),
+            'payment': payment_mode,
         })
 
     application.add_api_route('/', metadata, methods=['GET'])

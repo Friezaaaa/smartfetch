@@ -1,14 +1,14 @@
-# SmartFetch V1.3 — payment-ready API
+# SmartFetch V1.4 — mainnet-ready payment infrastructure
 
 SmartFetch takes a public web URL and returns clean agent-ready text, Markdown, links, metadata, and the retrieval method used. It tries cheap HTTP retrieval first and falls back to a real Chromium browser when needed.
 
-## What changed from V1.2
+## What changed in V1.4
 
-- FastAPI + Uvicorn now provide the API boundary while preserving the V1.2 response contract.
-- Upstream connection/timeout failures and HTTP 502, 503, or 504 responses receive one retry.
-- Official x402 middleware can protect only `POST /fetch`; it is disabled by default.
-- V1.3 payment configuration is restricted to Base Sepolia testnet and the fixed, configurable `$0.005` default price.
-- FastAPI, Uvicorn, and x402 are exactly pinned so infrastructure upgrades are explicit.
+- Base Sepolia remains the default x402 network and continues to use `https://x402.org/facilitator` without CDP credentials.
+- Base mainnet can use Coinbase's authenticated CDP facilitator when explicitly selected.
+- Mainnet startup requires both CDP API credentials and fails closed for invalid credentials or missing facilitator support.
+- `/meta` distinguishes enabled testnet and mainnet payment modes.
+- `cdp-sdk`, FastAPI, Uvicorn, and x402 are exactly pinned so infrastructure upgrades are explicit.
 
 The retrieval engine, extraction/browser behavior, SSRF protections, request limits, rate limiting, and concurrency controls are unchanged.
 
@@ -52,7 +52,7 @@ Example response fields:
   "truncated": false,
   "elapsed_ms": 350,
   "request_id": "…",
-  "service_version": "1.3.0"
+  "service_version": "1.4.0"
 }
 ```
 
@@ -76,9 +76,9 @@ Windows users can run `setup_windows.bat`, then `start_windows.bat`.
 
 With `X402_ENABLED` unset or false, startup requires no payment settings and `/fetch` remains free for local and remote testing.
 
-## Base Sepolia x402 test mode
+## x402 payment modes
 
-V1.3 supports Base Sepolia only. Configure the public receiving address and enable payment explicitly:
+Payment remains disabled unless explicitly enabled. Base Sepolia is the default and requires only the public receiving address:
 
 ```text
 X402_ENABLED=true
@@ -87,11 +87,24 @@ X402_PRICE=$0.005
 X402_NETWORK=eip155:84532
 ```
 
-`X402_PRICE` and `X402_NETWORK` use the values shown when omitted. When payment is enabled, SmartFetch validates the entire configuration and initializes the official x402 middleware and testnet facilitator before serving. Any invalid address, price, network, unsupported facilitator response, or initialization failure aborts startup; `/fetch` never silently falls back to free access.
+`X402_PRICE` and `X402_NETWORK` use the values shown when omitted. The default price remains `$0.005`.
 
-Only `POST /fetch` is protected. `/health`, `/`, and `/meta` always remain free. Base mainnet (`eip155:8453`) and every other network are rejected in V1.3.
+Base mainnet must be selected explicitly and uses Coinbase's authenticated CDP facilitator:
 
-SmartFetch needs only the public receiving address. Never provide a seller private key to this service: SmartFetch does not require, read, accept, log, or store one.
+```text
+X402_ENABLED=true
+X402_PAY_TO=0xYOUR_PUBLIC_RECEIVING_ADDRESS
+X402_PRICE=$0.005
+X402_NETWORK=eip155:8453
+CDP_API_KEY_ID=YOUR_CDP_API_KEY_ID
+CDP_API_KEY_SECRET=YOUR_CDP_API_KEY_SECRET
+```
+
+Mainnet requires both CDP credentials. Missing, invalid, or unusable credentials, unsupported Base-mainnet exact payments, or any facilitator/middleware initialization failure aborts startup. SmartFetch never falls back to free access or the testnet facilitator when mainnet is selected. Every network other than Base Sepolia and Base mainnet is rejected.
+
+Only `POST /fetch` is protected. `/health`, `/`, and `/meta` always remain free. Enabled `/meta` responses report `x402-enabled-testnet` or `x402-enabled-mainnet` without exposing configuration values.
+
+SmartFetch uses `X402_PAY_TO` as the public receiving address and does not need `CDP_WALLET_SECRET`. Never provide a seller MetaMask private key or recovery phrase: SmartFetch does not require, read, accept, log, or store either one.
 
 ## Local validation
 
@@ -105,8 +118,8 @@ python tests/api_local_smoke.py
 ## Container
 
 ```bash
-docker build -t smartfetch:v1.3 .
-docker run --rm -p 8787:8787 smartfetch:v1.3
+docker build -t smartfetch:v1.4 .
+docker run --rm -p 8787:8787 smartfetch:v1.4
 ```
 
 The container installs Chromium automatically.
@@ -150,4 +163,4 @@ Our deployment gate remains **18/20 minimum**, including all five forced-browser
 
 ## Payment launch status
 
-V1.3 is testnet infrastructure only. Do not configure real or mainnet payments yet. Validate the Railway deployment and Base Sepolia payment flow before any future mainnet milestone.
+V1.4 contains mainnet-ready configuration and fail-closed initialization, but this repository change does not deploy it, change Railway variables, or execute a live mainnet payment. Keep production on Base Sepolia until mainnet credentials and an explicit deployment are separately approved.

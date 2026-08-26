@@ -120,9 +120,9 @@ class PaymentSettingsTests(unittest.TestCase):
                     'X402_PRICE': price,
                 })
 
-    def test_base_mainnet_and_every_other_network_fail_closed(self):
+    def test_networks_outside_v14_allowlist_fail_closed(self):
         payments = payments_module()
-        for network in ('eip155:8453', 'base-sepolia', 'eip155:1', 'solana:devnet'):
+        for network in ('base-sepolia', 'eip155:1', 'solana:devnet'):
             with self.subTest(network=network), self.assertRaisesRegex(
                 ValueError, 'X402_NETWORK'
             ):
