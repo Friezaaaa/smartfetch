@@ -1,17 +1,18 @@
-# SmartFetch V1.6 — optimized Bazaar semantic discovery
+# SmartFetch V1.7 — native remote MCP
 
 SmartFetch takes a public web URL and returns clean agent-ready text, Markdown, links, metadata, and the retrieval method used. It tries cheap HTTP retrieval first and falls back to a real Chromium browser when needed.
 
-## What changed in V1.6
+## What changed in V1.7
 
-- The existing paid `POST /fetch` Bazaar description now emphasizes common
-  agent intents such as reading, fetching, scraping, extracting, and browser
-  rendering public webpages.
-- Its discovery tags are now `web-reader`, `web-scraping`, `markdown`,
-  `browser`, and `agents` for stronger semantic matching.
-- The route, request/response schemas, pricing, and x402 behavior are unchanged.
+- Native MCP Streamable HTTP is available at exactly `/mcp`.
+- MCP exposes exactly one tool, `fetch_webpage`, which calls the existing
+  SmartFetch retrieval engine internally.
+- MCP initialization and `tools/list` are free. When x402 is enabled, only
+  `fetch_webpage` execution requires and settles the same configured payment as
+  `POST /fetch`.
+- `/meta` now describes the MCP path, transport, and tool.
 
-All V1.5 payment behavior and Bazaar route/schema behavior remain unchanged:
+All V1.6 HTTP payment and Bazaar behavior remains unchanged:
 
 - Base Sepolia remains the default x402 network and continues to use `https://x402.org/facilitator` without CDP credentials.
 - Base mainnet can use Coinbase's authenticated CDP facilitator when explicitly selected.
@@ -61,7 +62,7 @@ Example response fields:
   "truncated": false,
   "elapsed_ms": 350,
   "request_id": "…",
-  "service_version": "1.6.0"
+  "service_version": "1.7.0"
 }
 ```
 
@@ -69,6 +70,30 @@ When x402 payment protection is enabled, the `PAYMENT-REQUIRED` header for
 `POST /fetch` includes a Bazaar declaration with the `url`, `max_chars`, and
 `force_browser` input contract plus a representative successful response.
 `/`, `/health`, and `/meta` remain free and do not advertise Bazaar metadata.
+
+## MCP
+
+Remote MCP clients connect to `/mcp` using Streamable HTTP. The server exposes
+exactly one tool:
+
+```text
+fetch_webpage
+  url: required string
+  max_chars: optional integer (default 20000, minimum 1000, maximum 50000)
+  force_browser: optional boolean (default false)
+```
+
+The tool reads, fetches, scrapes, or extracts public webpages for agents and
+returns the existing SmartFetch text, Markdown, links, and retrieval metadata.
+It uses the same SSRF validation, executor, request timeout, concurrency cap,
+output cap, HTTP retrieval, and browser fallback as `POST /fetch`; it does not
+make an HTTP request back to the public API.
+
+When x402 is enabled, an unpaid `tools/call` returns the native MCP x402 payment
+challenge. A valid payment is verified before retrieval and settled once after
+successful tool execution. The network, public payee, and price come from
+`X402_NETWORK`, `X402_PAY_TO`, and `X402_PRICE`. No seller private key or wallet
+secret is accepted or required.
 
 ## Run locally
 
@@ -132,8 +157,8 @@ python tests/api_local_smoke.py
 ## Container
 
 ```bash
-docker build -t smartfetch:v1.6 .
-docker run --rm -p 8787:8787 smartfetch:v1.6
+docker build -t smartfetch:v1.7 .
+docker run --rm -p 8787:8787 smartfetch:v1.7
 ```
 
 The container installs Chromium automatically.
@@ -177,4 +202,4 @@ Our deployment gate remains **18/20 minimum**, including all five forced-browser
 
 ## Payment launch status
 
-V1.6 preserves the existing Base Sepolia and Base mainnet payment configuration. This repository change does not itself deploy the service or modify Railway variables. The active payment network is controlled by X402_NETWORK: eip155:84532 for Base Sepolia or eip155:8453 for Base mainnet.
+V1.7 preserves the existing Base Sepolia and Base mainnet payment configuration. This repository change does not itself deploy the service or modify Railway variables. The active payment network is controlled by X402_NETWORK: eip155:84532 for Base Sepolia or eip155:8453 for Base mainnet.

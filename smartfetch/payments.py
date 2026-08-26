@@ -139,6 +139,30 @@ def _preflight_mainnet_facilitator(facilitator):
     return _PreflightFacilitator(facilitator, supported)
 
 
+def create_x402_resource_server(
+    settings: X402Settings,
+    *,
+    register_bazaar: bool = False,
+):
+    """Build the configured x402 server shared by HTTP and MCP transports."""
+    if not settings.enabled:
+        raise ValueError("x402 must be enabled to create a resource server")
+
+    from x402.mechanisms.evm.exact import ExactEvmServerScheme
+    from x402.server import x402ResourceServer
+
+    facilitator = create_facilitator(settings)
+    if settings.network == BASE_MAINNET:
+        facilitator = _preflight_mainnet_facilitator(facilitator)
+    server = x402ResourceServer(facilitator)
+    server.register(settings.network, ExactEvmServerScheme())
+    if register_bazaar:
+        from x402.extensions.bazaar import bazaar_resource_server_extension
+
+        server.register_extension(bazaar_resource_server_extension)
+    return server
+
+
 def install_x402(app, settings: X402Settings) -> bool:
     """Install and eagerly initialize official x402 protection when enabled."""
     if not settings.enabled:
@@ -152,22 +176,16 @@ def install_x402(app, settings: X402Settings) -> bool:
         )
         from x402.http.middleware.fastapi import payment_middleware
         from x402.http.types import RouteConfig
-        from x402.extensions.bazaar import bazaar_resource_server_extension
-        from x402.mechanisms.evm.exact import ExactEvmServerScheme
-        from x402.server import x402ResourceServer
-
         from .bazaar import (
             FETCH_DESCRIPTION,
             FETCH_TAGS,
             fetch_discovery_extension,
         )
 
-        facilitator = create_facilitator(settings)
-        if settings.network == BASE_MAINNET:
-            facilitator = _preflight_mainnet_facilitator(facilitator)
-        server = x402ResourceServer(facilitator)
-        server.register(settings.network, ExactEvmServerScheme())
-        server.register_extension(bazaar_resource_server_extension)
+        server = create_x402_resource_server(
+            settings,
+            register_bazaar=True,
+        )
         routes = {
             "POST /fetch": RouteConfig(
                 accepts=PaymentOption(

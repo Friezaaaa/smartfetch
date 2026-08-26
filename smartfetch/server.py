@@ -24,6 +24,12 @@ from .config import (
     TOTAL_REQUEST_TIMEOUT_SECONDS,
 )
 from .core import smart_fetch
+from .mcp_server import (
+    MCP_PATH,
+    MCP_TOOL,
+    MCP_TRANSPORT,
+    create_smartfetch_mcp,
+)
 from .payments import (
     BASE_MAINNET,
     X402Settings,
@@ -120,6 +126,30 @@ async def _run_fetch(url: str, force_browser: bool, max_chars):
         raise
 
 
+async def _run_mcp_fetch(
+    url: str,
+    force_browser: bool,
+    max_chars: int,
+) -> dict:
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError('url must be a non-empty string')
+    if not _FETCH_SLOTS.acquire(blocking=False):
+        raise RuntimeError('SmartFetch is at capacity; retry shortly')
+    try:
+        try:
+            result = await _run_fetch(url.strip(), force_browser, max_chars)
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError(
+                'Fetch exceeded the service time limit'
+            ) from exc
+        output = dict(result)
+        output['request_id'] = uuid.uuid4().hex[:16]
+        output['service_version'] = SERVICE_VERSION
+        return output
+    finally:
+        _FETCH_SLOTS.release()
+
+
 def create_app(
     payment_settings: Optional[X402Settings] = None,
 ) -> FastAPI:
@@ -133,12 +163,15 @@ def create_app(
             else 'x402-enabled-testnet'
         )
     )
+    smartfetch_mcp = create_smartfetch_mcp(settings, _run_mcp_fetch)
     application = FastAPI(
         title=SERVICE_NAME,
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=smartfetch_mcp.lifespan,
     )
+    application.state.smartfetch_mcp = smartfetch_mcp
 
     async def framework_not_found(request: Request, _exception):
         return _not_found(request)
@@ -170,6 +203,12 @@ def create_app(
                 'force_browser': False,
             },
             'payment': payment_mode,
+            'mcp': {
+                'enabled': True,
+                'path': MCP_PATH,
+                'transport': MCP_TRANSPORT,
+                'tool': MCP_TOOL,
+            },
         })
 
     application.add_api_route('/', metadata, methods=['GET'])
@@ -259,6 +298,8 @@ def create_app(
             return _json_response(request, 200, result)
         finally:
             _FETCH_SLOTS.release()
+
+    application.router.routes.append(smartfetch_mcp.route)
 
     @application.api_route('/{path:path}', methods=[
         'GET',

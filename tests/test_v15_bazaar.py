@@ -155,7 +155,7 @@ class V16BazaarDiscoveryTests(unittest.TestCase):
         output_example = bazaar['info']['output']['example']
         self.assertTrue(output_example['success'])
         self.assertEqual(output_example['render_method'], 'http')
-        self.assertEqual(output_example['service_version'], '1.6.0')
+        self.assertEqual(output_example['service_version'], '1.7.0')
         self.assertTrue({
             'requested_url',
             'final_url',
