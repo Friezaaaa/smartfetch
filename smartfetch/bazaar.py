@@ -4,10 +4,17 @@ from .config import SERVICE_VERSION
 
 
 FETCH_DESCRIPTION = (
-    "Retrieve a public web page as clean text, Markdown, links, "
-    "and metadata for autonomous agents."
+    "Read, fetch, scrape, or extract any public webpage or URL for AI agents. "
+    "Returns clean text, Markdown, links, and metadata, with automatic browser "
+    "rendering for JavaScript-heavy pages."
 )
-FETCH_TAGS = ["web", "retrieval", "scraping", "agents"]
+FETCH_TAGS = [
+    "web-reader",
+    "web-scraping",
+    "markdown",
+    "browser",
+    "agents",
+]
 
 
 def fetch_discovery_extension():

@@ -34,7 +34,7 @@ SUPPORTED = SupportedResponse(kinds=[SupportedKind(
 )])
 
 
-class V15BazaarDiscoveryTests(unittest.TestCase):
+class V16BazaarDiscoveryTests(unittest.TestCase):
     def test_static_post_fetch_declaration_is_valid_before_installation(self):
         bazaar = fetch_discovery_extension()['bazaar']
 
@@ -109,8 +109,14 @@ class V15BazaarDiscoveryTests(unittest.TestCase):
         )
         self.assertEqual(payment_required.resource.service_name, 'SmartFetch')
         self.assertEqual(
+            payment_required.resource.description,
+            'Read, fetch, scrape, or extract any public webpage or URL for '
+            'AI agents. Returns clean text, Markdown, links, and metadata, '
+            'with automatic browser rendering for JavaScript-heavy pages.',
+        )
+        self.assertEqual(
             payment_required.resource.tags,
-            ['web', 'retrieval', 'scraping', 'agents'],
+            ['web-reader', 'web-scraping', 'markdown', 'browser', 'agents'],
         )
         self.assertLessEqual(len(payment_required.resource.description), 500)
 
@@ -137,11 +143,19 @@ class V15BazaarDiscoveryTests(unittest.TestCase):
         self.assertEqual(
             body_schema['properties']['force_browser']['type'], 'boolean'
         )
+        self.assertEqual(
+            hashlib.sha256(json.dumps(
+                body_schema,
+                sort_keys=True,
+                separators=(',', ':'),
+            ).encode('utf-8')).hexdigest(),
+            '6f08e7d505fc6f40e0f964662830b0c8a8f5e7c25f1240d9a7ee500f716ef84d',
+        )
 
         output_example = bazaar['info']['output']['example']
         self.assertTrue(output_example['success'])
         self.assertEqual(output_example['render_method'], 'http')
-        self.assertEqual(output_example['service_version'], '1.5.0')
+        self.assertEqual(output_example['service_version'], '1.6.0')
         self.assertTrue({
             'requested_url',
             'final_url',
@@ -156,6 +170,17 @@ class V15BazaarDiscoveryTests(unittest.TestCase):
             'elapsed_ms',
             'request_id',
         }.issubset(output_example))
+        output_schema = bazaar['schema']['properties']['output'][
+            'properties'
+        ]['example']
+        self.assertEqual(
+            hashlib.sha256(json.dumps(
+                output_schema,
+                sort_keys=True,
+                separators=(',', ':'),
+            ).encode('utf-8')).hexdigest(),
+            '1242309f47ddf83e2056d4a4eceb16e2a90a7b10f2240cf4bb70b046d89eed6d',
+        )
 
         accepted = payment_required.accepts[0]
         self.assertEqual(accepted.scheme, 'exact')
