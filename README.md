@@ -1,8 +1,16 @@
-# SmartFetch V1.4 — mainnet-ready payment infrastructure
+# SmartFetch V1.5 — agent-ready x402 discovery
 
 SmartFetch takes a public web URL and returns clean agent-ready text, Markdown, links, metadata, and the retrieval method used. It tries cheap HTTP retrieval first and falls back to a real Chromium browser when needed.
 
-## What changed in V1.4
+## What changed in V1.5
+
+- The existing paid `POST /fetch` route now declares x402 v2 Bazaar
+  discovery metadata for autonomous agents.
+- Its metadata documents the JSON body, successful response shape, service
+  name, and concise retrieval tags without exposing secrets or infrastructure.
+- Bazaar support is explicitly registered on the x402 resource server.
+
+All V1.4 payment behavior remains unchanged:
 
 - Base Sepolia remains the default x402 network and continues to use `https://x402.org/facilitator` without CDP credentials.
 - Base mainnet can use Coinbase's authenticated CDP facilitator when explicitly selected.
@@ -52,9 +60,14 @@ Example response fields:
   "truncated": false,
   "elapsed_ms": 350,
   "request_id": "…",
-  "service_version": "1.4.0"
+  "service_version": "1.5.0"
 }
 ```
+
+When x402 payment protection is enabled, the `PAYMENT-REQUIRED` header for
+`POST /fetch` includes a Bazaar declaration with the `url`, `max_chars`, and
+`force_browser` input contract plus a representative successful response.
+`/`, `/health`, and `/meta` remain free and do not advertise Bazaar metadata.
 
 ## Run locally
 
@@ -118,8 +131,8 @@ python tests/api_local_smoke.py
 ## Container
 
 ```bash
-docker build -t smartfetch:v1.4 .
-docker run --rm -p 8787:8787 smartfetch:v1.4
+docker build -t smartfetch:v1.5 .
+docker run --rm -p 8787:8787 smartfetch:v1.5
 ```
 
 The container installs Chromium automatically.
@@ -163,4 +176,4 @@ Our deployment gate remains **18/20 minimum**, including all five forced-browser
 
 ## Payment launch status
 
-V1.4 contains mainnet-ready configuration and fail-closed initialization, but this repository change does not deploy it, change Railway variables, or execute a live mainnet payment. Keep production on Base Sepolia until mainnet credentials and an explicit deployment are separately approved.
+V1.5 preserves the existing Base Sepolia and Base mainnet payment configuration. This repository change does not itself deploy the service or modify Railway variables. The active payment network is controlled by X402_NETWORK: eip155:84532 for Base Sepolia or eip155:8453 for Base mainnet.

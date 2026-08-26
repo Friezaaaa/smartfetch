@@ -152,14 +152,22 @@ def install_x402(app, settings: X402Settings) -> bool:
         )
         from x402.http.middleware.fastapi import payment_middleware
         from x402.http.types import RouteConfig
+        from x402.extensions.bazaar import bazaar_resource_server_extension
         from x402.mechanisms.evm.exact import ExactEvmServerScheme
         from x402.server import x402ResourceServer
+
+        from .bazaar import (
+            FETCH_DESCRIPTION,
+            FETCH_TAGS,
+            fetch_discovery_extension,
+        )
 
         facilitator = create_facilitator(settings)
         if settings.network == BASE_MAINNET:
             facilitator = _preflight_mainnet_facilitator(facilitator)
         server = x402ResourceServer(facilitator)
         server.register(settings.network, ExactEvmServerScheme())
+        server.register_extension(bazaar_resource_server_extension)
         routes = {
             "POST /fetch": RouteConfig(
                 accepts=PaymentOption(
@@ -168,8 +176,11 @@ def install_x402(app, settings: X402Settings) -> bool:
                     price=settings.price,
                     network=settings.network,
                 ),
-                description="SmartFetch structured web retrieval",
+                description=FETCH_DESCRIPTION,
                 mime_type="application/json",
+                service_name="SmartFetch",
+                tags=FETCH_TAGS,
+                extensions=fetch_discovery_extension(),
             )
         }
 

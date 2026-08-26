@@ -6,4 +6,4 @@ markdownify>=1.2,<2
 requests>=2.32,<3
 uvicorn==0.52.4
 websocket-client>=1.9,<2
-x402[fastapi,evm]==2.20.0
+x402[extensions,fastapi,evm]==2.20.0
