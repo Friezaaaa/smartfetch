@@ -4,19 +4,20 @@ SmartFetch takes a public web URL and returns clean agent-ready text, Markdown, 
 
 ## What changed in V1.9
 
-- SmartFetch now exposes four paid MCP tools backed by the same retrieval
-  engine: the original full-result `fetch_webpage`, a Markdown-only view, a
-  clean-text-only view, and forced browser rendering.
+- SmartFetch V1.9 is live in production.
+- The production MCP server exposes four live paid tools backed by the same
+  retrieval engine: `fetch_webpage`, `webpage_to_markdown`,
+  `extract_webpage_text`, and `render_webpage`.
 - Every tool has its own official x402 MCP Bazaar declaration and unique
   `mcp://tool/<tool-name>` payment resource while sharing the existing exact
   `$0.005` payment requirements.
-- Free `/docs`, `/openapi.json`, `/llms.txt`, `/robots.txt`, and `/sitemap.xml`
-  routes make the service understandable to humans, crawlers, and agents.
+- HTTP `POST /fetch` and MCP tool execution are live with x402 `exact`
+  payments on Base mainnet at `$0.005` per execution.
+- Free `/docs`, `/openapi.json`, `/llms.txt`, `/robots.txt`, `/sitemap.xml`,
+  and `/meta` routes are live for humans, crawlers, and agents.
 - Runtime discovery links use FastAPI/Starlette's proxy-aware request scheme
   and host. The Railway hostname is not embedded in runtime discovery output.
-- SmartFetch V1.8 was successfully published to the Official MCP Registry.
-  The V1.9 repository update does not republish, deploy, seed Bazaar, change
-  Railway variables, or make a payment.
+- SmartFetch V1.9.0 is published and active in the Official MCP Registry.
 
 All V1.8 HTTP payment, Bazaar, Registry, and native MCP behavior remains
 unchanged:
@@ -94,8 +95,8 @@ not parse raw forwarded headers.
 
 ## MCP
 
-Remote MCP clients connect to `/mcp` using Streamable HTTP. The server exposes
-exactly four tools:
+Remote MCP clients connect to `/mcp` using Streamable HTTP. The production
+server exposes exactly four live tools:
 
 ```text
 fetch_webpage
@@ -140,8 +141,10 @@ resource: `mcp://tool/fetch_webpage`, `mcp://tool/webpage_to_markdown`,
 HTTP Bazaar resource for `POST /fetch` is separate and unchanged.
 
 The root `server.json` describes the public remote endpoint registered with the
-Official MCP Registry. Registry metadata keeps its required fixed remote URL;
-runtime discovery routes derive their URLs from each proxy-aware request.
+Official MCP Registry, where SmartFetch V1.9.0 is published and active.
+Registry metadata keeps its required fixed remote URL; runtime discovery routes
+derive their URLs from each proxy-aware request. The MCP Bazaar declarations do
+not assert indexing by Coinbase Bazaar or downstream MCP directories.
 
 Useful natural discovery phrases include: read a webpage, fetch a webpage,
 scrape a URL, retrieve website content, convert webpage to Markdown, extract
@@ -195,7 +198,11 @@ CDP_API_KEY_SECRET=YOUR_CDP_API_KEY_SECRET
 
 Mainnet requires both CDP credentials. Missing, invalid, or unusable credentials, unsupported Base-mainnet exact payments, or any facilitator/middleware initialization failure aborts startup. SmartFetch never falls back to free access or the testnet facilitator when mainnet is selected. Every network other than Base Sepolia and Base mainnet is rejected.
 
-Only `POST /fetch` is protected. `/health`, `/`, and `/meta` always remain free. Enabled `/meta` responses report `x402-enabled-testnet` or `x402-enabled-mainnet` without exposing configuration values.
+Among the HTTP API routes, only `POST /fetch` is protected; MCP tool execution
+is paid separately at the MCP layer. `/health`, `/`, `/meta`, `/docs`,
+`/openapi.json`, `/llms.txt`, `/robots.txt`, and `/sitemap.xml` always remain
+free. Enabled `/meta` responses report `x402-enabled-testnet` or
+`x402-enabled-mainnet` without exposing configuration values.
 
 SmartFetch uses `X402_PAY_TO` as the public receiving address and does not need `CDP_WALLET_SECRET`. Never provide a seller MetaMask private key or recovery phrase: SmartFetch does not require, read, accept, log, or store either one.
 
@@ -240,7 +247,7 @@ Do **not** set `ALLOW_PRIVATE_NETWORK=1` in production.
 
 ### Important SSRF deployment note
 
-Application-level URL validation is included, but browser rendering can execute page subresources. For a paid public deployment, the browser container should additionally be isolated by host/network egress policy from cloud metadata and private RFC1918 networks. We will harden this again before removing the temporary rate limit and before x402 launch.
+Application-level URL validation is included, but browser rendering can execute page subresources. For a paid public deployment, the browser container should additionally be isolated by host/network egress policy from cloud metadata and private RFC1918 networks. Production should retain this defense in depth alongside the application controls and rate limits.
 
 ## Test the public deployment
 
@@ -254,6 +261,16 @@ python tests/remote_20.py https://YOUR-PUBLIC-URL
 
 Our deployment gate remains **18/20 minimum**, including all five forced-browser requests.
 
-## Payment launch status
+## Production launch status
 
-V1.9 preserves the existing Base Sepolia and Base mainnet payment configuration. This repository change does not itself republish to the MCP Registry, deploy the service, seed Bazaar, or modify Railway variables. The active payment network is controlled by X402_NETWORK: eip155:84532 for Base Sepolia or eip155:8453 for Base mainnet.
+SmartFetch V1.9 is live in production, and V1.9.0 is published and active in
+the Official MCP Registry. The production MCP server exposes `fetch_webpage`,
+`webpage_to_markdown`, `extract_webpage_text`, and `render_webpage`. HTTP
+`POST /fetch` and all four MCP tools use x402 `exact` payments on Base mainnet
+at `$0.005` per execution.
+
+The free `/docs`, `/openapi.json`, `/llms.txt`, `/robots.txt`, `/sitemap.xml`,
+and `/meta` discovery routes are live. Base Sepolia remains supported for
+testnet use, and the active payment network remains controlled by
+`X402_NETWORK`: `eip155:84532` for Base Sepolia or `eip155:8453` for Base
+mainnet.
