@@ -128,7 +128,7 @@ class V18MCPBazaarMetadataTests(unittest.TestCase):
         output = declaration['info']['output']
         self.assertEqual(output['type'], 'json')
         self.assertTrue(output['example']['success'])
-        self.assertEqual(output['example']['service_version'], '1.8.0')
+        self.assertEqual(output['example']['service_version'], '1.9.0')
         output_schema = declaration['schema']['properties']['output'][
             'properties'
         ]['example']
@@ -166,8 +166,12 @@ class V18MCPBazaarIntegrationTests(unittest.TestCase):
             mcp_payment.resource_server._extensions['bazaar'],
             bazaar_resource_server_extension,
         )
-        self.assertEqual(wrapper.call_count, 1)
-        extensions = wrapper.call_args.kwargs['extensions']
+        self.assertEqual(wrapper.call_count, 4)
+        fetch_call = next(
+            call for call in wrapper.call_args_list
+            if str(call.kwargs['resource'].url) == 'mcp://tool/fetch_webpage'
+        )
+        extensions = fetch_call.kwargs['extensions']
         self.assertEqual(
             extensions['bazaar']['info']['input']['type'],
             'mcp',
@@ -200,7 +204,12 @@ class V18MCPBazaarIntegrationTests(unittest.TestCase):
         self.assertIn('result', initialized)
         self.assertEqual(
             [tool['name'] for tool in listed['result']['tools']],
-            ['fetch_webpage'],
+            [
+                'fetch_webpage',
+                'webpage_to_markdown',
+                'extract_webpage_text',
+                'render_webpage',
+            ],
         )
         for response in free_responses:
             self.assertEqual(response.status_code, 200)
@@ -254,13 +263,13 @@ class V18RegistryManifestTests(unittest.TestCase):
                 'https://static.modelcontextprotocol.io/schemas/'
                 '2025-12-11/server.schema.json'
             ),
-            'name': 'io.github.friezaaaa/smartfetch',
+            'name': 'io.github.Friezaaaa/smartfetch',
             'title': 'SmartFetch',
             'description': (
-                'Fetch public webpages as clean text, Markdown, links, and '
-                'metadata, with browser rendering.'
+                'Read, fetch, scrape, and render public webpages into clean '
+                'text, Markdown, links, and metadata.'
             ),
-            'version': '1.8.0',
+            'version': '1.9.0',
             'repository': {
                 'url': 'https://github.com/Friezaaaa/smartfetch',
                 'source': 'github',

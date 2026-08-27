@@ -1,17 +1,25 @@
-# SmartFetch V1.8 — MCP discoverability
+# SmartFetch V1.9 — zero-cost discovery expansion
 
 SmartFetch takes a public web URL and returns clean agent-ready text, Markdown, links, metadata, and the retrieval method used. It tries cheap HTTP retrieval first and falls back to a real Chromium browser when needed.
 
-## What changed in V1.8
+## What changed in V1.9
 
-- The paid MCP `fetch_webpage` tool now declares official x402 Bazaar metadata
-  for agent discovery without changing its execution or payment behavior.
-- The root `server.json` advertises the existing `/mcp` Streamable HTTP endpoint
-  as a remote-only server for the Official MCP Registry.
-- No Registry publication, deployment, Railway variable change, or payment is
-  performed by this repository update.
+- SmartFetch now exposes four paid MCP tools backed by the same retrieval
+  engine: the original full-result `fetch_webpage`, a Markdown-only view, a
+  clean-text-only view, and forced browser rendering.
+- Every tool has its own official x402 MCP Bazaar declaration and unique
+  `mcp://tool/<tool-name>` payment resource while sharing the existing exact
+  `$0.005` payment requirements.
+- Free `/docs`, `/openapi.json`, `/llms.txt`, `/robots.txt`, and `/sitemap.xml`
+  routes make the service understandable to humans, crawlers, and agents.
+- Runtime discovery links use FastAPI/Starlette's proxy-aware request scheme
+  and host. The Railway hostname is not embedded in runtime discovery output.
+- SmartFetch V1.8 was successfully published to the Official MCP Registry.
+  The V1.9 repository update does not republish, deploy, seed Bazaar, change
+  Railway variables, or make a payment.
 
-All V1.7 HTTP payment, Bazaar, and native MCP behavior remains unchanged:
+All V1.8 HTTP payment, Bazaar, Registry, and native MCP behavior remains
+unchanged:
 
 - Base Sepolia remains the default x402 network and continues to use `https://x402.org/facilitator` without CDP credentials.
 - Base mainnet can use Coinbase's authenticated CDP facilitator when explicitly selected.
@@ -61,32 +69,63 @@ Example response fields:
   "truncated": false,
   "elapsed_ms": 350,
   "request_id": "…",
-  "service_version": "1.8.0"
+  "service_version": "1.9.0"
 }
 ```
 
 When x402 payment protection is enabled, the `PAYMENT-REQUIRED` header for
 `POST /fetch` includes a Bazaar declaration with the `url`, `max_chars`, and
 `force_browser` input contract plus a representative successful response.
-`/`, `/health`, and `/meta` remain free and do not advertise Bazaar metadata.
+`/`, `/health`, `/meta`, `/docs`, `/openapi.json`, `/llms.txt`, `/robots.txt`,
+and `/sitemap.xml` remain free and do not advertise paid Bazaar metadata.
+
+## Free discovery routes
+
+- `/docs` is a concise human- and crawler-readable service guide.
+- `/openapi.json` is the explicit OpenAPI 3.1 contract for `POST /fetch`.
+- `/llms.txt` summarizes endpoints, tools, price, and source for agents.
+- `/robots.txt` allows public crawling and points to `/sitemap.xml`.
+- `/sitemap.xml` lists only free discovery content, not `/fetch` or `/mcp`.
+
+All absolute links in these responses and `/meta` are generated from the
+framework-resolved public request URL. The existing Uvicorn/Railway trusted
+proxy configuration supplies the external HTTPS scheme; application code does
+not parse raw forwarded headers.
 
 ## MCP
 
 Remote MCP clients connect to `/mcp` using Streamable HTTP. The server exposes
-exactly one tool:
+exactly four tools:
 
 ```text
 fetch_webpage
   url: required string
   max_chars: optional integer (default 20000, minimum 1000, maximum 50000)
   force_browser: optional boolean (default false)
+
+webpage_to_markdown
+  url: required string
+  max_chars: optional integer (default 20000, minimum 1000, maximum 50000)
+  force_browser: optional boolean (default false)
+
+extract_webpage_text
+  url: required string
+  max_chars: optional integer (default 20000, minimum 1000, maximum 50000)
+  force_browser: optional boolean (default false)
+
+render_webpage
+  url: required string
+  max_chars: optional integer (default 20000, minimum 1000, maximum 50000)
 ```
 
-The tool reads, fetches, scrapes, or extracts public webpages for agents and
-returns the existing SmartFetch text, Markdown, links, and retrieval metadata.
-It uses the same SSRF validation, executor, request timeout, concurrency cap,
-output cap, HTTP retrieval, and browser fallback as `POST /fetch`; it does not
-make an HTTP request back to the public API.
+`fetch_webpage` returns the complete existing SmartFetch result.
+`webpage_to_markdown` returns Markdown and core retrieval metadata without
+duplicating the full text. `extract_webpage_text` returns clean text and core
+metadata without Markdown. `render_webpage` always starts with browser
+rendering and returns the complete result. Every tool uses the same SSRF
+validation, executor, request timeout, concurrency cap, output cap, HTTP
+retrieval, and browser behavior as `POST /fetch`; none makes an HTTP request
+back to the public API.
 
 When x402 is enabled, an unpaid `tools/call` returns the native MCP x402 payment
 challenge. A valid payment is verified before retrieval and settled once after
@@ -94,16 +133,21 @@ successful tool execution. The network, public payee, and price come from
 `X402_NETWORK`, `X402_PAY_TO`, and `X402_PRICE`. No seller private key or wallet
 secret is accepted or required.
 
-The unpaid MCP payment challenge includes a Bazaar declaration for
-`fetch_webpage` with transport `streamable-http`, the existing input contract,
-and a representative SmartFetch output. Its payment resource remains
-`mcp://tool/fetch_webpage`. The existing HTTP Bazaar resource for `POST /fetch`
-is separate and unchanged.
+Each unpaid MCP payment challenge includes a matching Bazaar declaration with
+transport `streamable-http`, an accurate input/output contract, and its unique
+resource: `mcp://tool/fetch_webpage`, `mcp://tool/webpage_to_markdown`,
+`mcp://tool/extract_webpage_text`, or `mcp://tool/render_webpage`. The existing
+HTTP Bazaar resource for `POST /fetch` is separate and unchanged.
 
-The root `server.json` describes the public remote endpoint at
-`https://smartfetch-production-ea53.up.railway.app/mcp`. Registry publication is
-a separate authenticated operator action; adding the manifest does not publish
-or deploy the service.
+The root `server.json` describes the public remote endpoint registered with the
+Official MCP Registry. Registry metadata keeps its required fixed remote URL;
+runtime discovery routes derive their URLs from each proxy-aware request.
+
+Useful natural discovery phrases include: read a webpage, fetch a webpage,
+scrape a URL, retrieve website content, convert webpage to Markdown, extract
+clean text from a website, read a JavaScript website, browser render a webpage,
+web scraping for an AI agent, get webpage content for an agent, website to
+Markdown, and fetch public URL.
 
 ## Run locally
 
@@ -167,8 +211,8 @@ python tests/api_local_smoke.py
 ## Container
 
 ```bash
-docker build -t smartfetch:v1.8 .
-docker run --rm -p 8787:8787 smartfetch:v1.8
+docker build -t smartfetch:v1.9 .
+docker run --rm -p 8787:8787 smartfetch:v1.9
 ```
 
 The container installs Chromium automatically.
@@ -212,4 +256,4 @@ Our deployment gate remains **18/20 minimum**, including all five forced-browser
 
 ## Payment launch status
 
-V1.8 preserves the existing Base Sepolia and Base mainnet payment configuration. This repository change does not itself publish to the MCP Registry, deploy the service, or modify Railway variables. The active payment network is controlled by X402_NETWORK: eip155:84532 for Base Sepolia or eip155:8453 for Base mainnet.
+V1.9 preserves the existing Base Sepolia and Base mainnet payment configuration. This repository change does not itself republish to the MCP Registry, deploy the service, seed Bazaar, or modify Railway variables. The active payment network is controlled by X402_NETWORK: eip155:84532 for Base Sepolia or eip155:8453 for Base mainnet.

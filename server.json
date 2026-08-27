@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Friezaaaa/smartfetch",
   "title": "SmartFetch",
-  "description": "Fetch public webpages as clean text, Markdown, links, and metadata, with browser rendering.",
-  "version": "1.8.0",
+  "description": "Read, fetch, scrape, and render public webpages into clean text, Markdown, links, and metadata.",
+  "version": "1.9.0",
   "repository": {
     "url": "https://github.com/Friezaaaa/smartfetch",
     "source": "github"

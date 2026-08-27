@@ -38,6 +38,16 @@ try:
     with urlopen(f'http://127.0.0.1:{PORT_API}/meta', timeout=2) as r:
         meta=json.load(r)
     assert meta['payment']=='not-enabled-yet'
+    assert meta['mcp']['tools']==[
+        'fetch_webpage',
+        'webpage_to_markdown',
+        'extract_webpage_text',
+        'render_webpage',
+    ]
+
+    for discovery_path in ('/docs','/openapi.json','/llms.txt','/robots.txt','/sitemap.xml'):
+        with urlopen(f'http://127.0.0.1:{PORT_API}{discovery_path}', timeout=2) as r:
+            assert r.status==200
 
     payload=json.dumps({'url':f'http://127.0.0.1:{PORT_FIXTURE}/redirect','max_chars':1000}).encode()
     req=Request(f'http://127.0.0.1:{PORT_API}/fetch',data=payload,headers={'Content-Type':'application/json'},method='POST')
@@ -47,11 +57,12 @@ try:
     assert out['status_code']==200
     assert out['render_method']=='http'
     assert 'SmartFetch local API test' in out['content']
-    assert out['service_version']=='1.8.0'
+    assert out['service_version']=='1.9.0'
     assert out['max_chars']==1000
     assert out['request_id']
     print('PASS /health')
     print('PASS /meta free mode')
+    print('PASS discovery routes free')
     print('PASS /fetch end-to-end')
     print(json.dumps({k:out[k] for k in ['status_code','render_method','elapsed_ms','word_count','truncated','request_id']},indent=2))
 finally:

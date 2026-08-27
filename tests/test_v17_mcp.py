@@ -93,7 +93,7 @@ def call_fetch(client, *, payment=None):
 
 
 class V17MCPDiscoveryTests(unittest.TestCase):
-    def test_route_initializes_and_lists_exactly_one_free_tool(self):
+    def test_route_initializes_and_lists_exactly_four_free_tools(self):
         app = server.create_app(X402Settings(
             False,
             None,
@@ -112,7 +112,15 @@ class V17MCPDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(initialized['result']['serverInfo']['name'], 'SmartFetch')
         self.assertEqual(initialized['result']['protocolVersion'], '2025-06-18')
-        self.assertEqual(len(listed['result']['tools']), 1)
+        self.assertEqual(
+            [item['name'] for item in listed['result']['tools']],
+            [
+                'fetch_webpage',
+                'webpage_to_markdown',
+                'extract_webpage_text',
+                'render_webpage',
+            ],
+        )
         tool = listed['result']['tools'][0]
         self.assertEqual(tool['name'], 'fetch_webpage')
         self.assertEqual(tool['description'], FETCH_DESCRIPTION)
@@ -147,12 +155,19 @@ class V17MCPDiscoveryTests(unittest.TestCase):
         ))) as client:
             meta = client.get('/meta').json()
 
-        self.assertEqual(meta['version'], '1.8.0')
+        self.assertEqual(meta['version'], '1.9.0')
         self.assertEqual(meta['mcp'], {
             'enabled': True,
             'path': '/mcp',
             'transport': 'streamable-http',
             'tool': 'fetch_webpage',
+            'tools': [
+                'fetch_webpage',
+                'webpage_to_markdown',
+                'extract_webpage_text',
+                'render_webpage',
+            ],
+            'url': 'http://testserver/mcp',
         })
 
 
@@ -179,7 +194,7 @@ class V17MCPPaymentTests(unittest.TestCase):
             challenge_response = call_fetch(client)
 
         fetch.assert_not_awaited()
-        self.assertEqual(len(listed['result']['tools']), 1)
+        self.assertEqual(len(listed['result']['tools']), 4)
         result = challenge_response['result']
         self.assertTrue(result['isError'])
         challenge = result['structuredContent']
@@ -259,7 +274,7 @@ class V17MCPPaymentTests(unittest.TestCase):
         self.assertFalse(result['isError'])
         body = json.loads(result['content'][0]['text'])
         self.assertTrue(body['success'])
-        self.assertEqual(body['service_version'], '1.8.0')
+        self.assertEqual(body['service_version'], '1.9.0')
         self.assertRegex(body['request_id'], '^[0-9a-f]{16}$')
         settlement = result['_meta']['x402/payment-response']
         self.assertTrue(settlement['success'])
@@ -297,7 +312,7 @@ class V17MCPPaymentTests(unittest.TestCase):
             })
 
         self.assertIn('result', initialize_response)
-        self.assertEqual(len(list_response['result']['tools']), 1)
+        self.assertEqual(len(list_response['result']['tools']), 4)
         self.assertTrue(mcp_challenge['result']['isError'])
         self.assertEqual(http_challenge.status_code, 402)
         decoded = decode_payment_required_header(

@@ -10,7 +10,7 @@ from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from .config import (
     HOST,
@@ -24,9 +24,18 @@ from .config import (
     TOTAL_REQUEST_TIMEOUT_SECONDS,
 )
 from .core import smart_fetch
+from .discovery import (
+    docs_html,
+    llms_text,
+    openapi_document,
+    public_urls,
+    robots_text,
+    sitemap_xml,
+)
 from .mcp_server import (
     MCP_PATH,
     MCP_TOOL,
+    MCP_TOOLS,
     MCP_TRANSPORT,
     create_smartfetch_mcp,
 )
@@ -189,6 +198,7 @@ def create_app(
         })
 
     async def metadata(request: Request):
+        urls = public_urls(request)
         return _json_response(request, 200, {
             'service': SERVICE_NAME,
             'version': SERVICE_VERSION,
@@ -208,11 +218,43 @@ def create_app(
                 'path': MCP_PATH,
                 'transport': MCP_TRANSPORT,
                 'tool': MCP_TOOL,
+                'tools': list(MCP_TOOLS),
+                'url': urls['mcp'],
+            },
+            'discovery': {
+                'docs': urls['docs'],
+                'openapi': urls['openapi'],
+                'llms': urls['llms'],
+                'robots': urls['robots'],
+                'sitemap': urls['sitemap'],
             },
         })
 
     application.add_api_route('/', metadata, methods=['GET'])
     application.add_api_route('/meta', metadata, methods=['GET'])
+
+    @application.get('/docs', response_class=HTMLResponse)
+    async def discovery_docs(request: Request):
+        return HTMLResponse(docs_html(public_urls(request)))
+
+    @application.get('/openapi.json')
+    async def discovery_openapi(request: Request):
+        return JSONResponse(openapi_document(public_urls(request)))
+
+    @application.get('/llms.txt', response_class=PlainTextResponse)
+    async def discovery_llms(request: Request):
+        return PlainTextResponse(llms_text(public_urls(request)))
+
+    @application.get('/robots.txt', response_class=PlainTextResponse)
+    async def discovery_robots(request: Request):
+        return PlainTextResponse(robots_text(public_urls(request)))
+
+    @application.get('/sitemap.xml')
+    async def discovery_sitemap(request: Request):
+        return Response(
+            content=sitemap_xml(public_urls(request)),
+            media_type='application/xml',
+        )
 
     @application.post('/fetch')
     async def fetch(request: Request):

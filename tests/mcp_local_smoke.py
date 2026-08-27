@@ -63,7 +63,10 @@ with (
 
 assert initialized['result']['serverInfo']['name'] == 'SmartFetch'
 assert [tool['name'] for tool in listed['result']['tools']] == [
-    'fetch_webpage'
+    'fetch_webpage',
+    'webpage_to_markdown',
+    'extract_webpage_text',
+    'render_webpage',
 ]
 challenge = challenged['result']['structuredContent']
 assert challenged['result']['isError'] is True
@@ -74,5 +77,5 @@ assert challenge['accepts'][0]['network'] == BASE_SEPOLIA
 fetch.assert_not_awaited()
 
 print('PASS MCP initialize (free)')
-print('PASS MCP tools/list: fetch_webpage only (free)')
+print('PASS MCP tools/list: four SmartFetch tools (free)')
 print('PASS MCP unpaid x402 challenge (no retrieval)')

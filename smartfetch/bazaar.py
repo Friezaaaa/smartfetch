@@ -1,5 +1,7 @@
 """Static x402 Bazaar discovery metadata for SmartFetch."""
 
+from copy import deepcopy
+
 from .config import SERVICE_VERSION
 
 
@@ -15,6 +17,18 @@ FETCH_TAGS = [
     "browser",
     "agents",
 ]
+MARKDOWN_DESCRIPTION = (
+    "Convert a public webpage or URL into clean Markdown for AI agents, "
+    "with core retrieval metadata."
+)
+TEXT_DESCRIPTION = (
+    "Extract clean readable text from a public webpage or URL for AI agents, "
+    "with core retrieval metadata."
+)
+RENDER_DESCRIPTION = (
+    "Browser-render a public JavaScript-heavy webpage or URL, then return "
+    "clean text, Markdown, links, and metadata."
+)
 FETCH_INPUT_EXAMPLE = {
     "url": "https://example.com/article",
     "max_chars": 20000,
@@ -169,6 +183,59 @@ FETCH_OUTPUT_SCHEMA = {
     ],
 }
 
+MCP_COMMON_OUTPUT_FIELDS = (
+    "success",
+    "requested_url",
+    "final_url",
+    "status_code",
+    "render_method",
+    "elapsed_ms",
+    "fallback_reason",
+    "title",
+    "truncated",
+    "max_chars",
+    "request_id",
+    "service_version",
+)
+
+
+def _input_without_force_browser():
+    schema = deepcopy(FETCH_INPUT_SCHEMA)
+    schema["properties"].pop("force_browser")
+    example = deepcopy(FETCH_INPUT_EXAMPLE)
+    example.pop("force_browser")
+    return schema, example
+
+
+def _projected_output(primary_field):
+    fields = (*MCP_COMMON_OUTPUT_FIELDS, primary_field)
+    properties = {
+        field: deepcopy(FETCH_OUTPUT_SCHEMA["properties"][field])
+        for field in fields
+    }
+    required = [
+        field
+        for field in fields
+        if field in FETCH_OUTPUT_SCHEMA["required"]
+    ]
+    example = {
+        field: deepcopy(FETCH_OUTPUT_EXAMPLE[field])
+        for field in fields
+        if field in FETCH_OUTPUT_EXAMPLE
+    }
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+    }, example
+
+
+RENDER_INPUT_SCHEMA, RENDER_INPUT_EXAMPLE = _input_without_force_browser()
+MARKDOWN_OUTPUT_SCHEMA, MARKDOWN_OUTPUT_EXAMPLE = _projected_output("markdown")
+TEXT_OUTPUT_SCHEMA, TEXT_OUTPUT_EXAMPLE = _projected_output("content")
+RENDER_OUTPUT_EXAMPLE = deepcopy(FETCH_OUTPUT_EXAMPLE)
+RENDER_OUTPUT_EXAMPLE["render_method"] = "browser"
+
 
 def fetch_discovery_extension():
     """Build the official x402 v2 Bazaar declaration for POST /fetch."""
@@ -190,8 +257,17 @@ def fetch_discovery_extension():
     return extension
 
 
-def fetch_mcp_discovery_extension():
-    """Build the official x402 v2 Bazaar declaration for fetch_webpage."""
+def mcp_discovery_extension(
+    *,
+    tool_name,
+    description,
+    input_schema,
+    input_example,
+    output_schema,
+    output_example,
+    transport="streamable-http",
+):
+    """Build an official x402 v2 Bazaar declaration for one MCP tool."""
     from x402.extensions.bazaar import (
         DeclareMcpDiscoveryConfig,
         OutputConfig,
@@ -199,13 +275,25 @@ def fetch_mcp_discovery_extension():
     )
 
     return declare_mcp_discovery_extension(DeclareMcpDiscoveryConfig(
-        tool_name="fetch_webpage",
-        description=FETCH_DESCRIPTION,
-        transport="streamable-http",
-        input_schema=FETCH_INPUT_SCHEMA,
-        example=FETCH_INPUT_EXAMPLE,
+        tool_name=tool_name,
+        description=description,
+        transport=transport,
+        input_schema=input_schema,
+        example=input_example,
         output=OutputConfig(
-            example=FETCH_OUTPUT_EXAMPLE,
-            schema=FETCH_OUTPUT_SCHEMA,
+            example=output_example,
+            schema=output_schema,
         ),
     ))
+
+
+def fetch_mcp_discovery_extension():
+    """Build the official x402 v2 Bazaar declaration for fetch_webpage."""
+    return mcp_discovery_extension(
+        tool_name="fetch_webpage",
+        description=FETCH_DESCRIPTION,
+        input_schema=FETCH_INPUT_SCHEMA,
+        input_example=FETCH_INPUT_EXAMPLE,
+        output_schema=FETCH_OUTPUT_SCHEMA,
+        output_example=FETCH_OUTPUT_EXAMPLE,
+    )
