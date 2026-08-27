@@ -197,6 +197,17 @@ def create_app(
             'uptime_seconds': int(time.time() - _STARTED),
         })
 
+    @application.get('/.well-known/glama.json')
+    async def glama_ownership():
+        return JSONResponse({
+            '$schema': 'https://glama.ai/mcp/schemas/connector.json',
+            'maintainers': [
+                {
+                    'email': 'smartfetch.contact@gmail.com',
+                },
+            ],
+        })
+
     async def metadata(request: Request):
         urls = public_urls(request)
         return _json_response(request, 200, {
