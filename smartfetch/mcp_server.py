@@ -2,6 +2,8 @@
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from functools import wraps
+import time
 from typing import Annotated, Awaitable, Callable, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -27,6 +29,7 @@ from .bazaar import (
     TEXT_OUTPUT_SCHEMA,
     mcp_discovery_extension,
 )
+from .activity import emit_activity
 from .config import (
     HOST,
     MAX_REQUEST_BODY_BYTES,
@@ -107,6 +110,72 @@ def _project_result(result: dict, primary_field: str) -> dict:
     return {key: result[key] for key in fields if key in result}
 
 
+def _observe_execution(name: str, handler: FetchHandler):
+    @wraps(handler)
+    async def observed(**kwargs):
+        started = time.perf_counter()
+        emit_activity(
+            "tool_started",
+            transport="mcp",
+            tool=name,
+            stage="execution",
+            outcome="started",
+        )
+        try:
+            result = await handler(**kwargs)
+        except Exception:
+            emit_activity(
+                "tool_failed",
+                transport="mcp",
+                tool=name,
+                stage="execution",
+                outcome="failed",
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            raise
+        emit_activity(
+            "tool_completed",
+            transport="mcp",
+            tool=name,
+            stage="execution",
+            outcome="completed",
+            duration_ms=(time.perf_counter() - started) * 1000,
+        )
+        return result
+
+    return observed
+
+
+def _is_payment_challenge(result) -> bool:
+    challenge = getattr(result, "structuredContent", None)
+    if challenge is None:
+        challenge = getattr(result, "structured_content", None)
+    if not isinstance(challenge, dict) or not challenge.get("accepts"):
+        return False
+    error = challenge.get("error")
+    return not (
+        isinstance(error, str)
+        and error.startswith("Payment settlement failed")
+    )
+
+
+def _observe_payment_challenge(name: str, handler):
+    @wraps(handler)
+    async def observed(**kwargs):
+        result = await handler(**kwargs)
+        if _is_payment_challenge(result):
+            emit_activity(
+                "payment_challenged",
+                transport="mcp",
+                tool=name,
+                stage="challenge",
+                outcome="payment_required",
+            )
+        return result
+
+    return observed
+
+
 def create_smartfetch_mcp(
     settings: X402Settings,
     fetch_handler: FetchHandler,
@@ -169,8 +238,30 @@ def create_smartfetch_mcp(
         from x402.mcp import create_payment_wrapper
 
     def protect(name, description, handler, extension):
+        observed_handler = _observe_execution(name, handler)
         if not settings.enabled:
-            return handler
+            return observed_handler
+        from x402.mcp import PaymentWrapperHooks
+
+        def payment_verified(_context):
+            emit_activity(
+                "payment_verified",
+                transport="mcp",
+                tool=name,
+                stage="verification",
+                outcome="verified",
+            )
+            return True
+
+        def payment_settled(_context):
+            emit_activity(
+                "payment_settled",
+                transport="mcp",
+                tool=name,
+                stage="settlement",
+                outcome="settled",
+            )
+
         payment_wrapper = create_payment_wrapper(
             resource_server,
             accepts=accepts,
@@ -180,9 +271,14 @@ def create_smartfetch_mcp(
                 mimeType="application/json",
                 serviceName="SmartFetch",
             ),
+            hooks=PaymentWrapperHooks(
+                on_before_execution=payment_verified,
+                on_after_settlement=payment_settled,
+            ),
             extensions=extension,
         )
-        return payment_wrapper(handler)
+        protected_handler = payment_wrapper(observed_handler)
+        return _observe_payment_challenge(name, protected_handler)
 
     tools = (
         (

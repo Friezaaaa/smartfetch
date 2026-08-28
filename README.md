@@ -1,10 +1,17 @@
-# SmartFetch V1.9 — zero-cost discovery expansion
+# SmartFetch V1.10 — agent activity and paying-client readiness
 
 SmartFetch takes a public web URL and returns clean agent-ready text, Markdown, links, metadata, and the retrieval method used. It tries cheap HTTP retrieval first and falls back to a real Chromium browser when needed.
 
-## What changed in V1.9
+## What changed in V1.10
 
-- SmartFetch V1.9 is live in production.
+- V1.10 adds privacy-safe structured activity events for MCP discovery, tool
+  attempts, x402 challenges, verified payments, execution, and settlement.
+- `GET /.well-known/x402` provides a free, proxy-aware community discovery
+  manifest for buyers such as Agent402. It is a community convention rather
+  than a finalized x402 Foundation protocol endpoint.
+- Runnable Python and TypeScript MCP buyers list tools for free, enforce a
+  `$0.005` maximum payment, handle challenge → pay → retry, and print the
+  result plus settlement receipt.
 - The production MCP server exposes four live paid tools backed by the same
   retrieval engine: `fetch_webpage`, `webpage_to_markdown`,
   `extract_webpage_text`, and `render_webpage`.
@@ -13,11 +20,13 @@ SmartFetch takes a public web URL and returns clean agent-ready text, Markdown, 
   `$0.005` payment requirements.
 - HTTP `POST /fetch` and MCP tool execution are live with x402 `exact`
   payments on Base mainnet at `$0.005` per execution.
-- Free `/docs`, `/openapi.json`, `/llms.txt`, `/robots.txt`, `/sitemap.xml`,
-  and `/meta` routes are live for humans, crawlers, and agents.
+- Free `/.well-known/x402`, `/docs`, `/openapi.json`, `/llms.txt`,
+  `/robots.txt`, `/sitemap.xml`, and `/meta` routes serve humans, crawlers,
+  and agents.
 - Runtime discovery links use FastAPI/Starlette's proxy-aware request scheme
   and host. The Railway hostname is not embedded in runtime discovery output.
-- SmartFetch V1.9.0 is published and active in the Official MCP Registry.
+- SmartFetch V1.9.0 remains the currently published Official MCP Registry
+  release until V1.10.0 is separately published.
 
 All V1.8 HTTP payment, Bazaar, Registry, and native MCP behavior remains
 unchanged:
@@ -70,18 +79,21 @@ Example response fields:
   "truncated": false,
   "elapsed_ms": 350,
   "request_id": "…",
-  "service_version": "1.9.0"
+  "service_version": "1.10.0"
 }
 ```
 
 When x402 payment protection is enabled, the `PAYMENT-REQUIRED` header for
 `POST /fetch` includes a Bazaar declaration with the `url`, `max_chars`, and
 `force_browser` input contract plus a representative successful response.
-`/`, `/health`, `/meta`, `/docs`, `/openapi.json`, `/llms.txt`, `/robots.txt`,
-and `/sitemap.xml` remain free and do not advertise paid Bazaar metadata.
+`/`, `/health`, `/meta`, `/.well-known/x402`, `/docs`, `/openapi.json`,
+`/llms.txt`, `/robots.txt`, and `/sitemap.xml` remain free and do not advertise
+paid Bazaar metadata.
 
 ## Free discovery routes
 
+- `/.well-known/x402` is a community buyer manifest with the paid resource,
+  four tools, configured price/network, and dynamic machine-readable links.
 - `/docs` is a concise human- and crawler-readable service guide.
 - `/openapi.json` is the explicit OpenAPI 3.1 contract for `POST /fetch`.
 - `/llms.txt` summarizes endpoints, tools, price, and source for agents.
@@ -141,7 +153,8 @@ resource: `mcp://tool/fetch_webpage`, `mcp://tool/webpage_to_markdown`,
 HTTP Bazaar resource for `POST /fetch` is separate and unchanged.
 
 The root `server.json` describes the public remote endpoint registered with the
-Official MCP Registry, where SmartFetch V1.9.0 is published and active.
+Official MCP Registry. V1.9.0 is currently published; the manifest is prepared
+for the separate V1.10.0 publication step.
 Registry metadata keeps its required fixed remote URL; runtime discovery routes
 derive their URLs from each proxy-aware request. The MCP Bazaar declarations do
 not assert indexing by Coinbase Bazaar or downstream MCP directories.
@@ -151,6 +164,30 @@ scrape a URL, retrieve website content, convert webpage to Markdown, extract
 clean text from a website, read a JavaScript website, browser render a webpage,
 web scraping for an AI agent, get webpage content for an agent, website to
 Markdown, and fetch public URL.
+
+## Paying MCP client examples
+
+- [Python client](examples/python/paid_mcp_client.py)
+- [TypeScript client](examples/typescript/paid-mcp-client.ts)
+- [Setup and funding guide](examples/README.md)
+
+Both clients connect over Streamable HTTP, run free `tools/list`, enforce a
+maximum `$0.005` payment, call `fetch_webpage`, and print the settlement
+receipt. **Running either client can spend real USDC on Base mainnet.** Use a
+separate low-balance CDP-managed wallet and keep `CDP_API_KEY_ID`,
+`CDP_API_KEY_SECRET`, and `CDP_WALLET_SECRET` in secret storage.
+
+## Activity events
+
+SmartFetch writes compact JSON events named `mcp_initialized`, `tools_listed`,
+`tool_call_attempted`, `payment_challenged`, `payment_verified`,
+`tool_started`, `tool_completed`, `tool_failed`, and `payment_settled`.
+
+The event schema is deliberately allowlisted. It can contain only timestamp,
+opaque request ID, transport, tool, stage/outcome, status, and duration. It
+never includes requested URLs, webpage content, request bodies, headers,
+payment signatures/payloads, wallet or payee addresses, IP addresses, CDP
+credentials, transaction hashes, or exception messages.
 
 ## Run locally
 
@@ -199,9 +236,10 @@ CDP_API_KEY_SECRET=YOUR_CDP_API_KEY_SECRET
 Mainnet requires both CDP credentials. Missing, invalid, or unusable credentials, unsupported Base-mainnet exact payments, or any facilitator/middleware initialization failure aborts startup. SmartFetch never falls back to free access or the testnet facilitator when mainnet is selected. Every network other than Base Sepolia and Base mainnet is rejected.
 
 Among the HTTP API routes, only `POST /fetch` is protected; MCP tool execution
-is paid separately at the MCP layer. `/health`, `/`, `/meta`, `/docs`,
-`/openapi.json`, `/llms.txt`, `/robots.txt`, and `/sitemap.xml` always remain
-free. Enabled `/meta` responses report `x402-enabled-testnet` or
+is paid separately at the MCP layer. `/health`, `/`, `/meta`,
+`/.well-known/x402`, `/docs`, `/openapi.json`, `/llms.txt`, `/robots.txt`, and
+`/sitemap.xml` always remain free. Enabled `/meta` responses report
+`x402-enabled-testnet` or
 `x402-enabled-mainnet` without exposing configuration values.
 
 SmartFetch uses `X402_PAY_TO` as the public receiving address and does not need `CDP_WALLET_SECRET`. Never provide a seller MetaMask private key or recovery phrase: SmartFetch does not require, read, accept, log, or store either one.
@@ -218,8 +256,8 @@ python tests/api_local_smoke.py
 ## Container
 
 ```bash
-docker build -t smartfetch:v1.9 .
-docker run --rm -p 8787:8787 smartfetch:v1.9
+docker build -t smartfetch:v1.10 .
+docker run --rm -p 8787:8787 smartfetch:v1.10
 ```
 
 The container installs Chromium automatically.
@@ -261,16 +299,17 @@ python tests/remote_20.py https://YOUR-PUBLIC-URL
 
 Our deployment gate remains **18/20 minimum**, including all five forced-browser requests.
 
-## Production launch status
+## Production release status
 
-SmartFetch V1.9 is live in production, and V1.9.0 is published and active in
-the Official MCP Registry. The production MCP server exposes `fetch_webpage`,
+SmartFetch V1.9 is the currently confirmed production and Official MCP
+Registry release. This repository prepares V1.10.0 for a separate deployment
+and Registry publication. The production MCP server exposes `fetch_webpage`,
 `webpage_to_markdown`, `extract_webpage_text`, and `render_webpage`. HTTP
 `POST /fetch` and all four MCP tools use x402 `exact` payments on Base mainnet
 at `$0.005` per execution.
 
-The free `/docs`, `/openapi.json`, `/llms.txt`, `/robots.txt`, `/sitemap.xml`,
-and `/meta` discovery routes are live. Base Sepolia remains supported for
-testnet use, and the active payment network remains controlled by
+The V1.10 release adds free `/.well-known/x402` discovery, privacy-safe
+activity events, and guarded buyer examples. Base Sepolia remains supported
+for testnet use, and the active payment network remains controlled by
 `X402_NETWORK`: `eip155:84532` for Base Sepolia or `eip155:8453` for Base
 mainnet.

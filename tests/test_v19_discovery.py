@@ -13,7 +13,7 @@ from x402.http.utils import decode_payment_required_header
 from x402.schemas import SupportedKind, SupportedResponse
 
 from smartfetch import bazaar, discovery, server
-from smartfetch.payments import BASE_SEPOLIA, X402Settings
+from smartfetch.payments import BASE_MAINNET, BASE_SEPOLIA, X402Settings
 
 
 VALID_ADDRESS = '0x1111111111111111111111111111111111111111'
@@ -410,6 +410,7 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
         )
         self.assertEqual(self.urls, {
             'base': 'https://agent.example:9443',
+            'x402': 'https://agent.example:9443/.well-known/x402',
             'docs': 'https://agent.example:9443/docs',
             'openapi': 'https://agent.example:9443/openapi.json',
             'llms': 'https://agent.example:9443/llms.txt',
@@ -425,7 +426,7 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
 
         OpenAPI.model_validate(document)
         self.assertEqual(document['openapi'], '3.1.0')
-        self.assertEqual(document['info']['version'], '1.9.0')
+        self.assertEqual(document['info']['version'], '1.10.0')
         self.assertEqual(document['servers'], [{
             'url': 'https://agent.example:9443',
         }])
@@ -458,6 +459,10 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
             for tool in TOOL_NAMES:
                 self.assertIn(tool, output)
             self.assertIn('$0.005', output)
+            self.assertIn(
+                'https://agent.example:9443/.well-known/x402',
+                output,
+            )
             self.assertIn('https://agent.example:9443/mcp', output)
             self.assertIn('https://github.com/Friezaaaa/smartfetch', output)
         for phrase in (
@@ -471,6 +476,14 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
             'x402',
         ):
             self.assertIn(phrase, html)
+        for example_url in (
+            'https://github.com/Friezaaaa/smartfetch/blob/main/examples/'
+            'python/paid_mcp_client.py',
+            'https://github.com/Friezaaaa/smartfetch/blob/main/examples/'
+            'typescript/paid-mcp-client.ts',
+        ):
+            self.assertIn(example_url, html)
+            self.assertIn(example_url, llms)
 
     def test_robots_and_sitemap_are_valid_and_exclude_paid_execution(self):
         robots = discovery.robots_text(self.urls)
@@ -498,6 +511,17 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
 
     def test_runtime_discovery_documents_contain_no_fixed_host_or_secrets(self):
         output = json.dumps(discovery.openapi_document(self.urls))
+        output += json.dumps(discovery.x402_manifest(
+            self.urls,
+            X402Settings(
+                True,
+                VALID_ADDRESS,
+                '$0.005',
+                BASE_MAINNET,
+                'organizations/test/apiKeys/test',
+                'private credential material',
+            ),
+        ))
         output += discovery.docs_html(self.urls)
         output += discovery.llms_text(self.urls)
         output += discovery.robots_text(self.urls)
@@ -510,8 +534,65 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
             'private_key',
             'wallet_secret',
             VALID_ADDRESS.lower(),
+            'private credential material',
         ):
             self.assertNotIn(forbidden, lowered)
+
+    def test_x402_manifest_is_proxy_aware_and_describes_paid_resources(self):
+        settings = X402Settings(
+            True,
+            VALID_ADDRESS,
+            '$0.005',
+            BASE_MAINNET,
+            'organizations/test/apiKeys/test',
+            'private credential material',
+        )
+
+        manifest = discovery.x402_manifest(self.urls, settings)
+
+        self.assertEqual(manifest, {
+            'spec': 'agent402-service-manifest/1',
+            'version': 1,
+            'name': 'SmartFetch',
+            'summary': (
+                'Reliable public-web retrieval for AI agents: URL in, clean '
+                'text, Markdown, links, and metadata out.'
+            ),
+            'homepage': 'https://agent.example:9443',
+            'repository': 'https://github.com/Friezaaaa/smartfetch',
+            'resources': ['https://agent.example:9443/fetch'],
+            'payment': {
+                'protocol': 'x402',
+                'x402Version': 2,
+                'enabled': True,
+                'scheme': 'exact',
+                'price': '$0.005',
+                'network': 'eip155:8453',
+                'asset': 'USDC',
+            },
+            'endpoints': {
+                'mcp': {
+                    'url': 'https://agent.example:9443/mcp',
+                    'transport': 'streamable-http',
+                },
+                'openapi': 'https://agent.example:9443/openapi.json',
+                'llms': 'https://agent.example:9443/llms.txt',
+                'docs': 'https://agent.example:9443/docs',
+                'metadata': 'https://agent.example:9443/meta',
+            },
+            'tools': TOOL_NAMES,
+        })
+        serialized = json.dumps(manifest).lower()
+        for forbidden in (
+            VALID_ADDRESS.lower(),
+            'organizations/test/apikeys/test',
+            'private credential material',
+            'payment-signature',
+            'authorization',
+            'smartfetch-production-ea53.up.railway.app',
+            'fd12:7ebb',
+        ):
+            self.assertNotIn(forbidden, serialized)
 
 
 class V19DiscoveryRouteTests(unittest.TestCase):
@@ -526,6 +607,7 @@ class V19DiscoveryRouteTests(unittest.TestCase):
     def test_all_discovery_routes_and_mcp_discovery_are_free(self):
         app = server.create_app(PAID_SETTINGS)
         expected_types = {
+            '/.well-known/x402': 'application/json',
             '/docs': 'text/html',
             '/openapi.json': 'application/json',
             '/llms.txt': 'text/plain',
@@ -565,6 +647,7 @@ class V19DiscoveryRouteTests(unittest.TestCase):
         self.assertEqual(meta['mcp']['tools'], TOOL_NAMES)
         self.assertEqual(meta['mcp']['url'], 'https://agent.example/mcp')
         self.assertEqual(meta['discovery'], {
+            'x402': 'https://agent.example/.well-known/x402',
             'docs': 'https://agent.example/docs',
             'openapi': 'https://agent.example/openapi.json',
             'llms': 'https://agent.example/llms.txt',
@@ -596,9 +679,16 @@ class V19DiscoveryRouteTests(unittest.TestCase):
                 llms = client.get('/llms.txt', headers=headers).text
                 robots = client.get('/robots.txt', headers=headers).text
                 sitemap = client.get('/sitemap.xml', headers=headers).text
+                x402 = client.get(
+                    '/.well-known/x402',
+                    headers=headers,
+                ).json()
 
         base = 'https://test-host.example'
         self.assertEqual(meta['mcp']['url'], f'{base}/mcp')
+        self.assertEqual(x402['homepage'], base)
+        self.assertEqual(x402['resources'], [f'{base}/fetch'])
+        self.assertEqual(x402['endpoints']['mcp']['url'], f'{base}/mcp')
         self.assertTrue(all(
             url.startswith(f'{base}/')
             for url in meta['discovery'].values()
@@ -611,7 +701,7 @@ class V19DiscoveryRouteTests(unittest.TestCase):
 
 
 class V19RegistryManifestTests(unittest.TestCase):
-    def test_manifest_is_exact_v19_remote_only_metadata(self):
+    def test_manifest_is_exact_v110_remote_only_metadata(self):
         manifest = json.loads((REPO_ROOT / 'server.json').read_text(
             encoding='utf-8'
         ))
@@ -627,7 +717,7 @@ class V19RegistryManifestTests(unittest.TestCase):
                 'Read, fetch, scrape, and render public webpages into clean '
                 'text, Markdown, links, and metadata.'
             ),
-            'version': '1.9.0',
+            'version': '1.10.0',
             'repository': {
                 'url': 'https://github.com/Friezaaaa/smartfetch',
                 'source': 'github',
