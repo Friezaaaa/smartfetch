@@ -11,7 +11,7 @@ SmartFetch V1.10 is live in production.
 - The community x402 manifest identifies the paid HTTP resource and structured
   MCP endpoint without an ambiguous bare tool-name array. The four tools remain
   discoverable through MCP `tools/list` and `/meta`.
-- `/openapi.json` describes the active x402 v2 exact network, native USDC
+- `/openapi.json` describes the active x402 v2 exact network, USDC on Base mainnet
   asset, configured price, and atomic amount for `POST /fetch`.
 
 ## What changed in V1.10

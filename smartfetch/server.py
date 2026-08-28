@@ -320,7 +320,16 @@ def create_app(
 
     @application.get('/openapi.json')
     async def discovery_openapi(request: Request):
-        return JSONResponse(openapi_document(public_urls(request), settings))
+        payment_requirement = (
+            smartfetch_mcp.accepts[0]
+            if smartfetch_mcp.accepts
+            else None
+        )
+        return JSONResponse(openapi_document(
+            public_urls(request),
+            settings,
+            payment_requirement,
+        ))
 
     @application.get('/llms.txt', response_class=PlainTextResponse)
     async def discovery_llms(request: Request):

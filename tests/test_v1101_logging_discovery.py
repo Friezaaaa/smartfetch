@@ -35,6 +35,12 @@ SUPPORTED = SupportedResponse(kinds=[SupportedKind(
     scheme='exact',
     network=BASE_SEPOLIA,
 )])
+SUPPORTED_MAINNET = SupportedResponse(kinds=[SupportedKind(
+    x402Version=2,
+    scheme='exact',
+    network=BASE_MAINNET,
+)])
+BASE_MAINNET_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
 
 
 def rpc(client, method, params=None, request_id=1):
@@ -337,7 +343,17 @@ class DiscoveryCompatibilityTests(unittest.TestCase):
             self.assertNotIn(f'https://agent.example/{tool}', serialized)
 
     def test_openapi_describes_active_x402_contract_and_existing_fetch_schema(self):
-        document = discovery.openapi_document(self.urls, self.settings)
+        payment_requirement = Mock(
+            scheme='exact',
+            network=BASE_MAINNET,
+            asset=BASE_MAINNET_USDC,
+            amount='5000',
+        )
+        document = discovery.openapi_document(
+            self.urls,
+            self.settings,
+            payment_requirement,
+        )
 
         self.assertEqual(document['info']['version'], '1.10.1')
         self.assertEqual(list(document['paths']), ['/fetch'])
@@ -346,7 +362,8 @@ class DiscoveryCompatibilityTests(unittest.TestCase):
             'x402Version': 2,
             'scheme': 'exact',
             'network': BASE_MAINNET,
-            'asset': 'USDC',
+            'asset': BASE_MAINNET_USDC,
+            'assetSymbol': 'USDC',
             'price': '$0.005',
             'amount': '5000',
         })
@@ -376,11 +393,49 @@ class DiscoveryCompatibilityTests(unittest.TestCase):
         )
         self.assertEqual(
             requirement['properties']['asset']['const'],
-            'USDC',
+            BASE_MAINNET_USDC,
         )
         self.assertEqual(
             requirement['properties']['amount']['example'],
             '5000',
+        )
+
+    def test_openapi_asset_matches_generated_mainnet_payment_requirement(self):
+        facilitator = Mock()
+        facilitator.get_supported.return_value = SUPPORTED_MAINNET
+        settings = X402Settings(
+            True,
+            VALID_ADDRESS,
+            '$0.005',
+            BASE_MAINNET,
+            'organizations/test/apiKeys/test',
+            'test-credential-not-used',
+        )
+
+        with patch(
+            'smartfetch.payments.create_facilitator',
+            return_value=facilitator,
+        ):
+            app = server.create_app(settings)
+
+        generated = app.state.smartfetch_mcp.accepts[0]
+        self.assertEqual(generated.asset, BASE_MAINNET_USDC)
+        with TestClient(app) as client:
+            document = client.get('/openapi.json').json()
+
+        operation = document['paths']['/fetch']['post']
+        self.assertEqual(operation['x-x402']['asset'], generated.asset)
+        self.assertEqual(operation['x-x402']['assetSymbol'], 'USDC')
+        schema = operation['responses']['402']['content'][
+            'application/json'
+        ]['schema']['properties']['accepts']['items']
+        self.assertEqual(
+            schema['properties']['asset']['const'],
+            generated.asset,
+        )
+        self.assertNotEqual(
+            schema['properties']['asset']['const'],
+            'USDC',
         )
 
     def test_patch_version_is_v1101(self):
