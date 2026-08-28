@@ -1,6 +1,7 @@
 """Free public discovery documents for SmartFetch."""
 
 from html import escape
+from decimal import Decimal
 from xml.etree import ElementTree
 
 from .bazaar import (
@@ -81,7 +82,6 @@ def x402_manifest(urls, settings):
             "docs": urls["docs"],
             "metadata": urls["meta"],
         },
-        "tools": list(TOOL_NAMES),
     }
 
 
@@ -105,8 +105,47 @@ def _error_response(description):
     }
 
 
-def openapi_document(urls):
+def _atomic_usdc_amount(price):
+    return str(int(Decimal(price.removeprefix("$")) * 1_000_000))
+
+
+def openapi_document(urls, settings, payment_requirement=None):
     """Return the explicit public OpenAPI 3.1 contract for POST /fetch."""
+    atomic_amount = (
+        payment_requirement.amount
+        if payment_requirement is not None
+        else _atomic_usdc_amount(settings.price)
+    )
+    network = (
+        payment_requirement.network
+        if payment_requirement is not None
+        else settings.network
+    )
+    scheme = (
+        payment_requirement.scheme
+        if payment_requirement is not None
+        else "exact"
+    )
+    asset = (
+        payment_requirement.asset
+        if payment_requirement is not None
+        else None
+    )
+    network_name = (
+        "Base mainnet" if network == "eip155:8453" else "Base Sepolia"
+    )
+    x402_contract = {
+        "x402Version": 2,
+        "scheme": scheme,
+        "network": network,
+        "assetSymbol": "USDC",
+        "price": settings.price,
+        "amount": atomic_amount,
+    }
+    asset_schema = {"type": "string"}
+    if asset is not None:
+        x402_contract["asset"] = asset
+        asset_schema["const"] = asset
     return {
         "openapi": "3.1.0",
         "info": {
@@ -129,8 +168,10 @@ def openapi_document(urls):
                     "summary": "Fetch a public webpage",
                     "description": (
                         "Paid x402 exact retrieval of one public HTTP or HTTPS "
-                        "URL. The default price is $0.005 per execution."
+                        f"URL. The configured price is {settings.price} per "
+                        f"execution using USDC on {network_name}."
                     ),
+                    "x-x402": x402_contract,
                     "requestBody": {
                         "required": True,
                         "content": {
@@ -172,14 +213,17 @@ def openapi_document(urls):
                                                     "properties": {
                                                         "scheme": {
                                                             "type": "string",
-                                                            "const": "exact",
+                                                            "const": scheme,
                                                         },
                                                         "network": {
                                                             "type": "string",
+                                                            "const": network,
                                                         },
                                                         "amount": {
                                                             "type": "string",
+                                                            "example": atomic_amount,
                                                         },
+                                                        "asset": asset_schema,
                                                         "payTo": {
                                                             "type": "string",
                                                         },
@@ -188,6 +232,7 @@ def openapi_document(urls):
                                                         "scheme",
                                                         "network",
                                                         "amount",
+                                                        "asset",
                                                         "payTo",
                                                     ],
                                                 },

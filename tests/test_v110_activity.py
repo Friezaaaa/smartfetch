@@ -99,6 +99,8 @@ class ActivityEmitterTests(unittest.TestCase):
         self.assertEqual(set(event), {
             'timestamp',
             'event',
+            'message',
+            'level',
             'request_id',
             'transport',
             'tool',
@@ -108,6 +110,8 @@ class ActivityEmitterTests(unittest.TestCase):
             'duration_ms',
         })
         self.assertEqual(event['event'], 'tool_call_attempted')
+        self.assertEqual(event['message'], 'tool_call_attempted')
+        self.assertEqual(event['level'], 'INFO')
         self.assertEqual(event['request_id'], 'request-123')
         self.assertEqual(event['transport'], 'mcp')
         self.assertEqual(event['tool'], 'fetch_webpage')

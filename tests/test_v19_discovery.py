@@ -422,11 +422,11 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
         })
 
     def test_openapi_is_valid_v31_and_describes_only_post_fetch(self):
-        document = discovery.openapi_document(self.urls)
+        document = discovery.openapi_document(self.urls, PAID_SETTINGS)
 
         OpenAPI.model_validate(document)
         self.assertEqual(document['openapi'], '3.1.0')
-        self.assertEqual(document['info']['version'], '1.10.0')
+        self.assertEqual(document['info']['version'], '1.10.1')
         self.assertEqual(document['servers'], [{
             'url': 'https://agent.example:9443',
         }])
@@ -510,18 +510,16 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
             self.assertNotIn(paid_or_noncontent, serialized)
 
     def test_runtime_discovery_documents_contain_no_fixed_host_or_secrets(self):
-        output = json.dumps(discovery.openapi_document(self.urls))
-        output += json.dumps(discovery.x402_manifest(
-            self.urls,
-            X402Settings(
-                True,
-                VALID_ADDRESS,
-                '$0.005',
-                BASE_MAINNET,
-                'organizations/test/apiKeys/test',
-                'private credential material',
-            ),
-        ))
+        settings = X402Settings(
+            True,
+            VALID_ADDRESS,
+            '$0.005',
+            BASE_MAINNET,
+            'organizations/test/apiKeys/test',
+            'private credential material',
+        )
+        output = json.dumps(discovery.openapi_document(self.urls, settings))
+        output += json.dumps(discovery.x402_manifest(self.urls, settings))
         output += discovery.docs_html(self.urls)
         output += discovery.llms_text(self.urls)
         output += discovery.robots_text(self.urls)
@@ -580,7 +578,6 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
                 'docs': 'https://agent.example:9443/docs',
                 'metadata': 'https://agent.example:9443/meta',
             },
-            'tools': TOOL_NAMES,
         })
         serialized = json.dumps(manifest).lower()
         for forbidden in (
@@ -717,7 +714,7 @@ class V19RegistryManifestTests(unittest.TestCase):
                 'Read, fetch, scrape, and render public webpages into clean '
                 'text, Markdown, links, and metadata.'
             ),
-            'version': '1.10.0',
+            'version': '1.10.1',
             'repository': {
                 'url': 'https://github.com/Friezaaaa/smartfetch',
                 'source': 'github',

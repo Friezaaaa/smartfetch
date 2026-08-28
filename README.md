@@ -1,8 +1,18 @@
-# SmartFetch V1.10 — agent activity and buyer discovery
+# SmartFetch V1.10.1 — logging and discovery compatibility
 
 SmartFetch takes a public web URL and returns clean agent-ready text, Markdown, links, metadata, and the retrieval method used. It tries cheap HTTP retrieval first and falls back to a real Chromium browser when needed.
 
 SmartFetch V1.10 is live in production.
+
+## V1.10.1 compatibility patch
+
+- Activity events are emitted as one compact JSON line through a dedicated
+  plain stdout handler, with explicit `message` and `level` fields.
+- The community x402 manifest identifies the paid HTTP resource and structured
+  MCP endpoint without an ambiguous bare tool-name array. The four tools remain
+  discoverable through MCP `tools/list` and `/meta`.
+- `/openapi.json` describes the active x402 v2 exact network, USDC on Base mainnet
+  asset, configured price, and atomic amount for `POST /fetch`.
 
 ## What changed in V1.10
 
@@ -81,7 +91,7 @@ Example response fields:
   "truncated": false,
   "elapsed_ms": 350,
   "request_id": "…",
-  "service_version": "1.10.0"
+  "service_version": "1.10.1"
 }
 ```
 
@@ -94,8 +104,9 @@ paid Bazaar metadata.
 
 ## Free discovery routes
 
-- `/.well-known/x402` is a community buyer manifest with the paid resource,
-  four tools, configured price/network, and dynamic machine-readable links.
+- `/.well-known/x402` is a community buyer manifest with the paid HTTP
+  resource, structured MCP endpoint, configured price/network, and dynamic
+  machine-readable links.
 - `/docs` is a concise human- and crawler-readable service guide.
 - `/openapi.json` is the explicit OpenAPI 3.1 contract for `POST /fetch`.
 - `/llms.txt` summarizes endpoints, tools, price, and source for agents.
@@ -186,10 +197,12 @@ SmartFetch writes compact JSON events named `mcp_initialized`, `tools_listed`,
 `tool_started`, `tool_completed`, `tool_failed`, and `payment_settled`.
 
 The event schema is deliberately allowlisted. It can contain only timestamp,
-opaque request ID, transport, tool, stage/outcome, status, and duration. It
-never includes requested URLs, webpage content, request bodies, headers,
-payment signatures/payloads, wallet or payee addresses, IP addresses, CDP
-credentials, transaction hashes, or exception messages.
+message/level, opaque request ID, transport, tool, route, stage/outcome,
+status, duration, payment presence/stage/network/asset/amount, a finite safe
+failure reason, and a coarse client category. It never includes requested
+URLs, webpage content, request bodies, headers, payment signatures/payloads,
+wallet or payee addresses, IP addresses, CDP credentials, transaction hashes,
+or exception messages.
 
 ## Run locally
 

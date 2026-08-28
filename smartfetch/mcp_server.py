@@ -130,6 +130,7 @@ def _observe_execution(name: str, handler: FetchHandler):
                 tool=name,
                 stage="execution",
                 outcome="failed",
+                failure_reason="retrieval_failed",
                 duration_ms=(time.perf_counter() - started) * 1000,
             )
             raise
@@ -146,30 +147,59 @@ def _observe_execution(name: str, handler: FetchHandler):
     return observed
 
 
-def _is_payment_challenge(result) -> bool:
+def _payment_result_details(result):
     challenge = getattr(result, "structuredContent", None)
     if challenge is None:
         challenge = getattr(result, "structured_content", None)
     if not isinstance(challenge, dict) or not challenge.get("accepts"):
-        return False
+        return None
     error = challenge.get("error")
-    return not (
-        isinstance(error, str)
-        and error.startswith("Payment settlement failed")
-    )
+    if isinstance(error, str):
+        if error.startswith("Payment settlement failed"):
+            return "settlement_failed", True
+        if error.startswith("Payment verification failed"):
+            return "verification_failed", True
+        if error.startswith("Invalid payment payload"):
+            return "invalid_payment", True
+        if error.lower() != "payment required":
+            return "payment_rejected", True
+    return "payment_required", False
 
 
-def _observe_payment_challenge(name: str, handler):
+def _observe_payment_result(name: str, handler, settings: X402Settings):
     @wraps(handler)
     async def observed(**kwargs):
         result = await handler(**kwargs)
-        if _is_payment_challenge(result):
+        details = _payment_result_details(result)
+        if details is None:
+            return result
+        failure_reason, payment_present = details
+        payment_fields = {
+            "payment_present": payment_present,
+            "payment_network": settings.network,
+            "payment_asset": "USDC",
+            "payment_amount": settings.price,
+            "failure_reason": failure_reason,
+        }
+        if failure_reason == "settlement_failed":
+            emit_activity(
+                "payment_settled",
+                transport="mcp",
+                tool=name,
+                stage="settlement",
+                outcome="failed",
+                payment_stage="settlement",
+                **payment_fields,
+            )
+        else:
             emit_activity(
                 "payment_challenged",
                 transport="mcp",
                 tool=name,
                 stage="challenge",
                 outcome="payment_required",
+                payment_stage="challenge",
+                **payment_fields,
             )
         return result
 
@@ -250,6 +280,11 @@ def create_smartfetch_mcp(
                 tool=name,
                 stage="verification",
                 outcome="verified",
+                payment_present=True,
+                payment_stage="verification",
+                payment_network=settings.network,
+                payment_asset="USDC",
+                payment_amount=settings.price,
             )
             return True
 
@@ -260,6 +295,11 @@ def create_smartfetch_mcp(
                 tool=name,
                 stage="settlement",
                 outcome="settled",
+                payment_present=True,
+                payment_stage="settlement",
+                payment_network=settings.network,
+                payment_asset="USDC",
+                payment_amount=settings.price,
             )
 
         payment_wrapper = create_payment_wrapper(
@@ -278,7 +318,7 @@ def create_smartfetch_mcp(
             extensions=extension,
         )
         protected_handler = payment_wrapper(observed_handler)
-        return _observe_payment_challenge(name, protected_handler)
+        return _observe_payment_result(name, protected_handler, settings)
 
     tools = (
         (
