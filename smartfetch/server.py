@@ -12,6 +12,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
+from .activity import activity_context, emit_activity
 from .config import (
     HOST,
     MAX_CONCURRENT_FETCHES,
@@ -31,6 +32,7 @@ from .discovery import (
     public_urls,
     robots_text,
     sitemap_xml,
+    x402_manifest,
 )
 from .mcp_server import (
     MCP_PATH,
@@ -114,6 +116,32 @@ def _not_found(request: Request) -> JSONResponse:
         'error_code': 'not_found',
         'error': 'Not found',
     })
+
+
+async def _mcp_activity_operation(request: Request):
+    if request.method != 'POST' or request.url.path != MCP_PATH:
+        return None, None
+    try:
+        length = int(request.headers.get('content-length') or 0)
+    except ValueError:
+        return None, None
+    if length <= 0 or length > MAX_REQUEST_BODY_BYTES:
+        return None, None
+    try:
+        payload = json.loads(await request.body())
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+    method = payload.get('method')
+    if not isinstance(method, str):
+        return None, None
+    tool = None
+    if method == 'tools/call':
+        params = payload.get('params')
+        if isinstance(params, dict) and params.get('name') in MCP_TOOLS:
+            tool = params['name']
+    return method, tool
 
 
 async def _run_fetch(url: str, force_browser: bool, max_chars):
@@ -233,6 +261,7 @@ def create_app(
                 'url': urls['mcp'],
             },
             'discovery': {
+                'x402': urls['x402'],
                 'docs': urls['docs'],
                 'openapi': urls['openapi'],
                 'llms': urls['llms'],
@@ -243,6 +272,10 @@ def create_app(
 
     application.add_api_route('/', metadata, methods=['GET'])
     application.add_api_route('/meta', metadata, methods=['GET'])
+
+    @application.get('/.well-known/x402')
+    async def x402_discovery(request: Request):
+        return JSONResponse(x402_manifest(public_urls(request), settings))
 
     @application.get('/docs', response_class=HTMLResponse)
     async def discovery_docs(request: Request):
@@ -269,6 +302,14 @@ def create_app(
 
     @application.post('/fetch')
     async def fetch(request: Request):
+        if getattr(request.state, 'payment_payload', None) is not None:
+            emit_activity(
+                'payment_verified',
+                transport='http',
+                tool=MCP_TOOL,
+                stage='verification',
+                outcome='verified',
+            )
         if not _rate_allowed(_client_key(request)):
             return _json_response(request, 429, {
                 'success': False,
@@ -326,21 +367,56 @@ def create_app(
                 'error': 'SmartFetch is at capacity; retry shortly',
             }, {'Retry-After': '2'})
         try:
+            fetch_started = time.perf_counter()
+            emit_activity(
+                'tool_started',
+                transport='http',
+                tool=MCP_TOOL,
+                stage='execution',
+                outcome='started',
+            )
             try:
                 result = await _run_fetch(url.strip(), force_browser, max_chars)
             except asyncio.TimeoutError:
+                emit_activity(
+                    'tool_failed',
+                    transport='http',
+                    tool=MCP_TOOL,
+                    stage='execution',
+                    outcome='timeout',
+                    status=504,
+                    duration_ms=(time.perf_counter() - fetch_started) * 1000,
+                )
                 return _json_response(request, 504, {
                     'success': False,
                     'error_code': 'fetch_timeout',
                     'error': 'Fetch exceeded the service time limit',
                 })
             except ValueError as exc:
+                emit_activity(
+                    'tool_failed',
+                    transport='http',
+                    tool=MCP_TOOL,
+                    stage='execution',
+                    outcome='rejected',
+                    status=400,
+                    duration_ms=(time.perf_counter() - fetch_started) * 1000,
+                )
                 return _json_response(request, 400, {
                     'success': False,
                     'error_code': 'invalid_or_blocked_target',
                     'error': str(exc),
                 })
             except Exception as exc:
+                emit_activity(
+                    'tool_failed',
+                    transport='http',
+                    tool=MCP_TOOL,
+                    stage='execution',
+                    outcome='failed',
+                    status=502,
+                    duration_ms=(time.perf_counter() - fetch_started) * 1000,
+                )
                 return _json_response(request, 502, {
                     'success': False,
                     'error_code': 'fetch_failed',
@@ -348,6 +424,15 @@ def create_app(
                 })
             result['request_id'] = _request_id(request)
             result['service_version'] = SERVICE_VERSION
+            emit_activity(
+                'tool_completed',
+                transport='http',
+                tool=MCP_TOOL,
+                stage='execution',
+                outcome='completed',
+                status=200,
+                duration_ms=(time.perf_counter() - fetch_started) * 1000,
+            )
             return _json_response(request, 200, result)
         finally:
             _FETCH_SLOTS.release()
@@ -371,7 +456,73 @@ def create_app(
     @application.middleware('http')
     async def response_headers(request: Request, call_next):
         request_id = _request_id(request)
-        response = await call_next(request)
+        method, tool = await _mcp_activity_operation(request)
+        is_http_fetch = (
+            request.method == 'POST' and request.url.path == '/fetch'
+        )
+        with activity_context(request_id):
+            if is_http_fetch:
+                emit_activity(
+                    'tool_call_attempted',
+                    transport='http',
+                    tool=MCP_TOOL,
+                    stage='request',
+                    outcome='received',
+                )
+            if method == 'tools/call':
+                emit_activity(
+                    'tool_call_attempted',
+                    transport='mcp',
+                    tool=tool,
+                    stage='request',
+                    outcome='received',
+                )
+            response = await call_next(request)
+            if method == 'initialize':
+                emit_activity(
+                    'mcp_initialized',
+                    transport='mcp',
+                    stage='response',
+                    outcome=(
+                        'completed' if response.status_code < 400 else 'failed'
+                    ),
+                    status=response.status_code,
+                )
+            elif method == 'tools/list':
+                emit_activity(
+                    'tools_listed',
+                    transport='mcp',
+                    stage='response',
+                    outcome=(
+                        'completed' if response.status_code < 400 else 'failed'
+                    ),
+                    status=response.status_code,
+                )
+            if is_http_fetch:
+                if (
+                    response.status_code == 402
+                    and getattr(request.state, 'payment_payload', None) is None
+                ):
+                    emit_activity(
+                        'payment_challenged',
+                        transport='http',
+                        tool=MCP_TOOL,
+                        stage='challenge',
+                        outcome='payment_required',
+                        status=402,
+                    )
+                elif (
+                    response.status_code < 400
+                    and 'payment-response' in response.headers
+                ):
+                    emit_activity(
+                        'payment_settled',
+                        transport='http',
+                        tool=MCP_TOOL,
+                        stage='settlement',
+                        outcome='settled',
+                        status=response.status_code,
+                    )
         if (
             response.status_code == 402
             and 'application/json' in response.headers.get('content-type', '')

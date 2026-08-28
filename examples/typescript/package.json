@@ -1,0 +1,21 @@
+{
+  "name": "smartfetch-paid-mcp-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "start": "tsx paid-mcp-client.ts"
+  },
+  "dependencies": {
+    "@coinbase/cdp-sdk": "1.55.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@x402/core": "2.24.0",
+    "@x402/evm": "2.24.0",
+    "@x402/mcp": "2.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

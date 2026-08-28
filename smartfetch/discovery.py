@@ -13,6 +13,12 @@ from .config import SERVICE_NAME, SERVICE_VERSION
 
 
 GITHUB_URL = "https://github.com/Friezaaaa/smartfetch"
+PYTHON_EXAMPLE_URL = (
+    f"{GITHUB_URL}/blob/main/examples/python/paid_mcp_client.py"
+)
+TYPESCRIPT_EXAMPLE_URL = (
+    f"{GITHUB_URL}/blob/main/examples/typescript/paid-mcp-client.ts"
+)
 TOOL_NAMES = (
     "fetch_webpage",
     "webpage_to_markdown",
@@ -31,6 +37,7 @@ def public_urls(request):
     base = public_base_url(request)
     return {
         "base": base,
+        "x402": f"{base}/.well-known/x402",
         "docs": f"{base}/docs",
         "openapi": f"{base}/openapi.json",
         "llms": f"{base}/llms.txt",
@@ -39,6 +46,42 @@ def public_urls(request):
         "meta": f"{base}/meta",
         "fetch": f"{base}/fetch",
         "mcp": f"{base}/mcp",
+    }
+
+
+def x402_manifest(urls, settings):
+    """Return a community x402 service manifest without payment secrets."""
+    return {
+        "spec": "agent402-service-manifest/1",
+        "version": 1,
+        "name": SERVICE_NAME,
+        "summary": (
+            "Reliable public-web retrieval for AI agents: URL in, clean "
+            "text, Markdown, links, and metadata out."
+        ),
+        "homepage": urls["base"],
+        "repository": GITHUB_URL,
+        "resources": [urls["fetch"]],
+        "payment": {
+            "protocol": "x402",
+            "x402Version": 2,
+            "enabled": settings.enabled,
+            "scheme": "exact",
+            "price": settings.price,
+            "network": settings.network,
+            "asset": "USDC",
+        },
+        "endpoints": {
+            "mcp": {
+                "url": urls["mcp"],
+                "transport": "streamable-http",
+            },
+            "openapi": urls["openapi"],
+            "llms": urls["llms"],
+            "docs": urls["docs"],
+            "metadata": urls["meta"],
+        },
+        "tools": list(TOOL_NAMES),
     }
 
 
@@ -175,6 +218,8 @@ def docs_html(urls):
     """Return concise human- and crawler-readable service documentation."""
     safe = {key: escape(value, quote=True) for key, value in urls.items()}
     github = escape(GITHUB_URL, quote=True)
+    python_example = escape(PYTHON_EXAMPLE_URL, quote=True)
+    typescript_example = escape(TYPESCRIPT_EXAMPLE_URL, quote=True)
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -191,6 +236,7 @@ def docs_html(urls):
     <h2>Public endpoints</h2>
     <ul>
       <li><a href="{safe['meta']}">GET /meta</a> — machine-readable metadata</li>
+      <li><a href="{safe['x402']}">GET /.well-known/x402</a> — community x402 service manifest</li>
       <li><a href="{safe['openapi']}">GET /openapi.json</a> — OpenAPI 3.1</li>
       <li><a href="{safe['llms']}">GET /llms.txt</a> — agent discovery summary</li>
       <li><a href="{safe['mcp']}">POST /mcp</a> — MCP Streamable HTTP</li>
@@ -203,6 +249,12 @@ def docs_html(urls):
       <dt><code>extract_webpage_text</code></dt><dd>Return clean readable text and core retrieval metadata without Markdown.</dd>
       <dt><code>render_webpage</code></dt><dd>Force browser rendering and return the full SmartFetch result.</dd>
     </dl>
+    <h2>Paying client examples</h2>
+    <p>The examples list tools for free, enforce a $0.005 maximum payment, then perform the x402 challenge, payment, retry, and settlement flow. Running them can spend real Base-mainnet USDC.</p>
+    <ul>
+      <li><a href="{python_example}">Python paying MCP client</a></li>
+      <li><a href="{typescript_example}">TypeScript paying MCP client</a></li>
+    </ul>
     <h2>HTTP request example</h2>
     <pre><code>{{"url":"https://example.com/","max_chars":20000,"force_browser":false}}</code></pre>
     <p>Source and deployment documentation: <a href="{github}">{github}</a>.</p>
@@ -221,6 +273,7 @@ SmartFetch reads, fetches, scrapes, and extracts public webpages for AI agents. 
 Price: $0.005 per paid HTTP or MCP tool execution using x402 exact payments.
 
 ## Endpoints
+- Community x402 manifest: {urls['x402']}
 - Documentation: {urls['docs']}
 - OpenAPI 3.1: {urls['openapi']}
 - Metadata: {urls['meta']}
@@ -232,6 +285,11 @@ Price: $0.005 per paid HTTP or MCP tool execution using x402 exact payments.
 - webpage_to_markdown: Markdown plus core metadata
 - extract_webpage_text: clean text plus core metadata
 - render_webpage: forced browser rendering plus the full result
+
+## Paying MCP client examples
+- Python: {PYTHON_EXAMPLE_URL}
+- TypeScript: {TYPESCRIPT_EXAMPLE_URL}
+- Both enforce a $0.005 maximum payment. Running them can spend real Base-mainnet USDC.
 
 ## Source
 {GITHUB_URL}
