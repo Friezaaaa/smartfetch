@@ -34,7 +34,7 @@ class FastAPICompatibilityTests(unittest.TestCase):
         self.assertEqual(health.status_code, 200)
         self.assertTrue(health.json()['ok'])
         self.assertEqual(health.json()['service'], 'SmartFetch')
-        self.assertEqual(health.json()['version'], '1.10.0')
+        self.assertEqual(health.json()['version'], '1.10.1')
         self.assertIn('uptime_seconds', health.json())
         self.assert_v12_headers(health)
 
@@ -42,7 +42,7 @@ class FastAPICompatibilityTests(unittest.TestCase):
             with self.subTest(path=path):
                 meta = self.client.get(path)
                 self.assertEqual(meta.status_code, 200)
-                self.assertEqual(meta.json()['version'], '1.10.0')
+                self.assertEqual(meta.json()['version'], '1.10.1')
                 self.assertEqual(
                     meta.json()['endpoint'], {'method': 'POST', 'path': '/fetch'}
                 )
@@ -117,7 +117,7 @@ class FastAPICompatibilityTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()['success'])
-        self.assertEqual(response.json()['service_version'], '1.10.0')
+        self.assertEqual(response.json()['service_version'], '1.10.1')
         self.assert_v12_headers(response)
         smart_fetch.assert_called_once_with(
             'https://example.com/article', True, 1234

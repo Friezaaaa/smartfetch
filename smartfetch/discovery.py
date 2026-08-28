@@ -1,6 +1,7 @@
 """Free public discovery documents for SmartFetch."""
 
 from html import escape
+from decimal import Decimal
 from xml.etree import ElementTree
 
 from .bazaar import (
@@ -81,7 +82,6 @@ def x402_manifest(urls, settings):
             "docs": urls["docs"],
             "metadata": urls["meta"],
         },
-        "tools": list(TOOL_NAMES),
     }
 
 
@@ -105,8 +105,13 @@ def _error_response(description):
     }
 
 
-def openapi_document(urls):
+def _atomic_usdc_amount(price):
+    return str(int(Decimal(price.removeprefix("$")) * 1_000_000))
+
+
+def openapi_document(urls, settings):
     """Return the explicit public OpenAPI 3.1 contract for POST /fetch."""
+    atomic_amount = _atomic_usdc_amount(settings.price)
     return {
         "openapi": "3.1.0",
         "info": {
@@ -129,8 +134,17 @@ def openapi_document(urls):
                     "summary": "Fetch a public webpage",
                     "description": (
                         "Paid x402 exact retrieval of one public HTTP or HTTPS "
-                        "URL. The default price is $0.005 per execution."
+                        f"URL. The configured price is {settings.price} per "
+                        "execution using native USDC."
                     ),
+                    "x-x402": {
+                        "x402Version": 2,
+                        "scheme": "exact",
+                        "network": settings.network,
+                        "asset": "USDC",
+                        "price": settings.price,
+                        "amount": atomic_amount,
+                    },
                     "requestBody": {
                         "required": True,
                         "content": {
@@ -176,9 +190,15 @@ def openapi_document(urls):
                                                         },
                                                         "network": {
                                                             "type": "string",
+                                                            "const": settings.network,
                                                         },
                                                         "amount": {
                                                             "type": "string",
+                                                            "example": atomic_amount,
+                                                        },
+                                                        "asset": {
+                                                            "type": "string",
+                                                            "const": "USDC",
                                                         },
                                                         "payTo": {
                                                             "type": "string",
@@ -188,6 +208,7 @@ def openapi_document(urls):
                                                         "scheme",
                                                         "network",
                                                         "amount",
+                                                        "asset",
                                                         "payTo",
                                                     ],
                                                 },

@@ -110,6 +110,36 @@ def _client_key(request: Request) -> str:
     return request.client.host if request.client else 'unknown'
 
 
+def _client_category(request: Request) -> str:
+    user_agent = request.headers.get('user-agent', '').lower()
+    if 'mcp' in user_agent:
+        return 'mcp-client'
+    if any(marker in user_agent for marker in ('mozilla/', 'chrome/', 'safari/')):
+        return 'browser'
+    if any(marker in user_agent for marker in ('python', 'httpx', 'requests')):
+        return 'python-http'
+    if any(marker in user_agent for marker in ('axios', 'node', 'typescript')):
+        return 'javascript-http'
+    return 'other'
+
+
+def _http_payment_present(request: Request) -> bool:
+    return any(
+        name in request.headers
+        for name in ('payment-signature', 'x-payment')
+    )
+
+
+def _payment_activity_fields(settings, present: bool, stage: str):
+    return {
+        'payment_present': present,
+        'payment_stage': stage,
+        'payment_network': settings.network,
+        'payment_asset': 'USDC',
+        'payment_amount': settings.price,
+    }
+
+
 def _not_found(request: Request) -> JSONResponse:
     return _json_response(request, 404, {
         'success': False,
@@ -120,28 +150,35 @@ def _not_found(request: Request) -> JSONResponse:
 
 async def _mcp_activity_operation(request: Request):
     if request.method != 'POST' or request.url.path != MCP_PATH:
-        return None, None
+        return None, None, False
     try:
         length = int(request.headers.get('content-length') or 0)
     except ValueError:
-        return None, None
+        return None, None, False
     if length <= 0 or length > MAX_REQUEST_BODY_BYTES:
-        return None, None
+        return None, None, False
     try:
         payload = json.loads(await request.body())
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return None, None
+        return None, None, False
     if not isinstance(payload, dict):
-        return None, None
+        return None, None, False
     method = payload.get('method')
     if not isinstance(method, str):
-        return None, None
+        return None, None, False
     tool = None
+    payment_present = False
     if method == 'tools/call':
         params = payload.get('params')
-        if isinstance(params, dict) and params.get('name') in MCP_TOOLS:
-            tool = params['name']
-    return method, tool
+        if isinstance(params, dict):
+            if params.get('name') in MCP_TOOLS:
+                tool = params['name']
+            metadata = params.get('_meta')
+            payment_present = (
+                isinstance(metadata, dict)
+                and 'x402/payment' in metadata
+            )
+    return method, tool, payment_present
 
 
 async def _run_fetch(url: str, force_browser: bool, max_chars):
@@ -283,7 +320,7 @@ def create_app(
 
     @application.get('/openapi.json')
     async def discovery_openapi(request: Request):
-        return JSONResponse(openapi_document(public_urls(request)))
+        return JSONResponse(openapi_document(public_urls(request), settings))
 
     @application.get('/llms.txt', response_class=PlainTextResponse)
     async def discovery_llms(request: Request):
@@ -309,6 +346,11 @@ def create_app(
                 tool=MCP_TOOL,
                 stage='verification',
                 outcome='verified',
+                **_payment_activity_fields(
+                    settings,
+                    True,
+                    'verification',
+                ),
             )
         if not _rate_allowed(_client_key(request)):
             return _json_response(request, 429, {
@@ -384,6 +426,7 @@ def create_app(
                     tool=MCP_TOOL,
                     stage='execution',
                     outcome='timeout',
+                    failure_reason='timeout',
                     status=504,
                     duration_ms=(time.perf_counter() - fetch_started) * 1000,
                 )
@@ -399,6 +442,7 @@ def create_app(
                     tool=MCP_TOOL,
                     stage='execution',
                     outcome='rejected',
+                    failure_reason='target_rejected',
                     status=400,
                     duration_ms=(time.perf_counter() - fetch_started) * 1000,
                 )
@@ -414,6 +458,7 @@ def create_app(
                     tool=MCP_TOOL,
                     stage='execution',
                     outcome='failed',
+                    failure_reason='retrieval_failed',
                     status=502,
                     duration_ms=(time.perf_counter() - fetch_started) * 1000,
                 )
@@ -456,11 +501,17 @@ def create_app(
     @application.middleware('http')
     async def response_headers(request: Request, call_next):
         request_id = _request_id(request)
-        method, tool = await _mcp_activity_operation(request)
+        method, tool, mcp_payment_present = await _mcp_activity_operation(
+            request
+        )
         is_http_fetch = (
             request.method == 'POST' and request.url.path == '/fetch'
         )
-        with activity_context(request_id):
+        with activity_context(
+            request_id,
+            route=(MCP_PATH if method is not None else request.url.path),
+            client_category=_client_category(request),
+        ):
             if is_http_fetch:
                 emit_activity(
                     'tool_call_attempted',
@@ -468,6 +519,7 @@ def create_app(
                     tool=MCP_TOOL,
                     stage='request',
                     outcome='received',
+                    payment_present=_http_payment_present(request),
                 )
             if method == 'tools/call':
                 emit_activity(
@@ -476,6 +528,7 @@ def create_app(
                     tool=tool,
                     stage='request',
                     outcome='received',
+                    payment_present=mcp_payment_present,
                 )
             response = await call_next(request)
             if method == 'initialize':
@@ -510,6 +563,16 @@ def create_app(
                         stage='challenge',
                         outcome='payment_required',
                         status=402,
+                        failure_reason=(
+                            'payment_rejected'
+                            if _http_payment_present(request)
+                            else 'payment_required'
+                        ),
+                        **_payment_activity_fields(
+                            settings,
+                            _http_payment_present(request),
+                            'challenge',
+                        ),
                     )
                 elif (
                     response.status_code < 400
@@ -522,6 +585,11 @@ def create_app(
                         stage='settlement',
                         outcome='settled',
                         status=response.status_code,
+                        **_payment_activity_fields(
+                            settings,
+                            True,
+                            'settlement',
+                        ),
                     )
         if (
             response.status_code == 402
