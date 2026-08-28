@@ -1,6 +1,8 @@
-# SmartFetch V1.10 — agent activity and paying-client readiness
+# SmartFetch V1.10 — agent activity and buyer discovery
 
 SmartFetch takes a public web URL and returns clean agent-ready text, Markdown, links, metadata, and the retrieval method used. It tries cheap HTTP retrieval first and falls back to a real Chromium browser when needed.
+
+SmartFetch V1.10 is live in production.
 
 ## What changed in V1.10
 
@@ -153,8 +155,8 @@ resource: `mcp://tool/fetch_webpage`, `mcp://tool/webpage_to_markdown`,
 HTTP Bazaar resource for `POST /fetch` is separate and unchanged.
 
 The root `server.json` describes the public remote endpoint registered with the
-Official MCP Registry. V1.9.0 is currently published; the manifest is prepared
-for the separate V1.10.0 publication step.
+Official MCP Registry. V1.9.0 remains the currently published Registry version;
+V1.10.0 has not yet been published there and requires a separate publication.
 Registry metadata keeps its required fixed remote URL; runtime discovery routes
 derive their URLs from each proxy-aware request. The MCP Bazaar declarations do
 not assert indexing by Coinbase Bazaar or downstream MCP directories.
@@ -301,15 +303,14 @@ Our deployment gate remains **18/20 minimum**, including all five forced-browser
 
 ## Production release status
 
-SmartFetch V1.9 is the currently confirmed production and Official MCP
-Registry release. This repository prepares V1.10.0 for a separate deployment
-and Registry publication. The production MCP server exposes `fetch_webpage`,
-`webpage_to_markdown`, `extract_webpage_text`, and `render_webpage`. HTTP
-`POST /fetch` and all four MCP tools use x402 `exact` payments on Base mainnet
-at `$0.005` per execution.
+SmartFetch V1.10 is live in production. The production MCP server still exposes
+exactly four tools: `fetch_webpage`, `webpage_to_markdown`,
+`extract_webpage_text`, and `render_webpage`. HTTP `POST /fetch` and all four MCP
+tools use x402 `exact` payments on Base mainnet at `$0.005` per execution.
 
-The V1.10 release adds free `/.well-known/x402` discovery, privacy-safe
-activity events, and guarded buyer examples. Base Sepolia remains supported
-for testnet use, and the active payment network remains controlled by
-`X402_NETWORK`: `eip155:84532` for Base Sepolia or `eip155:8453` for Base
-mainnet.
+Free `/.well-known/x402` discovery, privacy-safe structured activity logging,
+and the guarded buyer examples are live V1.10 additions. V1.9.0 remains the
+currently published Official MCP Registry version until V1.10.0 is separately
+published. Base Sepolia remains supported for testnet use, and the active
+payment network remains controlled by `X402_NETWORK`: `eip155:84532` for Base
+Sepolia or `eip155:8453` for Base mainnet.
