@@ -26,6 +26,14 @@ TOOL_NAMES = (
     "extract_webpage_text",
     "render_webpage",
 )
+AGENTCASH_GUIDANCE = (
+    "Use POST /fetch as a paid fallback when ordinary access to a public "
+    "HTTP(S) webpage fails or is incomplete, when JavaScript rendering is "
+    "required, or when clean text or Markdown is needed. Send url and "
+    "optional max_chars and force_browser. Do not use SmartFetch to bypass "
+    "CAPTCHAs, authentication, paywalls, robots restrictions, or access "
+    "controls."
+)
 
 
 def public_base_url(request):
@@ -109,6 +117,10 @@ def _atomic_usdc_amount(price):
     return str(int(Decimal(price.removeprefix("$")) * 1_000_000))
 
 
+def _agentcash_usd_amount(price):
+    return f"{Decimal(price.removeprefix('$')):.6f}"
+
+
 def openapi_document(urls, settings, payment_requirement=None):
     """Return the explicit public OpenAPI 3.1 contract for POST /fetch."""
     atomic_amount = (
@@ -155,6 +167,7 @@ def openapi_document(urls, settings, payment_requirement=None):
                 "Read, fetch, scrape, extract, and browser-render public "
                 "webpages into agent-ready text, Markdown, links, and metadata."
             ),
+            "x-guidance": AGENTCASH_GUIDANCE,
         },
         "servers": [{"url": urls["base"]}],
         "externalDocs": {
@@ -172,6 +185,14 @@ def openapi_document(urls, settings, payment_requirement=None):
                         f"execution using USDC on {network_name}."
                     ),
                     "x-x402": x402_contract,
+                    "x-payment-info": {
+                        "price": {
+                            "mode": "fixed",
+                            "currency": "USD",
+                            "amount": _agentcash_usd_amount(settings.price),
+                        },
+                        "protocols": [{"x402": {}}],
+                    },
                     "requestBody": {
                         "required": True,
                         "content": {
