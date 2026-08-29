@@ -1,8 +1,18 @@
-# SmartFetch V1.10.1 — logging and discovery compatibility
+# SmartFetch V1.10.2 — AgentCash discovery readiness
 
 SmartFetch takes a public web URL and returns clean agent-ready text, Markdown, links, metadata, and the retrieval method used. It tries cheap HTTP retrieval first and falls back to a real Chromium browser when needed.
 
 SmartFetch V1.10 is live in production.
+
+## V1.10.2 AgentCash discovery
+
+- `/openapi.json` now includes the canonical AgentCash `info.x-guidance` and
+  operation-level `x-payment-info` fields for paid `POST /fetch` discovery.
+- AgentCash pricing metadata is derived from SmartFetch's configured x402
+  price. The live x402 challenge remains authoritative for the exact scheme,
+  network, asset contract, atomic amount, public payee, and settlement.
+- V1.10.2 does not change retrieval, rendering, security, payment verification,
+  settlement, facilitator selection, or any MCP tool contract.
 
 ## V1.10.1 compatibility patch
 
@@ -38,7 +48,7 @@ SmartFetch V1.10 is live in production.
 - Runtime discovery links use FastAPI/Starlette's proxy-aware request scheme
   and host. The Railway hostname is not embedded in runtime discovery output.
 - SmartFetch V1.9.0 remains the currently published Official MCP Registry
-  release until V1.10.0 is separately published.
+  release until V1.10.2 is separately published.
 
 All V1.8 HTTP payment, Bazaar, Registry, and native MCP behavior remains
 unchanged:
@@ -91,7 +101,7 @@ Example response fields:
   "truncated": false,
   "elapsed_ms": 350,
   "request_id": "…",
-  "service_version": "1.10.1"
+  "service_version": "1.10.2"
 }
 ```
 
@@ -117,6 +127,44 @@ All absolute links in these responses and `/meta` are generated from the
 framework-resolved public request URL. The existing Uvicorn/Railway trusted
 proxy configuration supplies the external HTTPS scheme; application code does
 not parse raw forwarded headers.
+
+## AgentCash discovery
+
+AgentCash-compatible agents can inspect SmartFetch without making a paid
+request:
+
+```bash
+npx agentcash@latest discover https://smartfetch-production-ea53.up.railway.app
+npx agentcash@latest check https://smartfetch-production-ea53.up.railway.app/fetch
+```
+
+The current official AgentCash CLI also supports this optional free command:
+
+```bash
+npx agentcash@latest add https://smartfetch-production-ea53.up.railway.app
+```
+
+`add` discovers the origin, installs its generated skill into supported agent
+clients, and adds the origin to the AgentCash MCP server description. It is an
+optional persistence/install step; it does not invoke SmartFetch `POST /fetch`.
+
+`agentcash fetch` is a paid action. Do not run it without explicit approval and
+a buyer-controlled spending policy. A future approved call would use this
+placeholder form:
+
+```bash
+# PAID: do not run without explicit approval.
+npx agentcash@latest fetch \
+  https://smartfetch-production-ea53.up.railway.app/fetch \
+  -m POST \
+  -b '<EXPLICITLY_APPROVED_SMARTFETCH_REQUEST>'
+```
+
+Use SmartFetch as a paid fallback when ordinary access to a public HTTP(S)
+webpage fails, returns incomplete content, requires JavaScript rendering, or
+needs clean text or Markdown. SmartFetch does not bypass CAPTCHAs,
+authentication, paywalls, robots restrictions, or access controls, and cannot
+guarantee access to every website.
 
 ## MCP
 
@@ -167,7 +215,7 @@ HTTP Bazaar resource for `POST /fetch` is separate and unchanged.
 
 The root `server.json` describes the public remote endpoint registered with the
 Official MCP Registry. V1.9.0 remains the currently published Registry version;
-V1.10.0 has not yet been published there and requires a separate publication.
+V1.10.2 has not yet been published there and requires a separate publication.
 Registry metadata keeps its required fixed remote URL; runtime discovery routes
 derive their URLs from each proxy-aware request. The MCP Bazaar declarations do
 not assert indexing by Coinbase Bazaar or downstream MCP directories.
@@ -271,8 +319,8 @@ python tests/api_local_smoke.py
 ## Container
 
 ```bash
-docker build -t smartfetch:v1.10 .
-docker run --rm -p 8787:8787 smartfetch:v1.10
+docker build -t smartfetch:v1.10.2 .
+docker run --rm -p 8787:8787 smartfetch:v1.10.2
 ```
 
 The container installs Chromium automatically.
@@ -323,7 +371,7 @@ tools use x402 `exact` payments on Base mainnet at `$0.005` per execution.
 
 Free `/.well-known/x402` discovery, privacy-safe structured activity logging,
 and the guarded buyer examples are live V1.10 additions. V1.9.0 remains the
-currently published Official MCP Registry version until V1.10.0 is separately
+currently published Official MCP Registry version until V1.10.2 is separately
 published. Base Sepolia remains supported for testnet use, and the active
 payment network remains controlled by `X402_NETWORK`: `eip155:84532` for Base
 Sepolia or `eip155:8453` for Base mainnet.

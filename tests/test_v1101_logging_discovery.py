@@ -355,7 +355,7 @@ class DiscoveryCompatibilityTests(unittest.TestCase):
             payment_requirement,
         )
 
-        self.assertEqual(document['info']['version'], '1.10.1')
+        self.assertEqual(document['info']['version'], '1.10.2')
         self.assertEqual(list(document['paths']), ['/fetch'])
         operation = document['paths']['/fetch']['post']
         self.assertEqual(operation['x-x402'], {
@@ -438,8 +438,8 @@ class DiscoveryCompatibilityTests(unittest.TestCase):
             'USDC',
         )
 
-    def test_patch_version_is_v1101(self):
-        self.assertEqual(SERVICE_VERSION, '1.10.1')
+    def test_service_version_is_v1102(self):
+        self.assertEqual(SERVICE_VERSION, '1.10.2')
 
 
 if __name__ == '__main__':
