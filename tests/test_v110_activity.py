@@ -546,8 +546,12 @@ class HTTPActivityIntegrationTests(unittest.TestCase):
             'tool_started',
             'tool_failed',
         ])
+        self.assertEqual(
+            events[-1]['target_host'],
+            'customer-secret.example',
+        )
         serialized = json.dumps(events)
-        self.assertNotIn('customer-secret.example', serialized)
+        self.assertNotIn('/account', serialized)
         self.assertNotIn('never-log-this-payment', serialized)
 
 

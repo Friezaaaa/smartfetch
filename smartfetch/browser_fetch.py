@@ -14,6 +14,11 @@ import websocket
 
 from .security import validate_public_url
 from .config import MAX_CONCURRENT_BROWSERS
+from .diagnostics import (
+    attach_diagnostics,
+    diagnostics_for_exception,
+    make_diagnostics,
+)
 
 _BROWSER_SLOTS = threading.BoundedSemaphore(max(1, MAX_CONCURRENT_BROWSERS))
 
@@ -112,17 +117,58 @@ def _cleanup_profile(profile):
 
 
 def browser_fetch(url: str) -> dict:
-    safe = validate_public_url(url)
+    try:
+        safe = validate_public_url(url)
+    except Exception as error:
+        annotated = attach_diagnostics(error, make_diagnostics(
+            url,
+            'browser',
+            'validate',
+            'policy_rejection',
+        ))
+        if annotated is error:
+            raise
+        raise annotated from error
     if not _BROWSER_SLOTS.acquire(timeout=2):
-        raise RuntimeError('Browser capacity is busy; retry shortly')
+        error = RuntimeError('Browser capacity is busy; retry shortly')
+        raise attach_diagnostics(error, make_diagnostics(
+            url,
+            'browser',
+            'browser_start',
+            'browser_failure',
+        ))
     try:
         return _browser_fetch_locked(safe)
+    except Exception as error:
+        if diagnostics_for_exception(error) is not None:
+            raise
+        annotated = attach_diagnostics(error, make_diagnostics(
+            url,
+            'browser',
+            'browser_start',
+            'browser_failure',
+            browser_attempted=True,
+        ))
+        if annotated is error:
+            raise
+        raise annotated from error
     finally:
         _BROWSER_SLOTS.release()
 
 
 def _browser_fetch_locked(safe: str) -> dict:
-    chromium = _chromium_path()
+    try:
+        chromium = _chromium_path()
+    except Exception as error:
+        annotated = attach_diagnostics(error, make_diagnostics(
+            safe,
+            'browser',
+            'browser_start',
+            'browser_failure',
+        ))
+        if annotated is error:
+            raise
+        raise annotated from error
     xvfb = shutil.which('xvfb-run')
     port = _free_port()
     timeout = float(os.getenv('BROWSER_TIMEOUT_SECONDS', '15'))
@@ -151,18 +197,32 @@ def _browser_fetch_locked(safe: str) -> dict:
         'about:blank',
     ]
     cmd = ([xvfb, '-a'] + chrome_args) if xvfb else ([chromium, '--headless=new'] + chrome_args[1:])
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=(os.name != 'nt'),
-    )
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=(os.name != 'nt'),
+        )
+    except Exception as error:
+        _cleanup_profile(profile)
+        annotated = attach_diagnostics(error, make_diagnostics(
+            safe,
+            'browser',
+            'browser_start',
+            'browser_failure',
+            browser_attempted=True,
+        ))
+        if annotated is error:
+            raise
+        raise annotated from error
 
     session = requests.Session()
     session.trust_env = False
     base = f'http://127.0.0.1:{port}'
     deadline = time.time() + min(timeout, 8)
     ws = None
+    phase = 'browser_start'
     try:
         version = None
         while time.time() < deadline:
@@ -177,8 +237,16 @@ def _browser_fetch_locked(safe: str) -> dict:
                 pass
             time.sleep(0.1)
         if not version:
-            raise RuntimeError('Timed out starting Chromium DevTools')
+            error = RuntimeError('Timed out starting Chromium DevTools')
+            raise attach_diagnostics(error, make_diagnostics(
+                safe,
+                'browser',
+                'browser_start',
+                'timeout',
+                browser_attempted=True,
+            ))
 
+        phase = 'browser_navigate'
         create = session.put(base + '/json/new?' + quote(safe, safe=':/?&=%'), timeout=2)
         create.raise_for_status()
         target = create.json()
@@ -208,6 +276,7 @@ def _browser_fetch_locked(safe: str) -> dict:
                 call_id += 1
         time.sleep(settle)
 
+        phase = 'browser_extract'
         html_result = _cdp_call(ws, call_id, 'Runtime.evaluate', {
             'expression': 'document.documentElement.outerHTML',
             'returnByValue': True,
@@ -231,11 +300,45 @@ def _browser_fetch_locked(safe: str) -> dict:
         except (TypeError, ValueError):
             status_code = 200
 
-        validate_public_url(final_url)
+        try:
+            validate_public_url(final_url)
+        except Exception as error:
+            annotated = attach_diagnostics(error, make_diagnostics(
+                safe,
+                'browser',
+                'redirect',
+                'policy_rejection',
+                browser_attempted=True,
+            ))
+            if annotated is error:
+                raise
+            raise annotated from error
         if status_code >= 400:
-            raise RuntimeError(f'Browser navigation returned HTTP {status_code}')
+            failure_code = (
+                'blocked_response'
+                if status_code in {401, 403, 407, 429}
+                else 'upstream_status'
+            )
+            error = RuntimeError(
+                f'Browser navigation returned HTTP {status_code}'
+            )
+            raise attach_diagnostics(error, make_diagnostics(
+                safe,
+                'browser',
+                'response',
+                failure_code,
+                browser_attempted=True,
+                upstream_status=status_code,
+            ))
         if not html.strip():
-            raise RuntimeError('Browser rendered an empty document')
+            error = RuntimeError('Browser rendered an empty document')
+            raise attach_diagnostics(error, make_diagnostics(
+                safe,
+                'browser',
+                'browser_extract',
+                'invalid_content',
+                browser_attempted=True,
+            ))
 
         return {
             'html': html,
@@ -243,6 +346,26 @@ def _browser_fetch_locked(safe: str) -> dict:
             'status_code': status_code,
             'content_type': 'text/html',
         }
+    except Exception as error:
+        if diagnostics_for_exception(error) is not None:
+            raise
+        if isinstance(error, (TimeoutError, requests.Timeout)):
+            failure_code = 'timeout'
+        elif isinstance(error, requests.exceptions.SSLError):
+            failure_code = 'tls'
+            phase = 'tls'
+        else:
+            failure_code = 'browser_failure'
+        annotated = attach_diagnostics(error, make_diagnostics(
+            safe,
+            'browser',
+            phase,
+            failure_code,
+            browser_attempted=True,
+        ))
+        if annotated is error:
+            raise
+        raise annotated from error
     finally:
         if ws is not None:
             try:
