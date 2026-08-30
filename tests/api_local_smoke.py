@@ -57,7 +57,7 @@ try:
     assert out['status_code']==200
     assert out['render_method']=='http'
     assert 'SmartFetch local API test' in out['content']
-    assert out['service_version']=='1.10.2'
+    assert out['service_version']=='1.10.3'
     assert out['max_chars']==1000
     assert out['request_id']
     print('PASS /health')

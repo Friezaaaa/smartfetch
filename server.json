@@ -3,7 +3,7 @@
   "name": "io.github.Friezaaaa/smartfetch",
   "title": "SmartFetch",
   "description": "Paid fallback for public webpages: clean text, Markdown, links, metadata, and JavaScript rendering.",
-  "version": "1.10.2",
+  "version": "1.10.3",
   "repository": {
     "url": "https://github.com/Friezaaaa/smartfetch",
     "source": "github"

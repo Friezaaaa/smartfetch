@@ -155,7 +155,7 @@ class V17MCPDiscoveryTests(unittest.TestCase):
         ))) as client:
             meta = client.get('/meta').json()
 
-        self.assertEqual(meta['version'], '1.10.2')
+        self.assertEqual(meta['version'], '1.10.3')
         self.assertEqual(meta['mcp'], {
             'enabled': True,
             'path': '/mcp',
@@ -274,7 +274,7 @@ class V17MCPPaymentTests(unittest.TestCase):
         self.assertFalse(result['isError'])
         body = json.loads(result['content'][0]['text'])
         self.assertTrue(body['success'])
-        self.assertEqual(body['service_version'], '1.10.2')
+        self.assertEqual(body['service_version'], '1.10.3')
         self.assertRegex(body['request_id'], '^[0-9a-f]{16}$')
         settlement = result['_meta']['x402/payment-response']
         self.assertTrue(settlement['success'])
