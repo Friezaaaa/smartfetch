@@ -15,6 +15,10 @@ BLOCKED_HOSTS = {
 }
 
 
+class DNSResolutionError(ValueError):
+    """Public-URL validation failed because hostname resolution failed."""
+
+
 def _check_ip(ip_text: str):
     ip = ipaddress.ip_address(ip_text)
     if not ip.is_global:
@@ -67,11 +71,13 @@ def validate_public_url(url: str) -> str:
             type=socket.SOCK_STREAM,
         )
     except socket.gaierror as exc:
-        raise ValueError(f'Could not resolve hostname: {host}') from exc
+        raise DNSResolutionError(
+            f'Could not resolve hostname: {host}'
+        ) from exc
 
     addresses = {item[4][0] for item in infos}
     if not addresses:
-        raise ValueError(f'Could not resolve hostname: {host}')
+        raise DNSResolutionError(f'Could not resolve hostname: {host}')
     for addr in addresses:
         _check_ip(addr)
 

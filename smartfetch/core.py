@@ -18,10 +18,11 @@ def smart_fetch(url: str, force_browser: bool = False, max_chars=None) -> dict:
     max_chars = normalize_max_chars(max_chars)
     http_error = None
     http_diagnostics = None
+    http_attempt_state = {}
 
     if not force_browser:
         try:
-            page = http_fetch(url)
+            page = http_fetch(url, _attempt_state=http_attempt_state)
             try:
                 extracted = extract_content(page['html'], page['final_url'])
             except Exception as error:
@@ -32,7 +33,7 @@ def smart_fetch(url: str, force_browser: bool = False, max_chars=None) -> dict:
                     'invalid_content',
                     http_attempted=True,
                     http_retry_attempted=bool(
-                        getattr(page, 'retry_attempted', False)
+                        http_attempt_state.get('retry_attempted', False)
                     ),
                 ))
                 if annotated is error:
@@ -56,7 +57,7 @@ def smart_fetch(url: str, force_browser: bool = False, max_chars=None) -> dict:
                 'invalid_content',
                 http_attempted=True,
                 http_retry_attempted=bool(
-                    getattr(page, 'retry_attempted', False)
+                    http_attempt_state.get('retry_attempted', False)
                 ),
             )
         except Exception as exc:

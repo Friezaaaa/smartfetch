@@ -3,6 +3,7 @@
 from dataclasses import dataclass, replace
 import ipaddress
 import re
+import socket
 from typing import Literal, Optional
 from urllib.parse import urlsplit
 
@@ -97,7 +98,12 @@ def normalize_target_host(url: object) -> str:
     try:
         ipaddress.ip_address(hostname)
     except ValueError:
-        pass
+        try:
+            socket.inet_aton(hostname)
+        except OSError:
+            pass
+        else:
+            return 'ip-literal'
     else:
         return 'ip-literal'
 
@@ -105,7 +111,9 @@ def normalize_target_host(url: object) -> str:
         hostname = hostname.encode('idna').decode('ascii').lower()
     except (UnicodeError, ValueError):
         return 'unknown'
-    return hostname[:253] if _SAFE_HOST.fullmatch(hostname[:253]) else 'unknown'
+    if len(hostname) > 253:
+        return 'unknown'
+    return hostname if _SAFE_HOST.fullmatch(hostname) else 'unknown'
 
 
 def safe_diagnostic_host(value: object) -> Optional[str]:
@@ -160,16 +168,53 @@ def attach_diagnostics(
     try:
         error.retrieval_diagnostics = diagnostics
         return error
-    except Exception:
-        return RetrievalFailure(str(error), diagnostics)
+    except BaseException:
+        try:
+            message = str(error)
+        except BaseException:
+            message = 'Retrieval failed'
+        return RetrievalFailure(message, diagnostics)
 
 
 def diagnostics_for_exception(
     error: BaseException,
 ) -> Optional[RetrievalDiagnostics]:
     """Read only trusted typed diagnostics; never infer from exception text."""
-    diagnostics = getattr(error, 'retrieval_diagnostics', None)
+    try:
+        diagnostics = getattr(error, 'retrieval_diagnostics', None)
+    except BaseException:
+        return None
     return diagnostics if isinstance(diagnostics, RetrievalDiagnostics) else None
+
+
+def conservative_failure_activity_fields(
+    url: object,
+    failure_code: object = 'unknown',
+    phase: object = None,
+) -> dict:
+    """Return total, non-speculative fields for an untyped failure."""
+    try:
+        target_host = normalize_target_host(url)
+    except BaseException:
+        target_host = 'unknown'
+    return {
+        'target_host': target_host,
+        'failure_code': (
+            failure_code
+            if isinstance(failure_code, str)
+            and failure_code in SAFE_FAILURE_CODES
+            else 'unknown'
+        ),
+        'http_attempted': False,
+        'http_retry_attempted': False,
+        'browser_attempted': False,
+        'fallback_attempted': False,
+        **(
+            {'phase': phase}
+            if isinstance(phase, str) and phase in SAFE_PHASES
+            else {}
+        ),
+    }
 
 
 def aggregate_browser_failure(
@@ -209,30 +254,24 @@ def aggregate_browser_failure(
 def failure_activity_fields(
     error: BaseException,
     url: object,
-    force_browser: bool,
 ) -> dict:
     """Return allowlisted fields without parsing raw exception messages."""
-    diagnostics = diagnostics_for_exception(error)
-    if diagnostics is None:
-        diagnostics = make_diagnostics(
-            url,
-            'browser',
-            'browser_extract',
-            'unknown',
-            http_attempted=not force_browser,
-            browser_attempted=True,
-            fallback_attempted=not force_browser,
-        )
-    fields = {
-        'target_host': diagnostics.target_host,
-        'strategy': diagnostics.strategy,
-        'phase': diagnostics.phase,
-        'failure_code': diagnostics.failure_code,
-        'http_attempted': diagnostics.http_attempted,
-        'http_retry_attempted': diagnostics.http_retry_attempted,
-        'browser_attempted': diagnostics.browser_attempted,
-        'fallback_attempted': diagnostics.fallback_attempted,
-    }
-    if diagnostics.upstream_status is not None:
-        fields['upstream_status'] = diagnostics.upstream_status
-    return fields
+    try:
+        diagnostics = diagnostics_for_exception(error)
+        if diagnostics is None:
+            return conservative_failure_activity_fields(url)
+        fields = {
+            'target_host': diagnostics.target_host,
+            'strategy': diagnostics.strategy,
+            'phase': diagnostics.phase,
+            'failure_code': diagnostics.failure_code,
+            'http_attempted': diagnostics.http_attempted,
+            'http_retry_attempted': diagnostics.http_retry_attempted,
+            'browser_attempted': diagnostics.browser_attempted,
+            'fallback_attempted': diagnostics.fallback_attempted,
+        }
+        if diagnostics.upstream_status is not None:
+            fields['upstream_status'] = diagnostics.upstream_status
+        return fields
+    except BaseException:
+        return conservative_failure_activity_fields(url)

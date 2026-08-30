@@ -12,7 +12,7 @@ from urllib.parse import quote
 import requests
 import websocket
 
-from .security import validate_public_url
+from .security import DNSResolutionError, validate_public_url
 from .config import MAX_CONCURRENT_BROWSERS
 from .diagnostics import (
     attach_diagnostics,
@@ -120,11 +120,12 @@ def browser_fetch(url: str) -> dict:
     try:
         safe = validate_public_url(url)
     except Exception as error:
+        is_dns = isinstance(error, DNSResolutionError)
         annotated = attach_diagnostics(error, make_diagnostics(
             url,
             'browser',
-            'validate',
-            'policy_rejection',
+            'dns' if is_dns else 'validate',
+            'dns' if is_dns else 'policy_rejection',
         ))
         if annotated is error:
             raise
@@ -169,11 +170,22 @@ def _browser_fetch_locked(safe: str) -> dict:
         if annotated is error:
             raise
         raise annotated from error
-    xvfb = shutil.which('xvfb-run')
-    port = _free_port()
-    timeout = float(os.getenv('BROWSER_TIMEOUT_SECONDS', '15'))
-    settle = float(os.getenv('BROWSER_SETTLE_SECONDS', '0.8'))
-    profile = tempfile.mkdtemp(prefix='smartfetch-chrome-')
+    try:
+        xvfb = shutil.which('xvfb-run')
+        port = _free_port()
+        timeout = float(os.getenv('BROWSER_TIMEOUT_SECONDS', '15'))
+        settle = float(os.getenv('BROWSER_SETTLE_SECONDS', '0.8'))
+        profile = tempfile.mkdtemp(prefix='smartfetch-chrome-')
+    except Exception as error:
+        annotated = attach_diagnostics(error, make_diagnostics(
+            safe,
+            'browser',
+            'browser_start',
+            'browser_failure',
+        ))
+        if annotated is error:
+            raise
+        raise annotated from error
 
     chrome_args = [
         chromium,
@@ -205,7 +217,6 @@ def _browser_fetch_locked(safe: str) -> dict:
             start_new_session=(os.name != 'nt'),
         )
     except Exception as error:
-        _cleanup_profile(profile)
         annotated = attach_diagnostics(error, make_diagnostics(
             safe,
             'browser',
@@ -303,11 +314,12 @@ def _browser_fetch_locked(safe: str) -> dict:
         try:
             validate_public_url(final_url)
         except Exception as error:
+            is_dns = isinstance(error, DNSResolutionError)
             annotated = attach_diagnostics(error, make_diagnostics(
                 safe,
                 'browser',
-                'redirect',
-                'policy_rejection',
+                'dns' if is_dns else 'redirect',
+                'dns' if is_dns else 'policy_rejection',
                 browser_attempted=True,
             ))
             if annotated is error:

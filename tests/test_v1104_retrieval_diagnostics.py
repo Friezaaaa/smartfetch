@@ -1,8 +1,11 @@
+import asyncio
 import io
 import json
 import logging
 import socket
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, Mock, patch
 
 import requests
@@ -15,7 +18,7 @@ from smartfetch.diagnostics import (
     diagnostics_for_exception,
     normalize_target_host,
 )
-from smartfetch.http_fetch import _HTTPFetchResult, http_fetch
+from smartfetch.http_fetch import http_fetch
 from smartfetch.payments import BASE_SEPOLIA, X402Settings
 
 
@@ -52,6 +55,24 @@ class TargetHostNormalizationTests(unittest.TestCase):
         self.assertLessEqual(len(normalized), 253)
         self.assertNotIn('/', normalized)
 
+    def test_legacy_ipv4_literals_are_categorical_without_dns(self):
+        with patch('socket.getaddrinfo') as resolve:
+            for value in ('127.1', '2130706433', '0x7f000001'):
+                with self.subTest(value=value):
+                    self.assertEqual(
+                        normalize_target_host(f'https://{value}/'),
+                        'ip-literal',
+                    )
+        resolve.assert_not_called()
+
+    def test_overlong_hostname_is_unknown_not_a_truncated_prefix(self):
+        overlong = '.'.join(('a' * 63,) * 4)
+        self.assertEqual(len(overlong), 255)
+        self.assertEqual(
+            normalize_target_host(f'https://{overlong}/'),
+            'unknown',
+        )
+
     def test_malformed_targets_are_safe(self):
         self.assertEqual(
             normalize_target_host(f'not-a-url/{CANARY_QUERY}'),
@@ -60,6 +81,29 @@ class TargetHostNormalizationTests(unittest.TestCase):
 
 
 class HTTPBoundaryDiagnosticTests(unittest.TestCase):
+    @patch('smartfetch.http_fetch.validate_public_url', side_effect=lambda url: url)
+    @patch('smartfetch.http_fetch.SESSION.get')
+    def test_success_preserves_exact_plain_dict_contract(self, get, _validate):
+        get.return_value = response(200)
+
+        result = http_fetch(PRIVATE_URL)
+
+        self.assertIs(type(result), dict)
+
+    def test_ssrf_validation_dns_failure_is_dns_not_policy_rejection(self):
+        with patch(
+            'smartfetch.security.socket.getaddrinfo',
+            side_effect=socket.gaierror(-2, 'resolver detail'),
+        ):
+            with self.assertRaises(ValueError) as raised:
+                http_fetch('https://does-not-resolve.example/')
+
+        diagnostic = diagnostics_for_exception(raised.exception)
+        self.assertEqual(diagnostic.strategy, 'http')
+        self.assertEqual(diagnostic.phase, 'dns')
+        self.assertEqual(diagnostic.failure_code, 'dns')
+        self.assertFalse(diagnostic.http_attempted)
+
     @patch('smartfetch.http_fetch.validate_public_url', side_effect=lambda url: url)
     @patch('smartfetch.http_fetch.SESSION.get')
     def test_retry_timeout_is_typed_without_exception_text(self, get, _validate):
@@ -133,6 +177,22 @@ class HTTPBoundaryDiagnosticTests(unittest.TestCase):
 
 
 class BrowserBoundaryDiagnosticTests(unittest.TestCase):
+    def test_ssrf_validation_dns_failure_is_dns_not_policy_rejection(self):
+        with patch(
+            'smartfetch.security.socket.getaddrinfo',
+            side_effect=socket.gaierror(-2, 'resolver detail'),
+        ):
+            with self.assertRaises(ValueError) as raised:
+                browser_module.browser_fetch(
+                    'https://does-not-resolve.example/'
+                )
+
+        diagnostic = diagnostics_for_exception(raised.exception)
+        self.assertEqual(diagnostic.strategy, 'browser')
+        self.assertEqual(diagnostic.phase, 'dns')
+        self.assertEqual(diagnostic.failure_code, 'dns')
+        self.assertFalse(diagnostic.browser_attempted)
+
     @patch(
         'smartfetch.browser_fetch.validate_public_url',
         side_effect=ValueError('blocked ' + CANARY_QUERY),
@@ -146,6 +206,55 @@ class BrowserBoundaryDiagnosticTests(unittest.TestCase):
         self.assertEqual(diagnostic.phase, 'validate')
         self.assertEqual(diagnostic.failure_code, 'policy_rejection')
         self.assertFalse(diagnostic.browser_attempted)
+
+    @patch('smartfetch.browser_fetch._free_port')
+    @patch('smartfetch.browser_fetch.shutil.which', return_value=None)
+    @patch('smartfetch.browser_fetch._chromium_path', return_value='chromium')
+    @patch(
+        'smartfetch.browser_fetch.validate_public_url',
+        side_effect=lambda url: url,
+    )
+    def test_prelaunch_setup_failure_does_not_claim_browser_started(
+        self,
+        _validate,
+        _chromium,
+        _which,
+        free_port,
+    ):
+        free_port.side_effect = RuntimeError('setup ' + CANARY_QUERY)
+
+        with self.assertRaises(RuntimeError) as raised:
+            browser_module.browser_fetch(PRIVATE_URL)
+
+        diagnostic = diagnostics_for_exception(raised.exception)
+        self.assertEqual(diagnostic.phase, 'browser_start')
+        self.assertEqual(diagnostic.failure_code, 'browser_failure')
+        self.assertFalse(diagnostic.browser_attempted)
+
+    def test_process_launch_failure_does_not_add_cleanup_side_effect(self):
+        with (
+            patch(
+                'smartfetch.browser_fetch._chromium_path',
+                return_value='chromium',
+            ),
+            patch('smartfetch.browser_fetch.shutil.which', return_value=None),
+            patch('smartfetch.browser_fetch._free_port', return_value=9222),
+            patch(
+                'smartfetch.browser_fetch.tempfile.mkdtemp',
+                return_value='profile',
+            ),
+            patch(
+                'smartfetch.browser_fetch.subprocess.Popen',
+                side_effect=OSError('launch failed'),
+            ),
+            patch('smartfetch.browser_fetch._cleanup_profile') as cleanup,
+            self.assertRaises(OSError) as raised,
+        ):
+            browser_module._browser_fetch_locked(PRIVATE_URL)
+
+        cleanup.assert_not_called()
+        diagnostic = diagnostics_for_exception(raised.exception)
+        self.assertTrue(diagnostic.browser_attempted)
 
     @patch('smartfetch.browser_fetch._cleanup_profile')
     @patch('smartfetch.browser_fetch._stop_process_tree')
@@ -241,11 +350,17 @@ class RetrievalAggregationTests(unittest.TestCase):
         self.assertIn('SmartFetch failed. HTTP:', str(raised.exception))
 
     def test_successful_http_retry_is_retained_when_browser_fallback_fails(self):
-        page = _HTTPFetchResult({
+        page = {
             'html': '<html>thin</html>',
             'final_url': 'https://mixed.example.com/',
             'status_code': 200,
-        }, retry_attempted=True)
+        }
+
+        def http_success(_url, *, _attempt_state=None):
+            self.assertIsNotNone(_attempt_state)
+            _attempt_state['retry_attempted'] = True
+            return page
+
         browser_error = RuntimeError('browser failed')
         browser_error.retrieval_diagnostics = RetrievalDiagnostics(
             target_host='mixed.example.com',
@@ -258,7 +373,7 @@ class RetrievalAggregationTests(unittest.TestCase):
             fallback_attempted=False,
         )
         with (
-            patch('smartfetch.core.http_fetch', return_value=page),
+            patch('smartfetch.core.http_fetch', side_effect=http_success),
             patch('smartfetch.core.extract_content', return_value={
                 'low_quality': True,
                 'content': 'thin',
@@ -291,6 +406,64 @@ class RetrievalAggregationTests(unittest.TestCase):
         self.assertFalse(diagnostic.http_attempted)
         self.assertTrue(diagnostic.browser_attempted)
         self.assertFalse(diagnostic.fallback_attempted)
+
+    def test_concurrent_failures_keep_diagnostics_request_local(self):
+        http_barrier = threading.Barrier(2)
+        browser_barrier = threading.Barrier(2)
+
+        def failure(url, strategy, phase, barrier):
+            barrier.wait(timeout=2)
+            host = url.split('://', 1)[1].rstrip('/')
+            error = RuntimeError(strategy + ' failed')
+            error.retrieval_diagnostics = RetrievalDiagnostics(
+                target_host=host,
+                strategy=strategy,
+                phase=phase,
+                failure_code='unknown',
+                http_attempted=strategy == 'http',
+                http_retry_attempted=False,
+                browser_attempted=strategy == 'browser',
+                fallback_attempted=False,
+            )
+            raise error
+
+        def retrieve(url):
+            try:
+                core.smart_fetch(url)
+            except RetrievalFailure as error:
+                return error.retrieval_diagnostics
+            self.fail('expected retrieval failure')
+
+        urls = ('https://alpha.example/', 'https://beta.example/')
+        with (
+            patch(
+                'smartfetch.core.http_fetch',
+                side_effect=lambda url, **_kwargs: failure(
+                    url,
+                    'http',
+                    'connect',
+                    http_barrier,
+                ),
+            ),
+            patch(
+                'smartfetch.core.browser_fetch',
+                side_effect=lambda url: failure(
+                    url,
+                    'browser',
+                    'browser_start',
+                    browser_barrier,
+                ),
+            ),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            results = list(executor.map(retrieve, urls))
+
+        self.assertEqual(
+            [result.target_host for result in results],
+            ['alpha.example', 'beta.example'],
+        )
+        self.assertTrue(all(result.http_attempted for result in results))
+        self.assertTrue(all(result.browser_attempted for result in results))
 
 
 class ActivityDiagnosticSafetyTests(unittest.TestCase):
@@ -402,6 +575,86 @@ class ActivityDiagnosticSafetyTests(unittest.TestCase):
             'api_key',
         ):
             self.assertNotIn(forbidden, serialized)
+
+    def test_hostile_diagnostic_accessor_cannot_replace_http_502(self):
+        class HostileRetrievalError(RuntimeError):
+            def __getattribute__(self, name):
+                if name == 'retrieval_diagnostics':
+                    raise RuntimeError('accessor ' + CANARY_QUERY)
+                return super().__getattribute__(name)
+
+        app = server.create_app(FREE_SETTINGS)
+        with (
+            patch('smartfetch.server._rate_allowed', return_value=True),
+            patch(
+                'smartfetch.server._run_fetch',
+                new_callable=AsyncMock,
+                side_effect=HostileRetrievalError('original failure'),
+            ),
+            TestClient(app) as client,
+            self.assertLogs('smartfetch.activity', level='INFO') as captured,
+        ):
+            result = client.post('/fetch', json={'url': PRIVATE_URL})
+
+        self.assertEqual(result.status_code, 502)
+        self.assertEqual(result.json()['error'], 'original failure')
+        failed = [
+            json.loads(record.getMessage())
+            for record in captured.records
+            if json.loads(record.getMessage())['event'] == 'tool_failed'
+        ][0]
+        self.assertEqual(failed['failure_code'], 'unknown')
+        self.assertFalse(failed['http_attempted'])
+        self.assertFalse(failed['browser_attempted'])
+        self.assertNotIn('strategy', failed)
+        self.assertNotIn('phase', failed)
+        self.assertNotIn(CANARY_QUERY, json.dumps(failed))
+
+    def test_timeout_and_target_rejection_events_are_conservatively_enriched(self):
+        cases = (
+            (asyncio.TimeoutError(), 504, 'timeout', None),
+            (ValueError('blocked'), 400, 'policy_rejection', 'validate'),
+        )
+        for failure, status, failure_code, phase in cases:
+            with self.subTest(failure_code=failure_code):
+                app = server.create_app(FREE_SETTINGS)
+                with (
+                    patch(
+                        'smartfetch.server._rate_allowed',
+                        return_value=True,
+                    ),
+                    patch(
+                        'smartfetch.server._run_fetch',
+                        new_callable=AsyncMock,
+                        side_effect=failure,
+                    ),
+                    TestClient(app) as client,
+                    self.assertLogs(
+                        'smartfetch.activity',
+                        level='INFO',
+                    ) as captured,
+                ):
+                    result = client.post(
+                        '/fetch',
+                        json={'url': PRIVATE_URL},
+                    )
+
+                self.assertEqual(result.status_code, status)
+                failed = [
+                    json.loads(record.getMessage())
+                    for record in captured.records
+                    if json.loads(record.getMessage())['event']
+                    == 'tool_failed'
+                ][0]
+                self.assertEqual(failed['target_host'], 'mixed.example.com')
+                self.assertEqual(failed['failure_code'], failure_code)
+                self.assertFalse(failed['http_attempted'])
+                self.assertFalse(failed['browser_attempted'])
+                self.assertNotIn('strategy', failed)
+                if phase is None:
+                    self.assertNotIn('phase', failed)
+                else:
+                    self.assertEqual(failed['phase'], phase)
 
     def test_real_retrieval_failure_flow_never_logs_boundary_canaries(self):
         app = server.create_app(FREE_SETTINGS)

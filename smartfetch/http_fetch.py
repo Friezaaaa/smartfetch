@@ -6,7 +6,7 @@ from urllib.parse import urljoin
 import requests
 
 from .diagnostics import attach_diagnostics, make_diagnostics
-from .security import validate_public_url
+from .security import DNSResolutionError, validate_public_url
 
 MAX_BYTES = int(os.getenv('MAX_RESPONSE_BYTES', '3000000'))
 TIMEOUT = float(os.getenv('FETCH_TIMEOUT_SECONDS', '12'))
@@ -20,14 +20,6 @@ SESSION.headers.update({
     'Accept': 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1',
     'Accept-Language': 'en-US,en;q=0.8',
 })
-
-
-class _HTTPFetchResult(dict):
-    """Mapping-compatible page result with internal retry-attempt state."""
-
-    def __init__(self, *args, retry_attempted: bool = False, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.retry_attempted = bool(retry_attempted)
 
 
 def _request_with_retry(url: str):
@@ -74,15 +66,16 @@ def _annotate_and_raise(error: BaseException, diagnostics) -> None:
     raise annotated from error
 
 
-def http_fetch(url: str) -> dict:
+def http_fetch(url: str, *, _attempt_state=None) -> dict:
     try:
         current = validate_public_url(url)
     except Exception as error:
+        is_dns = isinstance(error, DNSResolutionError)
         _annotate_and_raise(error, make_diagnostics(
             url,
             'http',
-            'validate',
-            'policy_rejection',
+            'dns' if is_dns else 'validate',
+            'dns' if is_dns else 'policy_rejection',
         ))
 
     retry_attempted = False
@@ -122,11 +115,12 @@ def http_fetch(url: str) -> dict:
             try:
                 current = validate_public_url(urljoin(current, location))
             except Exception as error:
+                is_dns = isinstance(error, DNSResolutionError)
                 _annotate_and_raise(error, make_diagnostics(
                     url,
                     'http',
-                    'redirect',
-                    'policy_rejection',
+                    'dns' if is_dns else 'redirect',
+                    'dns' if is_dns else 'policy_rejection',
                     http_attempted=True,
                     http_retry_attempted=retry_attempted,
                     upstream_status=response.status_code,
@@ -216,12 +210,14 @@ def http_fetch(url: str) -> dict:
         except LookupError:
             html = raw.decode('utf-8', errors='replace')
 
-        return _HTTPFetchResult({
+        if isinstance(_attempt_state, dict):
+            _attempt_state['retry_attempted'] = retry_attempted
+        return {
             'html': html,
             'final_url': current,
             'status_code': response.status_code,
             'content_type': content_type,
-        }, retry_attempted=retry_attempted)
+        }
 
     error = RuntimeError(f'Too many redirects (>{MAX_REDIRECTS})')
     _annotate_and_raise(error, make_diagnostics(
