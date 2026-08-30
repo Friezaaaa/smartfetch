@@ -12,6 +12,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
+from .access_logging import uvicorn_log_config
 from .activity import activity_context, emit_activity
 from .config import (
     HOST,
@@ -651,6 +652,7 @@ def create_uvicorn_config(application=None) -> uvicorn.Config:
         port=PORT,
         proxy_headers=True,
         forwarded_allow_ips=forwarded_allow_ips,
+        log_config=uvicorn_log_config(),
     )
 
 

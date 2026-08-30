@@ -176,14 +176,14 @@ class AgentCashOpenAPITests(unittest.TestCase):
             self.assertNotIn(forbidden, serialized)
 
 
-class V1102VersionAndRegistryTests(unittest.TestCase):
+class CurrentVersionAndRegistryTests(unittest.TestCase):
     def test_service_and_registry_are_v1102_with_four_unchanged_tools(self):
         manifest = json.loads(
             (REPO_ROOT / 'server.json').read_text(encoding='utf-8')
         )
 
-        self.assertEqual(SERVICE_VERSION, '1.10.2')
-        self.assertEqual(manifest['version'], '1.10.2')
+        self.assertEqual(SERVICE_VERSION, '1.10.3')
+        self.assertEqual(manifest['version'], '1.10.3')
         self.assertEqual(
             manifest['description'],
             'Paid fallback for public webpages: clean text, Markdown, links, '

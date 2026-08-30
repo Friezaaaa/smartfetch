@@ -1,8 +1,23 @@
-# SmartFetch V1.10.2 — AgentCash discovery readiness
+# SmartFetch V1.10.3 — query-string access-log redaction
 
 SmartFetch takes a public web URL and returns clean agent-ready text, Markdown, links, metadata, and the retrieval method used. It tries cheap HTTP retrieval first and falls back to a real Chromium browser when needed.
 
-SmartFetch V1.10 is live in production.
+SmartFetch V1.10.2 is live in production. This branch prepares V1.10.3 for
+review; it does not itself deploy the service.
+
+## V1.10.3 access-log privacy patch
+
+- Uvicorn application access logs retain the request method, route path, HTTP
+  version, and response status while omitting the entire query string.
+- Query parameters remain available to routing and request handlers; the
+  change is confined to access-log formatting and does not alter MCP, x402,
+  payment, retrieval, or discovery behavior.
+- SmartFetch's structured activity events remain allowlisted and continue to
+  provide request IDs, client categories, statuses, and durations where those
+  fields are currently available.
+- Hosting-provider infrastructure logs are outside the application logging
+  boundary and may require separate provider controls if they record full
+  request targets independently.
 
 ## V1.10.2 AgentCash discovery
 
@@ -47,8 +62,8 @@ SmartFetch V1.10 is live in production.
   and agents.
 - Runtime discovery links use FastAPI/Starlette's proxy-aware request scheme
   and host. The Railway hostname is not embedded in runtime discovery output.
-- SmartFetch V1.9.0 remains the currently published Official MCP Registry
-  release until V1.10.2 is separately published.
+- SmartFetch V1.10.2 is the currently published Official MCP Registry release;
+  V1.10.3 requires a separate publication after release.
 
 All V1.8 HTTP payment, Bazaar, Registry, and native MCP behavior remains
 unchanged:
@@ -101,7 +116,7 @@ Example response fields:
   "truncated": false,
   "elapsed_ms": 350,
   "request_id": "…",
-  "service_version": "1.10.2"
+  "service_version": "1.10.3"
 }
 ```
 
@@ -214,8 +229,8 @@ resource: `mcp://tool/fetch_webpage`, `mcp://tool/webpage_to_markdown`,
 HTTP Bazaar resource for `POST /fetch` is separate and unchanged.
 
 The root `server.json` describes the public remote endpoint registered with the
-Official MCP Registry. V1.9.0 remains the currently published Registry version;
-V1.10.2 has not yet been published there and requires a separate publication.
+Official MCP Registry. V1.10.2 remains the currently published Registry
+version; V1.10.3 requires a separate publication after release.
 Registry metadata keeps its required fixed remote URL; runtime discovery routes
 derive their URLs from each proxy-aware request. The MCP Bazaar declarations do
 not assert indexing by Coinbase Bazaar or downstream MCP directories.
@@ -319,8 +334,8 @@ python tests/api_local_smoke.py
 ## Container
 
 ```bash
-docker build -t smartfetch:v1.10.2 .
-docker run --rm -p 8787:8787 smartfetch:v1.10.2
+docker build -t smartfetch:v1.10.3 .
+docker run --rm -p 8787:8787 smartfetch:v1.10.3
 ```
 
 The container installs Chromium automatically.
@@ -364,14 +379,14 @@ Our deployment gate remains **18/20 minimum**, including all five forced-browser
 
 ## Production release status
 
-SmartFetch V1.10 is live in production. The production MCP server still exposes
-exactly four tools: `fetch_webpage`, `webpage_to_markdown`,
+SmartFetch V1.10.2 is live in production. The production MCP server still
+exposes exactly four tools: `fetch_webpage`, `webpage_to_markdown`,
 `extract_webpage_text`, and `render_webpage`. HTTP `POST /fetch` and all four MCP
 tools use x402 `exact` payments on Base mainnet at `$0.005` per execution.
 
 Free `/.well-known/x402` discovery, privacy-safe structured activity logging,
-and the guarded buyer examples are live V1.10 additions. V1.9.0 remains the
-currently published Official MCP Registry version until V1.10.2 is separately
-published. Base Sepolia remains supported for testnet use, and the active
-payment network remains controlled by `X402_NETWORK`: `eip155:84532` for Base
-Sepolia or `eip155:8453` for Base mainnet.
+and the guarded buyer examples are live V1.10 additions. V1.10.2 is the
+currently published Official MCP Registry version; V1.10.3 is not published by
+this repository change. Base Sepolia remains supported for testnet use, and the
+active payment network remains controlled by `X402_NETWORK`: `eip155:84532` for
+Base Sepolia or `eip155:8453` for Base mainnet.
