@@ -1,9 +1,21 @@
-# SmartFetch V1.10.3 — query-string access-log redaction
+# SmartFetch V1.10.4 — privacy-safe retrieval diagnostics
 
 SmartFetch takes a public web URL and returns clean agent-ready text, Markdown, links, metadata, and the retrieval method used. It tries cheap HTTP retrieval first and falls back to a real Chromium browser when needed.
 
-SmartFetch V1.10.2 is live in production. This branch prepares V1.10.3 for
+SmartFetch V1.10.3 is live in production. This branch prepares V1.10.4 for
 review; it does not itself deploy the service.
+
+## V1.10.4 retrieval diagnostics
+
+- Failed HTTP retrievals now carry finite, typed diagnostic codes through the
+  existing browser fallback and final HTTP 502 path without changing retrieval
+  strategy, retries, timeouts, fallback, or client response behavior.
+- The existing final `tool_failed` activity event can include only a normalized
+  target hostname, strategy, phase, finite failure code, attempt flags, and an
+  optional bounded upstream HTTP status. IP literals are recorded only as the
+  categorical value `ip-literal`.
+- URL credentials, ports, paths, queries, fragments, exception messages,
+  response content, and payment material never enter these diagnostic fields.
 
 ## V1.10.3 access-log privacy patch
 
@@ -62,8 +74,8 @@ review; it does not itself deploy the service.
   and agents.
 - Runtime discovery links use FastAPI/Starlette's proxy-aware request scheme
   and host. The Railway hostname is not embedded in runtime discovery output.
-- SmartFetch V1.10.2 is the currently published Official MCP Registry release;
-  V1.10.3 requires a separate publication after release.
+- SmartFetch V1.10.3 is the currently published Official MCP Registry release;
+  V1.10.4 requires a separate publication after release.
 
 All V1.8 HTTP payment, Bazaar, Registry, and native MCP behavior remains
 unchanged:
@@ -116,7 +128,7 @@ Example response fields:
   "truncated": false,
   "elapsed_ms": 350,
   "request_id": "…",
-  "service_version": "1.10.3"
+  "service_version": "1.10.4"
 }
 ```
 
@@ -229,8 +241,8 @@ resource: `mcp://tool/fetch_webpage`, `mcp://tool/webpage_to_markdown`,
 HTTP Bazaar resource for `POST /fetch` is separate and unchanged.
 
 The root `server.json` describes the public remote endpoint registered with the
-Official MCP Registry. V1.10.2 remains the currently published Registry
-version; V1.10.3 requires a separate publication after release.
+Official MCP Registry. V1.10.3 remains the currently published Registry
+version; V1.10.4 requires a separate publication after release.
 Registry metadata keeps its required fixed remote URL; runtime discovery routes
 derive their URLs from each proxy-aware request. The MCP Bazaar declarations do
 not assert indexing by Coinbase Bazaar or downstream MCP directories.
@@ -262,10 +274,13 @@ SmartFetch writes compact JSON events named `mcp_initialized`, `tools_listed`,
 The event schema is deliberately allowlisted. It can contain only timestamp,
 message/level, opaque request ID, transport, tool, route, stage/outcome,
 status, duration, payment presence/stage/network/asset/amount, a finite safe
-failure reason, and a coarse client category. It never includes requested
-URLs, webpage content, request bodies, headers, payment signatures/payloads,
-wallet or payee addresses, IP addresses, CDP credentials, transaction hashes,
-or exception messages.
+failure reason, and a coarse client category. A final failed retrieval may also
+include the normalized target hostname, retrieval strategy/phase, a finite
+failure code, attempt flags, and a bounded upstream status. It never includes
+complete URLs, URL credentials/ports/paths/queries/fragments, webpage content,
+request bodies, headers, payment signatures/payloads, wallet or payee
+addresses, IP literals, CDP credentials, transaction hashes, or exception
+messages.
 
 ## Run locally
 
@@ -334,8 +349,8 @@ python tests/api_local_smoke.py
 ## Container
 
 ```bash
-docker build -t smartfetch:v1.10.3 .
-docker run --rm -p 8787:8787 smartfetch:v1.10.3
+docker build -t smartfetch:v1.10.4 .
+docker run --rm -p 8787:8787 smartfetch:v1.10.4
 ```
 
 The container installs Chromium automatically.
@@ -379,14 +394,14 @@ Our deployment gate remains **18/20 minimum**, including all five forced-browser
 
 ## Production release status
 
-SmartFetch V1.10.2 is live in production. The production MCP server still
+SmartFetch V1.10.3 is live in production. The production MCP server still
 exposes exactly four tools: `fetch_webpage`, `webpage_to_markdown`,
 `extract_webpage_text`, and `render_webpage`. HTTP `POST /fetch` and all four MCP
 tools use x402 `exact` payments on Base mainnet at `$0.005` per execution.
 
 Free `/.well-known/x402` discovery, privacy-safe structured activity logging,
-and the guarded buyer examples are live V1.10 additions. V1.10.2 is the
-currently published Official MCP Registry version; V1.10.3 is not published by
-this repository change. Base Sepolia remains supported for testnet use, and the
+and the guarded buyer examples are live V1.10 additions. V1.10.3 is the
+currently published Official MCP Registry version; V1.10.4 is not published or
+deployed by this repository change. Base Sepolia remains supported for testnet use, and the
 active payment network remains controlled by `X402_NETWORK`: `eip155:84532` for
 Base Sepolia or `eip155:8453` for Base mainnet.

@@ -8,6 +8,13 @@ import logging
 import sys
 from typing import Iterator, Optional
 
+from .diagnostics import (
+    SAFE_FAILURE_CODES,
+    SAFE_PHASES,
+    SAFE_STRATEGIES,
+    safe_diagnostic_host,
+)
+
 
 _LOGGER = logging.getLogger("smartfetch.activity")
 _LOGGER.setLevel(logging.INFO)
@@ -48,6 +55,12 @@ _SAFE_FAILURE_REASONS = frozenset((
     "target_rejected",
     "timeout",
     "verification_failed",
+))
+_DIAGNOSTIC_BOOLEAN_FIELDS = frozenset((
+    'http_attempted',
+    'http_retry_attempted',
+    'browser_attempted',
+    'fallback_attempted',
 ))
 
 
@@ -123,6 +136,43 @@ def emit_activity(event: str, **fields) -> None:
         duration = effective_fields.get("duration_ms")
         if isinstance(duration, (int, float)) and not isinstance(duration, bool):
             record["duration_ms"] = max(0, int(duration))
+
+        if event_name == 'tool_failed':
+            target_host = safe_diagnostic_host(
+                effective_fields.get('target_host')
+            )
+            if target_host is not None:
+                record['target_host'] = target_host
+
+            strategy = effective_fields.get('strategy')
+            if isinstance(strategy, str) and strategy in SAFE_STRATEGIES:
+                record['strategy'] = strategy
+
+            phase = effective_fields.get('phase')
+            if isinstance(phase, str) and phase in SAFE_PHASES:
+                record['phase'] = phase
+
+            failure_code = effective_fields.get('failure_code')
+            if failure_code is not None:
+                record['failure_code'] = (
+                    failure_code
+                    if isinstance(failure_code, str)
+                    and failure_code in SAFE_FAILURE_CODES
+                    else 'unknown'
+                )
+
+            for name in _DIAGNOSTIC_BOOLEAN_FIELDS:
+                value = effective_fields.get(name)
+                if isinstance(value, bool):
+                    record[name] = value
+
+            upstream_status = effective_fields.get('upstream_status')
+            if (
+                isinstance(upstream_status, int)
+                and not isinstance(upstream_status, bool)
+                and 100 <= upstream_status <= 599
+            ):
+                record['upstream_status'] = upstream_status
 
         log = _LOGGER.error if is_error else _LOGGER.info
         log(json.dumps(

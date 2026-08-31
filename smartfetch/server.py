@@ -26,6 +26,10 @@ from .config import (
     TOTAL_REQUEST_TIMEOUT_SECONDS,
 )
 from .core import smart_fetch
+from .diagnostics import (
+    conservative_failure_activity_fields,
+    failure_activity_fields,
+)
 from .discovery import (
     docs_html,
     llms_text,
@@ -439,6 +443,10 @@ def create_app(
                     failure_reason='timeout',
                     status=504,
                     duration_ms=(time.perf_counter() - fetch_started) * 1000,
+                    **conservative_failure_activity_fields(
+                        url.strip(),
+                        'timeout',
+                    ),
                 )
                 return _json_response(request, 504, {
                     'success': False,
@@ -455,6 +463,11 @@ def create_app(
                     failure_reason='target_rejected',
                     status=400,
                     duration_ms=(time.perf_counter() - fetch_started) * 1000,
+                    **conservative_failure_activity_fields(
+                        url.strip(),
+                        'policy_rejection',
+                        'validate',
+                    ),
                 )
                 return _json_response(request, 400, {
                     'success': False,
@@ -471,6 +484,10 @@ def create_app(
                     failure_reason='retrieval_failed',
                     status=502,
                     duration_ms=(time.perf_counter() - fetch_started) * 1000,
+                    **failure_activity_fields(
+                        exc,
+                        url.strip(),
+                    ),
                 )
                 return _json_response(request, 502, {
                     'success': False,

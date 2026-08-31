@@ -182,8 +182,8 @@ class CurrentVersionAndRegistryTests(unittest.TestCase):
             (REPO_ROOT / 'server.json').read_text(encoding='utf-8')
         )
 
-        self.assertEqual(SERVICE_VERSION, '1.10.3')
-        self.assertEqual(manifest['version'], '1.10.3')
+        self.assertEqual(SERVICE_VERSION, '1.10.4')
+        self.assertEqual(manifest['version'], '1.10.4')
         self.assertEqual(
             manifest['description'],
             'Paid fallback for public webpages: clean text, Markdown, links, '
