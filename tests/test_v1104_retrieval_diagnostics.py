@@ -27,10 +27,18 @@ CANARY_USER = 'CANARY_USER_V1104'
 CANARY_PASSWORD = 'CANARY_PASSWORD_V1104'
 CANARY_PATH = 'CANARY_PATH_V1104'
 CANARY_QUERY = 'CANARY_QUERY_V1104'
+STREAM_FAILURE_CANARY = 'ORIGINAL_STREAM_FAILURE_V1104'
+ACCESSOR_FAILURE_CANARY = 'ACCESSOR_FAILURE_V1104'
 PRIVATE_URL = (
     f'https://{CANARY_USER}:{CANARY_PASSWORD}@Mixed.Example.COM:8443/'
     f'{CANARY_PATH}?api_key={CANARY_QUERY}#fragment'
 )
+
+
+class HostileStreamError(RuntimeError):
+    @property
+    def retrieval_diagnostics(self):
+        raise RuntimeError(ACCESSOR_FAILURE_CANARY)
 
 
 def response(status_code=200, body=b'<html>ok</html>'):
@@ -174,6 +182,30 @@ class HTTPBoundaryDiagnosticTests(unittest.TestCase):
                 self.assertEqual(diagnostic.failure_code, failure_code)
                 self.assertEqual(diagnostic.upstream_status, upstream_status)
                 get.reset_mock()
+
+    @patch('smartfetch.http_fetch.validate_public_url', side_effect=lambda url: url)
+    @patch('smartfetch.http_fetch.SESSION.get')
+    def test_hostile_stream_accessor_preserves_original_failure(
+        self,
+        get,
+        _validate,
+    ):
+        streamed = response(200)
+        streamed.iter_content = Mock(
+            side_effect=HostileStreamError(STREAM_FAILURE_CANARY),
+        )
+        get.return_value = streamed
+
+        with self.assertRaises(RetrievalFailure) as raised:
+            http_fetch('https://stream.example/')
+
+        self.assertEqual(str(raised.exception), STREAM_FAILURE_CANARY)
+        self.assertNotIn(ACCESSOR_FAILURE_CANARY, str(raised.exception))
+        diagnostic = diagnostics_for_exception(raised.exception)
+        self.assertEqual(diagnostic.strategy, 'http')
+        self.assertEqual(diagnostic.phase, 'response')
+        self.assertEqual(diagnostic.failure_code, 'unknown')
+        self.assertTrue(diagnostic.http_attempted)
 
 
 class BrowserBoundaryDiagnosticTests(unittest.TestCase):
@@ -705,6 +737,48 @@ class ActivityDiagnosticSafetyTests(unittest.TestCase):
             'api_key',
         ):
             self.assertNotIn(forbidden, serialized)
+
+    def test_real_stream_accessor_failure_keeps_502_and_logs_no_canaries(self):
+        streamed = response(200)
+        streamed.iter_content = Mock(
+            side_effect=HostileStreamError(STREAM_FAILURE_CANARY),
+        )
+        app = server.create_app(FREE_SETTINGS)
+        with (
+            patch('smartfetch.server._rate_allowed', return_value=True),
+            patch(
+                'smartfetch.http_fetch.validate_public_url',
+                side_effect=lambda url: url,
+            ),
+            patch(
+                'smartfetch.http_fetch.SESSION.get',
+                return_value=streamed,
+            ),
+            patch(
+                'smartfetch.browser_fetch.validate_public_url',
+                side_effect=lambda url: url,
+            ),
+            patch(
+                'smartfetch.browser_fetch._chromium_path',
+                side_effect=RuntimeError('browser boundary failure'),
+            ),
+            TestClient(app) as client,
+            self.assertLogs('smartfetch.activity', level='INFO') as captured,
+        ):
+            result = client.post(
+                '/fetch',
+                json={'url': 'https://stream.example/'},
+            )
+
+        self.assertEqual(result.status_code, 502)
+        self.assertEqual(result.json()['error_code'], 'fetch_failed')
+        self.assertIn(STREAM_FAILURE_CANARY, result.json()['error'])
+        self.assertNotIn(ACCESSOR_FAILURE_CANARY, result.json()['error'])
+        serialized = json.dumps([
+            json.loads(record.getMessage()) for record in captured.records
+        ])
+        self.assertNotIn(STREAM_FAILURE_CANARY, serialized)
+        self.assertNotIn(ACCESSOR_FAILURE_CANARY, serialized)
 
 
 if __name__ == '__main__':

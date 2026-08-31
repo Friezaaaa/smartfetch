@@ -5,7 +5,11 @@ from urllib.parse import urljoin
 
 import requests
 
-from .diagnostics import attach_diagnostics, make_diagnostics
+from .diagnostics import (
+    attach_diagnostics,
+    diagnostics_for_exception,
+    make_diagnostics,
+)
 from .security import DNSResolutionError, validate_public_url
 
 MAX_BYTES = int(os.getenv('MAX_RESPONSE_BYTES', '3000000'))
@@ -189,7 +193,7 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
                     ))
                 chunks.append(chunk)
         except Exception as error:
-            if getattr(error, 'retrieval_diagnostics', None) is not None:
+            if diagnostics_for_exception(error) is not None:
                 raise
             phase, failure_code = _network_failure(error)
             if phase == 'connect':
