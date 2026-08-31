@@ -351,6 +351,27 @@ def create_app(
             media_type='application/xml',
         )
 
+    @application.api_route(
+        '/fetch',
+        methods=['GET', 'HEAD'],
+        include_in_schema=False,
+    )
+    async def fetch_method_guidance(request: Request):
+        headers = {'Allow': 'POST'}
+        if request.method == 'HEAD':
+            return Response(status_code=405, headers=headers)
+        return JSONResponse(
+            {
+                'error': 'method_not_allowed',
+                'message': 'Use POST /fetch.',
+                'openapi': '/openapi.json',
+                'documentation': '/docs',
+                'payment_discovery': '/.well-known/x402',
+            },
+            status_code=405,
+            headers=headers,
+        )
+
     @application.post('/fetch')
     async def fetch(request: Request):
         if getattr(request.state, 'payment_payload', None) is not None:
