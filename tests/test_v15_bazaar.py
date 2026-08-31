@@ -155,7 +155,7 @@ class V16BazaarDiscoveryTests(unittest.TestCase):
         output_example = bazaar['info']['output']['example']
         self.assertTrue(output_example['success'])
         self.assertEqual(output_example['render_method'], 'http')
-        self.assertEqual(output_example['service_version'], '1.10.4')
+        self.assertEqual(output_example['service_version'], '1.10.5')
         self.assertTrue({
             'requested_url',
             'final_url',
@@ -245,7 +245,7 @@ class V16BazaarDiscoveryTests(unittest.TestCase):
                 'url': 'https://example.com/article',
             })
 
-        self.assertEqual(get_fetch.status_code, 404)
+        self.assertEqual(get_fetch.status_code, 405)
         self.assertNotIn('payment-required', get_fetch.headers)
         self.assertEqual(paid_fetch.status_code, 402)
         decoded = decode_payment_required_header(

@@ -34,6 +34,7 @@ from .config import (
     HOST,
     MAX_REQUEST_BODY_BYTES,
 )
+from .mcp_logging import configure_mcp_sdk_logging
 from .payments import X402Settings, create_x402_resource_server
 
 
@@ -219,6 +220,7 @@ def create_smartfetch_mcp(
         json_response=True,
         max_request_body_size=MAX_REQUEST_BODY_BYTES,
     )
+    configure_mcp_sdk_logging()
     resource_server = None
     accepts = []
 

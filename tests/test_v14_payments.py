@@ -319,13 +319,13 @@ class V14RouteAndMetadataTests(unittest.TestCase):
         with TestClient(server.create_app(settings)) as client:
             health = client.get('/health')
             self.assertEqual(health.status_code, 200)
-            self.assertEqual(health.json()['version'], '1.10.4')
+            self.assertEqual(health.json()['version'], '1.10.5')
             self.assertEqual(client.get('/').status_code, 200)
             meta = client.get('/meta')
             self.assertEqual(meta.status_code, 200)
-            self.assertEqual(meta.json()['version'], '1.10.4')
+            self.assertEqual(meta.json()['version'], '1.10.5')
             self.assertEqual(meta.json()['payment'], 'x402-enabled-mainnet')
-            self.assertEqual(client.get('/fetch').status_code, 404)
+            self.assertEqual(client.get('/fetch').status_code, 405)
             self.assertEqual(client.post('/fetch').status_code, 402)
 
     @patch('x402.http.HTTPFacilitatorClient.get_supported')
