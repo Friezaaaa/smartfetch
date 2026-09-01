@@ -1,9 +1,25 @@
-# SmartFetch V1.10.5 — method guidance and truthful MCP log severity
+# SmartFetch V1.10.6 — accurate x402 payment onboarding
 
 SmartFetch takes a public web URL and returns clean agent-ready text, Markdown, links, metadata, and the retrieval method used. It tries cheap HTTP retrieval first and falls back to a real Chromium browser when needed.
 
-SmartFetch V1.10.4 is live in production. This branch prepares V1.10.5 for
-review; it does not itself deploy the service.
+SmartFetch V1.10.5 is live in production and is the currently published
+Official MCP Registry version. This branch prepares V1.10.6 for review; it
+does not itself deploy the service or publish a Registry release.
+
+## V1.10.6 payment onboarding
+
+- OpenAPI models the real request-ID-only HTTP 402 body and documents the
+  base64-encoded x402 v2 `PAYMENT-REQUIRED` challenge header.
+- The paid retry request uses `PAYMENT-SIGNATURE`; a successfully settled
+  response carries `PAYMENT-RESPONSE`. The documented payment requirement is
+  generated from the same runtime scheme, network, amount, asset, and public
+  payee as the server.
+- `/docs` and `/llms.txt` display payment details from the active generated
+  requirement and link to the tested Python HTTP buyer plus the official x402
+  TypeScript/Python buyer guide.
+- SmartFetch verifies authorization before retrieval and settles only after
+  successful delivery. Retrieval responses with status 400 or higher,
+  including HTTP 502 failures, are returned without settlement.
 
 ## V1.10.5 method guidance and MCP logging
 
@@ -85,8 +101,8 @@ review; it does not itself deploy the service.
   and agents.
 - Runtime discovery links use FastAPI/Starlette's proxy-aware request scheme
   and host. The Railway hostname is not embedded in runtime discovery output.
-- SmartFetch V1.10.4 is the currently published Official MCP Registry release;
-  V1.10.5 requires a separate publication after release.
+- SmartFetch V1.10.5 is the currently published Official MCP Registry release;
+  V1.10.6 requires a separate publication after release.
 
 All V1.8 HTTP payment, Bazaar, Registry, and native MCP behavior remains
 unchanged:
@@ -139,7 +155,7 @@ Example response fields:
   "truncated": false,
   "elapsed_ms": 350,
   "request_id": "…",
-  "service_version": "1.10.5"
+  "service_version": "1.10.6"
 }
 ```
 
@@ -149,6 +165,26 @@ When x402 payment protection is enabled, the `PAYMENT-REQUIRED` header for
 `/`, `/health`, `/meta`, `/.well-known/x402`, `/docs`, `/openapi.json`,
 `/llms.txt`, `/robots.txt`, and `/sitemap.xml` remain free and do not advertise
 paid Bazaar metadata.
+
+### HTTP x402 buyer flow
+
+1. Send the JSON request without payment.
+2. Decode `PAYMENT-REQUIRED` and validate its scheme, network, asset, amount,
+   and public payee before signing.
+3. Sign through an official capped x402 client and retry with
+   `PAYMENT-SIGNATURE`.
+4. After successful settlement, read `PAYMENT-RESPONSE`.
+
+SmartFetch verifies authorization before retrieval and settles only after
+successful delivery. Retrieval responses with status 400 or higher, including
+502 failures, are returned without settlement. See the tested
+[Python HTTP buyer](scripts/paid_fetch_mainnet_test.py) and the official
+[x402 TypeScript/Python buyer guide](https://docs.x402.org/getting-started/quickstart-for-buyers).
+
+Never place a private key or recovery phrase in a URL, request body, log,
+example, command-line argument, or repository file. Never commit secret-bearing
+`.env` files. Use hidden interactive input, a platform-injected secret, or an
+approved wallet/secret-management service.
 
 ## Free discovery routes
 
@@ -252,8 +288,8 @@ resource: `mcp://tool/fetch_webpage`, `mcp://tool/webpage_to_markdown`,
 HTTP Bazaar resource for `POST /fetch` is separate and unchanged.
 
 The root `server.json` describes the public remote endpoint registered with the
-Official MCP Registry. V1.10.4 remains the currently published Registry
-version; V1.10.5 requires a separate publication after release.
+Official MCP Registry. V1.10.5 remains the currently published Registry
+version; V1.10.6 requires a separate publication after release.
 Registry metadata keeps its required fixed remote URL; runtime discovery routes
 derive their URLs from each proxy-aware request. The MCP Bazaar declarations do
 not assert indexing by Coinbase Bazaar or downstream MCP directories.
@@ -360,8 +396,8 @@ python tests/api_local_smoke.py
 ## Container
 
 ```bash
-docker build -t smartfetch:v1.10.5 .
-docker run --rm -p 8787:8787 smartfetch:v1.10.5
+docker build -t smartfetch:v1.10.6 .
+docker run --rm -p 8787:8787 smartfetch:v1.10.6
 ```
 
 The container installs Chromium automatically.
@@ -405,14 +441,14 @@ Our deployment gate remains **18/20 minimum**, including all five forced-browser
 
 ## Production release status
 
-SmartFetch V1.10.4 is live in production. The production MCP server still
+SmartFetch V1.10.5 is live in production. The production MCP server still
 exposes exactly four tools: `fetch_webpage`, `webpage_to_markdown`,
 `extract_webpage_text`, and `render_webpage`. HTTP `POST /fetch` and all four MCP
 tools use x402 `exact` payments on Base mainnet at `$0.005` per execution.
 
 Free `/.well-known/x402` discovery, privacy-safe structured activity logging,
-and the guarded buyer examples are live V1.10 additions. V1.10.4 is the
-currently published Official MCP Registry version; V1.10.5 is not published or
+and the guarded buyer examples are live V1.10 additions. V1.10.5 is the
+currently published Official MCP Registry version; V1.10.6 is not published or
 deployed by this repository change. Base Sepolia remains supported for testnet use, and the
 active payment network remains controlled by `X402_NETWORK`: `eip155:84532` for
 Base Sepolia or `eip155:8453` for Base mainnet.

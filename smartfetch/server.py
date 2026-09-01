@@ -321,7 +321,16 @@ def create_app(
 
     @application.get('/docs', response_class=HTMLResponse)
     async def discovery_docs(request: Request):
-        return HTMLResponse(docs_html(public_urls(request)))
+        payment_requirement = (
+            smartfetch_mcp.accepts[0]
+            if smartfetch_mcp.accepts
+            else None
+        )
+        return HTMLResponse(docs_html(
+            public_urls(request),
+            settings,
+            payment_requirement,
+        ))
 
     @application.get('/openapi.json')
     async def discovery_openapi(request: Request):
@@ -338,7 +347,16 @@ def create_app(
 
     @application.get('/llms.txt', response_class=PlainTextResponse)
     async def discovery_llms(request: Request):
-        return PlainTextResponse(llms_text(public_urls(request)))
+        payment_requirement = (
+            smartfetch_mcp.accepts[0]
+            if smartfetch_mcp.accepts
+            else None
+        )
+        return PlainTextResponse(llms_text(
+            public_urls(request),
+            settings,
+            payment_requirement,
+        ))
 
     @application.get('/robots.txt', response_class=PlainTextResponse)
     async def discovery_robots(request: Request):
