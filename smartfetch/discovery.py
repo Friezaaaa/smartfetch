@@ -4,11 +4,17 @@ from html import escape
 from decimal import Decimal
 from xml.etree import ElementTree
 
+from x402.http.utils import encode_payment_required_header
+from x402.schemas import PaymentRequired, PaymentRequirements, ResourceInfo
+
 from .bazaar import (
+    FETCH_DESCRIPTION,
     FETCH_INPUT_EXAMPLE,
     FETCH_INPUT_SCHEMA,
     FETCH_OUTPUT_EXAMPLE,
     FETCH_OUTPUT_SCHEMA,
+    FETCH_TAGS,
+    fetch_discovery_extension,
 )
 from .config import SERVICE_NAME, SERVICE_VERSION
 
@@ -19,6 +25,12 @@ PYTHON_EXAMPLE_URL = (
 )
 TYPESCRIPT_EXAMPLE_URL = (
     f"{GITHUB_URL}/blob/main/examples/typescript/paid-mcp-client.ts"
+)
+PYTHON_HTTP_EXAMPLE_URL = (
+    f"{GITHUB_URL}/blob/main/scripts/paid_fetch_mainnet_test.py"
+)
+OFFICIAL_X402_BUYER_URL = (
+    "https://docs.x402.org/getting-started/quickstart-for-buyers"
 )
 TOOL_NAMES = (
     "fetch_webpage",
@@ -93,8 +105,8 @@ def x402_manifest(urls, settings):
     }
 
 
-def _error_response(description):
-    return {
+def _error_response(description, example=None):
+    response = {
         "description": description,
         "content": {
             "application/json": {
@@ -111,6 +123,9 @@ def _error_response(description):
             },
         },
     }
+    if example is not None:
+        response["content"]["application/json"]["example"] = example
+    return response
 
 
 def _atomic_usdc_amount(price):
@@ -119,6 +134,56 @@ def _atomic_usdc_amount(price):
 
 def _agentcash_usd_amount(price):
     return f"{Decimal(price.removeprefix('$')):.6f}"
+
+
+def _usd_price_from_atomic(amount):
+    value = format(Decimal(amount) / 1_000_000, "f")
+    return f"${value.rstrip('0').rstrip('.')}"
+
+
+def _payment_details(settings=None, payment_requirement=None):
+    price = (
+        _usd_price_from_atomic(payment_requirement.amount)
+        if payment_requirement is not None
+        else settings.price if settings is not None else "$0.005"
+    )
+    network = (
+        payment_requirement.network
+        if payment_requirement is not None
+        else settings.network if settings is not None else "eip155:84532"
+    )
+    return {
+        "price": price,
+        "scheme": (
+            payment_requirement.scheme
+            if payment_requirement is not None
+            else "exact"
+        ),
+        "network": network,
+        "asset": (
+            payment_requirement.asset
+            if payment_requirement is not None
+            else "USDC"
+        ),
+    }
+
+
+def _payment_required_example(urls, payment_requirement):
+    if not isinstance(payment_requirement, PaymentRequirements):
+        return None
+    challenge = PaymentRequired(
+        x402Version=2,
+        resource=ResourceInfo(
+            url=urls["fetch"],
+            description=FETCH_DESCRIPTION,
+            mimeType="application/json",
+            serviceName=SERVICE_NAME,
+            tags=FETCH_TAGS,
+        ),
+        accepts=[payment_requirement],
+        extensions=fetch_discovery_extension(),
+    )
+    return encode_payment_required_header(challenge)
 
 
 def openapi_document(urls, settings, payment_requirement=None):
@@ -154,10 +219,21 @@ def openapi_document(urls, settings, payment_requirement=None):
         "price": settings.price,
         "amount": atomic_amount,
     }
-    asset_schema = {"type": "string"}
     if asset is not None:
         x402_contract["asset"] = asset
-        asset_schema["const"] = asset
+    payment_required_header = {
+        "description": (
+            "Base64-encoded x402 v2 PaymentRequired challenge. Decode and "
+            "validate it before signing."
+        ),
+        "schema": {"type": "string"},
+    }
+    payment_required_example = _payment_required_example(
+        urls,
+        payment_requirement,
+    )
+    if payment_required_example is not None:
+        payment_required_header["example"] = payment_required_example
     return {
         "openapi": "3.1.0",
         "info": {
@@ -193,6 +269,18 @@ def openapi_document(urls, settings, payment_requirement=None):
                         },
                         "protocols": [{"x402": {}}],
                     },
+                    "parameters": [
+                        {
+                            "name": "PAYMENT-SIGNATURE",
+                            "in": "header",
+                            "required": False,
+                            "description": (
+                                "Base64-encoded x402 v2 PaymentPayload on the "
+                                "paid retry request."
+                            ),
+                            "schema": {"type": "string"},
+                        },
+                    ],
                     "requestBody": {
                         "required": True,
                         "content": {
@@ -205,6 +293,16 @@ def openapi_document(urls, settings, payment_requirement=None):
                     "responses": {
                         "200": {
                             "description": "Successful SmartFetch result",
+                            "headers": {
+                                "PAYMENT-RESPONSE": {
+                                    "description": (
+                                        "Base64-encoded x402 v2 "
+                                        "SettlementResponse after successful "
+                                        "settlement."
+                                    ),
+                                    "schema": {"type": "string"},
+                                },
+                            },
                             "content": {
                                 "application/json": {
                                     "schema": FETCH_OUTPUT_SCHEMA,
@@ -217,60 +315,35 @@ def openapi_document(urls, settings, payment_requirement=None):
                         ),
                         "402": {
                             "description": "x402 v2 payment required",
+                            "headers": {
+                                "PAYMENT-REQUIRED": payment_required_header,
+                            },
                             "content": {
                                 "application/json": {
                                     "schema": {
                                         "type": "object",
                                         "properties": {
-                                            "x402Version": {
-                                                "type": "integer",
-                                                "const": 2,
-                                            },
-                                            "error": {"type": "string"},
-                                            "accepts": {
-                                                "type": "array",
-                                                "items": {
-                                                    "type": "object",
-                                                    "properties": {
-                                                        "scheme": {
-                                                            "type": "string",
-                                                            "const": scheme,
-                                                        },
-                                                        "network": {
-                                                            "type": "string",
-                                                            "const": network,
-                                                        },
-                                                        "amount": {
-                                                            "type": "string",
-                                                            "example": atomic_amount,
-                                                        },
-                                                        "asset": asset_schema,
-                                                        "payTo": {
-                                                            "type": "string",
-                                                        },
-                                                    },
-                                                    "required": [
-                                                        "scheme",
-                                                        "network",
-                                                        "amount",
-                                                        "asset",
-                                                        "payTo",
-                                                    ],
-                                                },
-                                            },
                                             "request_id": {"type": "string"},
                                         },
-                                        "required": [
-                                            "x402Version",
-                                            "accepts",
-                                            "request_id",
-                                        ],
+                                        "required": ["request_id"],
+                                        "additionalProperties": False,
+                                    },
+                                    "example": {
+                                        "request_id": "a1b2c3d4e5f60708",
                                     },
                                 },
                             },
                         },
                         "429": _error_response("Rate limit exceeded"),
-                        "502": _error_response("Upstream fetch failed"),
+                        "502": _error_response(
+                            "Upstream fetch failed",
+                            {
+                                "success": False,
+                                "error_code": "fetch_failed",
+                                "error": "Retrieval failed",
+                                "request_id": "a1b2c3d4e5f60708",
+                            },
+                        ),
                         "503": _error_response("Service is at capacity"),
                         "504": _error_response("Retrieval timed out"),
                     },
@@ -280,12 +353,21 @@ def openapi_document(urls, settings, payment_requirement=None):
     }
 
 
-def docs_html(urls):
+def docs_html(urls, settings=None, payment_requirement=None):
     """Return concise human- and crawler-readable service documentation."""
     safe = {key: escape(value, quote=True) for key, value in urls.items()}
     github = escape(GITHUB_URL, quote=True)
     python_example = escape(PYTHON_EXAMPLE_URL, quote=True)
     typescript_example = escape(TYPESCRIPT_EXAMPLE_URL, quote=True)
+    python_http_example = escape(PYTHON_HTTP_EXAMPLE_URL, quote=True)
+    official_x402_buyer = escape(OFFICIAL_X402_BUYER_URL, quote=True)
+    payment = {
+        key: escape(str(value), quote=True)
+        for key, value in _payment_details(
+            settings,
+            payment_requirement,
+        ).items()
+    }
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -298,7 +380,7 @@ def docs_html(urls):
   <main>
     <h1>SmartFetch</h1>
     <p>SmartFetch is a webpage reader and fetch service for AI agents. It can scrape a public URL, extract clean text, convert a website to Markdown, preserve links and metadata, and use automatic browser rendering for JavaScript-heavy pages.</p>
-    <p>Each paid HTTP or MCP execution uses x402 exact payments at a default price of <strong>$0.005</strong>. Discovery, health, metadata, MCP initialize, and MCP tools/list remain free.</p>
+    <p>Each paid HTTP or MCP execution uses x402 <code>{payment['scheme']}</code> payments at <strong>{payment['price']}</strong> on <code>{payment['network']}</code> with asset <code>{payment['asset']}</code>. Discovery, health, metadata, MCP initialize, and MCP tools/list remain free.</p>
     <h2>Public endpoints</h2>
     <ul>
       <li><a href="{safe['meta']}">GET /meta</a> — machine-readable metadata</li>
@@ -323,6 +405,19 @@ def docs_html(urls):
     </ul>
     <h2>HTTP request example</h2>
     <pre><code>{{"url":"https://example.com/","max_chars":20000,"force_browser":false}}</code></pre>
+    <h2>HTTP x402 buyer flow</h2>
+    <ol>
+      <li>Send the request without payment.</li>
+      <li>Decode <code>PAYMENT-REQUIRED</code> and validate its scheme, network, asset, amount, and payee.</li>
+      <li>Sign through an official capped x402 client, then retry with <code>PAYMENT-SIGNATURE</code>.</li>
+      <li>After successful settlement, read <code>PAYMENT-RESPONSE</code>.</li>
+    </ol>
+    <p>SmartFetch verifies authorization before retrieval and settles only after successful delivery. Retrieval responses with status 400 or higher, including 502 failures, are returned without settlement.</p>
+    <p>Never place a private key or recovery phrase in a URL, request body, log, example, command-line argument, or repository file. Never commit secret-bearing .env files. Use hidden interactive input, a platform-injected secret, or an approved wallet/secret-management service.</p>
+    <ul>
+      <li><a href="{python_http_example}">Tested Python HTTP buyer example</a></li>
+      <li><a href="{official_x402_buyer}">Official x402 TypeScript and Python buyer guide</a></li>
+    </ul>
     <p>Source and deployment documentation: <a href="{github}">{github}</a>.</p>
   </main>
 </body>
@@ -330,21 +425,22 @@ def docs_html(urls):
 """
 
 
-def llms_text(urls):
+def llms_text(urls, settings=None, payment_requirement=None):
     """Return a compact llms.txt service summary."""
+    payment = _payment_details(settings, payment_requirement)
     return f"""# SmartFetch
 
 SmartFetch reads, fetches, scrapes, and extracts public webpages for AI agents. It returns clean text, Markdown, links, and metadata, with browser rendering for JavaScript-heavy websites.
 
-Price: $0.005 per paid HTTP or MCP tool execution using x402 exact payments.
+Payment: {payment['price']} per paid HTTP or MCP tool execution using x402 {payment['scheme']} on {payment['network']} with asset {payment['asset']}.
 
 ## Endpoints
-- Community x402 manifest: {urls['x402']}
-- Documentation: {urls['docs']}
-- OpenAPI 3.1: {urls['openapi']}
-- Metadata: {urls['meta']}
-- Remote MCP Streamable HTTP: {urls['mcp']}
-- Paid HTTP retrieval: POST {urls['fetch']}
+- [Community x402 manifest]({urls['x402']})
+- [Documentation]({urls['docs']})
+- [OpenAPI 3.1]({urls['openapi']})
+- [Metadata]({urls['meta']})
+- [Remote MCP Streamable HTTP]({urls['mcp']})
+- [Paid HTTP retrieval]({urls['fetch']}): POST only
 
 ## MCP tools
 - fetch_webpage: full SmartFetch result
@@ -353,9 +449,15 @@ Price: $0.005 per paid HTTP or MCP tool execution using x402 exact payments.
 - render_webpage: forced browser rendering plus the full result
 
 ## Paying MCP client examples
-- Python: {PYTHON_EXAMPLE_URL}
-- TypeScript: {TYPESCRIPT_EXAMPLE_URL}
+- [Python MCP example]({PYTHON_EXAMPLE_URL})
+- [TypeScript MCP example]({TYPESCRIPT_EXAMPLE_URL})
 - Both enforce a $0.005 maximum payment. Running them can spend real Base-mainnet USDC.
+
+## HTTP buyer guidance
+- [HTTP buyer example]({PYTHON_HTTP_EXAMPLE_URL})
+- [Official x402 TypeScript and Python buyer guide]({OFFICIAL_X402_BUYER_URL})
+- Send an unpaid request, validate PAYMENT-REQUIRED, sign with a capped official client, retry with PAYMENT-SIGNATURE, and read PAYMENT-RESPONSE after settlement.
+- SmartFetch settles only after successful delivery; responses with status 400 or higher are returned without settlement.
 
 ## Source
 {GITHUB_URL}

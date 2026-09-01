@@ -158,7 +158,7 @@ class AgentCashOpenAPITests(unittest.TestCase):
         ))
         retrieval.assert_not_awaited()
 
-    def test_discovery_metadata_exposes_no_payment_secrets_or_payee(self):
+    def test_discovery_metadata_exposes_no_payment_secrets(self):
         serialized = json.dumps(discovery.openapi_document(
             URLS,
             paid_settings(),
@@ -166,12 +166,10 @@ class AgentCashOpenAPITests(unittest.TestCase):
         )).lower()
 
         for forbidden in (
-            VALID_ADDRESS.lower(),
             'never-expose-cdp-secret',
             'cdp_api_key',
             'private_key',
             'wallet_secret',
-            'payment-signature',
         ):
             self.assertNotIn(forbidden, serialized)
 
@@ -182,8 +180,8 @@ class CurrentVersionAndRegistryTests(unittest.TestCase):
             (REPO_ROOT / 'server.json').read_text(encoding='utf-8')
         )
 
-        self.assertEqual(SERVICE_VERSION, '1.10.5')
-        self.assertEqual(manifest['version'], '1.10.5')
+        self.assertEqual(SERVICE_VERSION, '1.10.6')
+        self.assertEqual(manifest['version'], '1.10.6')
         self.assertEqual(
             manifest['description'],
             'Paid fallback for public webpages: clean text, Markdown, links, '

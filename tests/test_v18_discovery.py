@@ -128,7 +128,7 @@ class V18MCPBazaarMetadataTests(unittest.TestCase):
         output = declaration['info']['output']
         self.assertEqual(output['type'], 'json')
         self.assertTrue(output['example']['success'])
-        self.assertEqual(output['example']['service_version'], '1.10.5')
+        self.assertEqual(output['example']['service_version'], '1.10.6')
         output_schema = declaration['schema']['properties']['output'][
             'properties'
         ]['example']
@@ -269,7 +269,7 @@ class V18RegistryManifestTests(unittest.TestCase):
                 'Paid fallback for public webpages: clean text, Markdown, '
                 'links, metadata, and JavaScript rendering.'
             ),
-            'version': '1.10.5',
+            'version': '1.10.6',
             'repository': {
                 'url': 'https://github.com/Friezaaaa/smartfetch',
                 'source': 'github',

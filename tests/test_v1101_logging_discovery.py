@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi.testclient import TestClient
+from x402.http.utils import decode_payment_required_header
 from x402.schemas import (
     SettleResponse,
     SupportedKind,
@@ -355,7 +356,7 @@ class DiscoveryCompatibilityTests(unittest.TestCase):
             payment_requirement,
         )
 
-        self.assertEqual(document['info']['version'], '1.10.5')
+        self.assertEqual(document['info']['version'], '1.10.6')
         self.assertEqual(list(document['paths']), ['/fetch'])
         operation = document['paths']['/fetch']['post']
         self.assertEqual(operation['x-x402'], {
@@ -380,24 +381,19 @@ class DiscoveryCompatibilityTests(unittest.TestCase):
         success = operation['responses']['200']['content']['application/json']
         self.assertEqual(success['schema'], bazaar.FETCH_OUTPUT_SCHEMA)
         self.assertEqual(success['example'], bazaar.FETCH_OUTPUT_EXAMPLE)
-        requirement = operation['responses']['402']['content'][
-            'application/json'
-        ]['schema']['properties']['accepts']['items']
+        payment_response = operation['responses']['402']
         self.assertEqual(
-            requirement['properties']['scheme']['const'],
-            'exact',
+            payment_response['content']['application/json']['schema'],
+            {
+                'type': 'object',
+                'properties': {'request_id': {'type': 'string'}},
+                'required': ['request_id'],
+                'additionalProperties': False,
+            },
         )
         self.assertEqual(
-            requirement['properties']['network']['const'],
-            BASE_MAINNET,
-        )
-        self.assertEqual(
-            requirement['properties']['asset']['const'],
-            BASE_MAINNET_USDC,
-        )
-        self.assertEqual(
-            requirement['properties']['amount']['example'],
-            '5000',
+            payment_response['headers']['PAYMENT-REQUIRED']['schema'],
+            {'type': 'string'},
         )
 
     def test_openapi_asset_matches_generated_mainnet_payment_requirement(self):
@@ -426,20 +422,21 @@ class DiscoveryCompatibilityTests(unittest.TestCase):
         operation = document['paths']['/fetch']['post']
         self.assertEqual(operation['x-x402']['asset'], generated.asset)
         self.assertEqual(operation['x-x402']['assetSymbol'], 'USDC')
-        schema = operation['responses']['402']['content'][
-            'application/json'
-        ]['schema']['properties']['accepts']['items']
+        encoded = operation['responses']['402']['headers'][
+            'PAYMENT-REQUIRED'
+        ]['example']
+        documented = decode_payment_required_header(encoded).accepts[0]
         self.assertEqual(
-            schema['properties']['asset']['const'],
+            documented.asset,
             generated.asset,
         )
         self.assertNotEqual(
-            schema['properties']['asset']['const'],
+            documented.asset,
             'USDC',
         )
 
-    def test_service_version_is_v1105(self):
-        self.assertEqual(SERVICE_VERSION, '1.10.5')
+    def test_service_version_is_v1106(self):
+        self.assertEqual(SERVICE_VERSION, '1.10.6')
 
 
 if __name__ == '__main__':
