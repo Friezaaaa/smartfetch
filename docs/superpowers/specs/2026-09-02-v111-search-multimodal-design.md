@@ -1,6 +1,7 @@
 # SmartFetch V1.11 Search, Structured Extraction, and Multimodal Design
 
-Status: approved architecture design; production implementation has not begun.
+Status: draft architecture pending final approval; production implementation
+has not begun.
 
 Baseline: SmartFetch V1.10.6 at
 `afc7a6466cdbc86f3b9c5921a67ae6bcf3180824`.
@@ -71,13 +72,12 @@ not create another scraper. The new webpage `render_mode` maps to the existing
 engine as follows:
 
 - `auto` (default): current HTTP-first behavior with existing browser fallback;
-- `always`: current `force_browser=True` behavior;
-- `never`: HTTP-only behavior with browser fallback disabled.
+- `always`: current `force_browser=True` behavior.
 
-Supporting `never` requires a narrow, default-preserving extension to the
-retrieval entry point (for example, a keyword-only `allow_browser_fallback`
-flag defaulting to `True`). Existing callers and behavior remain unchanged.
-Duplicating the HTTP/extraction orchestration in a new V1.11 module is rejected.
+V1.11 does not add an HTTP-only mode and does not modify
+`smartfetch.core.smart_fetch()`. `auto` and `always` map directly to behavior
+the engine already supports. Duplicating the HTTP/extraction orchestration in a
+new V1.11 module is rejected.
 
 ### 2.2 Current payment lifecycle
 
@@ -169,9 +169,9 @@ Only these concrete REST resources are registered:
 
 | Method and path | Provisional price | Required provider(s) |
 |---|---:|---|
-| `POST /search-and-extract/results` | `$0.02` | Exa |
-| `POST /search-and-extract/answer` | `$0.10` | Gemini + Google Search grounding |
-| `POST /search-and-extract/structured` | `$0.15` | Exa + Gemini |
+| `POST /search-and-extract/results` | `$0.05` | Exa |
+| `POST /search-and-extract/answer` | `$0.10` | Exa + SmartFetch retrieval + Gemini |
+| `POST /search-and-extract/structured` | `$0.15` | Exa + SmartFetch retrieval + Gemini |
 | `POST /extract-structured-data/webpage` | `$0.05` | Gemini |
 | `POST /extract-structured-data/image` | `$0.05` | Gemini |
 | `POST /extract-structured-data/pdf` | `$0.05` | Gemini |
@@ -249,6 +249,7 @@ The path selects the mode; a REST body must not contain `mode`.
 {
   "query": "current x402 Python MCP release details",
   "max_results": 5,
+  "max_sources": 3,
   "domains": ["docs.x402.org"],
   "freshness": "month",
   "json_schema": {
@@ -269,16 +270,20 @@ Field constraints:
 | Field | Constraint |
 |---|---|
 | `query` | required string, 1–500 characters after trimming |
-| `max_results` | integer, default 5, minimum 1, maximum 10 |
+| `max_results` | Exa candidate/result count; integer, default 5, minimum 1, maximum 10 in every mode |
+| `max_sources` | `structured` only; number of top Exa candidates SmartFetch retrieves, integer 1–3, default 3, and no greater than `max_results` |
 | `domains` | optional include-only list, 1–10 unique normalized public DNS hostnames; no scheme, credentials, port, path, query, fragment, wildcard, or IP literal |
 | `freshness` | optional enum: `day`, `week`, `month`, `year` |
 | `json_schema` | required only for `structured`; forbidden for `results` and `answer` |
 | `instructions` | optional only for `structured`; 1–2,000 characters |
 
 `freshness` is converted server-side to an absolute published-after timestamp
-once per request. The resolved timestamp is passed to Exa, or expressed to
-Google Search grounding as a freshness constraint. It is returned in public
-metadata so the request remains auditable.
+once per request and passed to Exa. It is returned in public metadata so the
+request remains auditable. Results mode returns up to `max_results` entries.
+Answer mode asks Exa for up to `max_results` candidates and SmartFetch retrieves
+the top `min(max_results, 3)` candidates. Structured mode retrieves exactly up
+to `max_sources` from at most `max_results` candidates. The candidate and
+retrieval bounds are explicit and never silently conflated.
 
 ### 5.2 Search MCP request
 
@@ -291,6 +296,7 @@ The single `search_and_extract` input schema is:
     "query": {"type": "string", "minLength": 1, "maxLength": 500},
     "mode": {"type": "string", "enum": ["results", "answer", "structured"]},
     "max_results": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
+    "max_sources": {"type": "integer", "minimum": 1, "maximum": 3},
     "domains": {
       "type": "array",
       "maxItems": 10,
@@ -306,9 +312,12 @@ The single `search_and_extract` input schema is:
 }
 ```
 
-Cross-field rules are enforced before selecting a paid wrapper. An invalid
-mode, a missing structured schema, or a schema supplied to another mode returns
-a free MCP input error and cannot produce a challenge.
+Cross-field rules are enforced before selecting a paid wrapper. `max_sources`
+is accepted only for structured mode, defaults internally to 3 when omitted
+there, and cannot exceed `max_results`.
+An invalid mode, a missing structured schema, a schema supplied to another
+mode, or an invalid count combination returns a free MCP input error and cannot
+produce a challenge.
 
 ### 5.3 Structured-source REST requests
 
@@ -350,7 +359,7 @@ Field constraints:
 | Field | Constraint |
 |---|---|
 | `source_url` | required public HTTPS URL, maximum 4,096 characters; no credentials or nonstandard port |
-| `render_mode` | webpage only; enum `auto`, `never`, `always`; default `auto`; forbidden on other source types |
+| `render_mode` | webpage only; enum `auto`, `always`; default `auto`; forbidden on other source types |
 | `json_schema` | required bounded schema described in section 8 |
 | `instructions` | optional string, 1–2,000 characters |
 
@@ -434,8 +443,13 @@ RFC 3339 or `null`.
 
 The answer is capped at 12,000 characters, claims at 50, claim text at 500,
 citations at 20, and every claim must reference at least one returned citation.
-Citation URLs come from Gemini grounding metadata, not model-authored strings.
-Missing or invalid grounding metadata is a delivery failure and does not settle.
+Exa selects up to `max_results` candidates and SmartFetch retrieves at most the
+top three through its existing safe pipeline before Gemini synthesis. Gemini
+receives opaque source IDs and may return only those IDs in `citation_ids`; it never
+supplies a citation URL. SmartFetch builds public citation titles, URLs, and
+dates from the Exa-selected, successfully retrieved source registry. An
+unknown source ID, an uncited claim, or a citation to an unretrieved source is
+a delivery failure and does not settle.
 
 ### 6.3 `structured`
 
@@ -491,10 +505,14 @@ Limits:
 For textual webpage and PDF evidence, a normalized quote must occur in the
 bounded source text supplied to the model. Image evidence uses a bounded visual
 description. Audio/video evidence uses inspected time ranges. Evidence must
-refer to a returned source and a real field in `data`. Every present top-level
-required property must have evidence; missing required properties must appear
-as `null` only when the caller schema permits null and must also be listed in
-`missing_fields`. Otherwise validation fails and no settlement occurs.
+refer to a returned source and a real field in `data`. Every present required
+leaf field, including required leaves nested in objects and arrays, must have
+at least one evidence entry whose `field` is its canonical RFC 6901 JSON
+Pointer. Array indices are explicit pointer segments. Missing required fields
+must appear as `null` only when the caller schema permits null and must also be
+listed in `missing_fields`. Otherwise validation fails and no settlement
+occurs. The existing 100-entry evidence cap therefore also bounds the maximum
+number of present required leaves a request can deliver.
 
 ## 7. Failure contract and status mapping
 
@@ -520,7 +538,7 @@ returns raw provider exceptions. Stable codes and HTTP statuses are:
 | 413 | `source_too_large`, `schema_too_large` |
 | 415 | `unsupported_media_type` |
 | 422 | `invalid_provider_output`, `schema_validation_failed`, `evidence_validation_failed` |
-| 502 | `search_failed`, `retrieval_failed`, `model_failed` |
+| 502 | `search_failed`, `retrieval_failed`, `model_failed`, `provider_cleanup_failed` |
 | 503 | `provider_unavailable`, `capacity_unavailable` |
 | 504 | `provider_timeout`, `retrieval_timeout` |
 
@@ -569,10 +587,10 @@ validation after the subset guard and after JSON parsing.
 
 Webpage text, media, search results, instructions, and schemas are untrusted
 data. Provider prompts delimit them as data and explicitly prohibit following
-embedded instructions. Gemini tools are disabled for structured/direct
-extraction. Only the `answer` variant enables the single built-in
-`google_search` tool; code execution, URL context, file search, function calls,
-computer use, and Maps are not enabled.
+embedded instructions. Gemini tools are disabled for every V1.11 mode: built-in
+web search, code execution, URL context, file search, function calls, computer
+use, and Maps are not enabled. Exa selects every search source, and SmartFetch
+validates and retrieves every source used by Gemini.
 
 ## 9. Provider and media architecture
 
@@ -581,17 +599,20 @@ computer use, and Maps are not enabled.
 Small typed adapters isolate provider SDK objects:
 
 - `SearchProvider.search(request) -> SearchProviderResult`
-- `ModelProvider.grounded_answer(request) -> GroundedAnswerResult`
+- `ModelProvider.synthesize_answer(request) -> CitedAnswerResult`
 - `ModelProvider.extract_text(request) -> StructuredModelResult`
 - `ModelProvider.extract_media(request) -> StructuredModelResult`
 
-`ExaSearchProvider` uses Exa only for live search. Results mode requests bounded
-highlights for snippets. Structured mode requests URLs and metadata, then sends
-at most the top three public sources through SmartFetch's own retrieval engine.
-It does not scrape Exa or expose the Exa response.
+`ExaSearchProvider` is the only search provider for all three search variants.
+Results mode requests bounded highlights for snippets. Answer mode requests up
+to `max_results` candidates, retrieves at most the top three through SmartFetch,
+and gives Gemini only those bounded retrieved source records. Structured mode
+requests up to `max_results` candidates, retrieves at most `max_sources` (1–3)
+through SmartFetch, and gives Gemini only those records. SmartFetch does not
+scrape Exa or expose the Exa response.
 
 `GeminiProvider` uses the current recommended Google GenAI Interactions API.
-Server-controlled routing chooses either stable `gemini-3.6-flash` or stable
+Server-controlled routing chooses either stable `gemini-3.7-flash` or stable
 `gemini-3.5-flash-lite` for each variant after the benchmark. The caller cannot
 select a model or thinking level. Generation is one non-streaming call with a
 bounded output token limit, minimal or low thinking chosen by benchmark, and no
@@ -626,10 +647,10 @@ startup dependent on external availability.
 ### 9.2 Model selection
 
 No single Gemini model is permanently assigned in the design. The benchmark
-compares stable `gemini-3.6-flash` with stable
+compares stable `gemini-3.7-flash` with stable
 `gemini-3.5-flash-lite` independently for:
 
-- grounded answers;
+- Exa-sourced cited answers;
 - structured multi-source text extraction;
 - webpage extraction;
 - image extraction;
@@ -637,33 +658,35 @@ compares stable `gemini-3.6-flash` with stable
 - audio extraction;
 - low-resolution video extraction.
 
-Selection is based on schema-valid/evidence-valid success rate first, then P95
-cost and latency. Production uses a checked-in server-controlled allowlisted
-routing table. An optional environment override may select only one of the two
-approved stable model IDs; it cannot accept arbitrary model names. January 1,
-2027 standard prices are used for margin decisions even if the benchmark runs
-during promotional pricing:
+Selection is based on contract-valid and evidence-valid accuracy first, then
+observed worst-case cost, median cost, and latency. Production uses a checked-in
+server-controlled allowlisted routing table. An optional environment override
+may select only one of the two approved stable model IDs; it cannot accept
+arbitrary model names. January 1, 2027 standard prices are used for margin
+decisions even if the benchmark runs during promotional pricing:
 
-- Gemini 3.6 Flash: `$1.50`/M input tokens and `$7.50`/M output/thinking tokens;
+- Gemini 3.7 Flash: `$1.50`/M input tokens and `$7.50`/M output/thinking tokens;
 - Gemini 3.5 Flash-Lite: `$0.30`/M multimodal input tokens and `$2.50`/M
-  output/thinking tokens;
-- Google Search grounding: `$14`/1,000 search queries after the shared free
-  allotment; free-tier credits are excluded from cost calculations.
+  output/thinking tokens.
 
-Google documents that one grounded prompt may generate multiple billable
-search queries. There is no relied-upon caller or server parameter that caps
-that count. The answer variant therefore cannot deploy at `$0.10` unless the
-benchmark shows the required margin and the observed tail is acceptable. If
-the gate fails, the choices are a higher price or an approved change to Exa
-search plus Gemini synthesis; silently absorbing unbounded search costs is not
-allowed.
+Exa costs are added to both answer and structured-search model costs. Free
+quotas and promotional discounts are excluded. The answer and structured
+variants cannot deploy at their provisional prices unless their combined Exa,
+retrieval, Gemini, and non-settled failure costs pass the release gate.
 
 ### 9.3 Media download and inspection
 
 Gemini never receives a caller URL. SmartFetch first performs an HTTPS-only
 streaming download using the same public-target and per-redirect SSRF
-validation. It sends only bounded bytes to Gemini as inline data. The Gemini
-Files API is not used because it retains uploads for up to 48 hours.
+validation. Transport selection occurs only after local MIME and limit checks.
+
+Inline Gemini requests have a total request-size limit below 20 MB once base64
+expansion, schema, prompt, and instructions are included. SmartFetch computes
+the complete serialized request size before submission and uses inline data
+only when it is at most 18,000,000 bytes, leaving deterministic headroom below
+the provider limit. Larger permitted PDF, audio, and video inputs use the
+Gemini Files API. Images remain inline under the 10 MiB image cap; an image that
+cannot fit the complete inline request fails safely rather than being uploaded.
 
 Limits are checked from declared length, streamed byte count, MIME signature,
 and local inspection before Gemini invocation:
@@ -692,9 +715,20 @@ no network, bounded output capture, and a minimal environment.
 
 Temporary files are created with restrictive permissions in the process temp
 directory, never inside the repository, and deleted in `finally` on success,
-failure, timeout, and cancellation. Media bytes and derived text are never
-cached. Download, media, search, and model concurrency use separate bounded
-semaphores so new workloads cannot exhaust the existing fetch/browser pools.
+failure, timeout, and cancellation. For a Files API request, SmartFetch keeps
+the returned provider file identity only in private request-local memory and
+deletes it in the same `finally` block. Deletion is confirmed through the
+SDK's documented deletion result; if that result is not conclusive, SmartFetch
+performs one bounded read-back and requires a not-found result. Provider file
+names and URIs never enter logs, activity metadata, exceptions, or responses.
+
+If immediate provider deletion cannot be confirmed, the handler returns
+`provider_cleanup_failed`, does not deliver a success result, does not settle,
+and opens a short Gemini circuit. The bounded public message states only that
+Google automatically expires uploaded files after up to 48 hours. There is no
+cleanup retry. Media bytes and derived text are never cached. Download, media,
+search, and model concurrency use separate bounded semaphores so new workloads
+cannot exhaust the existing fetch/browser pools.
 
 ## 10. Payment and execution data flows
 
@@ -740,7 +774,7 @@ wrapper. All external work lives inside the wrapped handler. Wrapper maps are
 immutable after startup and keyed by enum values, preventing shared mutable
 state or request-to-request leakage.
 
-A payment created for `$0.02` results mode cannot satisfy the `$0.10` answer or
+A payment created for `$0.05` results mode cannot satisfy the `$0.10` answer or
 `$0.15` structured requirement: each dispatch path verifies against its own
 exact amount and resource. The same isolation applies to source types.
 
@@ -814,18 +848,19 @@ The benchmark is a separate, explicitly authorized paid activity. No Gemini,
 Exa, production HTTP, or paid MCP call occurs while writing or implementing the
 repository design.
 
-The checked-in benchmark corpus contains at least 60 cases:
+The checked-in pre-release benchmark corpus contains 32 representative cases,
+four per finite variant:
 
 | Workload | Cases | Minimum failures/edge cases |
 |---|---:|---:|
-| generic search results | 8 | 3 |
-| grounded answer | 8 | 3 |
-| structured multi-source search | 10 | 4 |
-| webpage extraction | 8 | 3 |
-| image extraction | 6 | 2 |
-| PDF extraction | 8 | 3 |
-| audio extraction | 6 | 2 |
-| video extraction | 6 | 2 |
+| generic search results | 4 | 1 |
+| Exa-sourced cited answer | 4 | 1 |
+| structured multi-source search | 4 | 1 |
+| webpage extraction | 4 | 1 |
+| image extraction | 4 | 1 |
+| PDF extraction | 4 | 1 |
+| audio extraction | 4 | 1 |
+| video extraction | 4 | 1 |
 
 Cases use redistributable/public fixtures and cover empty results, unavailable
 sources, redirects, JavaScript pages, malformed schemas, missing fields,
@@ -836,22 +871,28 @@ For every case record:
 
 - variant, success/failure, finite failure code;
 - Exa search-query/request count and returned `costDollars` where available;
-- Gemini grounding query count;
 - input, output, thinking, tool-use, and modality tokens;
 - provider cost computed from January 2027 standard rates;
 - HTTP/browser retrieval use and elapsed time;
 - schema and evidence validation outcome;
 - source/result count and media duration/page count;
-- cost per successful contract-valid delivery;
+- contract-valid success and evidence-valid success;
 - cost of non-settled failures attributable to the variant.
 
-For each variant compute P50/P95 latency, raw provider cost, failure-adjusted
-cost per successful delivery, and validation accuracy. The final price must be
-at least three times the greater of:
+Four cases per variant cannot support a statistically meaningful P95. The
+pre-release report therefore shows observed maximum cost, median cost, observed
+maximum and median latency, contract-valid success rate, evidence-valid success
+rate, raw provider cost, and failure-adjusted cost per successful delivery. The
+release price must be at least three times the greater of:
 
-1. P95 provider cost of a successful delivery; and
-2. failure-adjusted P95 cost per successful delivery, which allocates costs of
-   non-settled failures across successes.
+1. the highest observed provider cost of a successful contract-valid delivery;
+   and
+2. the conservative failure-adjusted observed cost per successful delivery,
+   which allocates all measured non-settled failure costs across successes.
+
+Operational P95 cost and latency are calculated only after approximately 100
+real calls have accumulated for a variant. Until then, release and pricing
+decisions use the conservative observed worst case, not a P95 label.
 
 Free quotas and promotional 2026 prices are ignored. A hard benchmark budget,
 provider accounts, keys, and explicit paid-call approval are required before
@@ -862,12 +903,12 @@ Known preliminary economics:
 
 - Exa search is currently `$0.007` for up to ten results. Requesting content or
   highlights adds about `$0.001` per page/content type. Five highlighted
-  results therefore cost approximately `$0.012`, making `$0.02` unlikely to
-  satisfy a 3× P95 margin. The likely minimum is at least `$0.04`, and `$0.05`
-  is the safer benchmark candidate.
-- Google Search grounding is `$0.014` per search query after the free allotment,
-  and one model request may perform multiple searches. Two searches already
-  cost `$0.028` before tokens; a 3× target leaves little room under `$0.10`.
+  results therefore cost approximately `$0.012`; the provisional `$0.05`
+  results price has nominal room for the 3× target but still requires measured
+  validation.
+- Answer and structured search each incur Exa search, SmartFetch retrieval, and
+  Gemini costs. Their combined observed worst-case cost—not an assumed token
+  average—determines whether `$0.10` and `$0.15` are viable.
 - Media token cost depends materially on duration, resolution, thinking, and
   output size. Audio and video prices cannot be finalized from byte limits
   alone.
@@ -888,6 +929,13 @@ dependencies, pinned after compatibility checks, are:
 - pypdf for bounded PDF page inspection;
 - system `ffprobe` from a pinned Debian `ffmpeg` package for audio/video
   duration and container validation.
+
+The Gemini Files API is a deliberate transient-media dependency for permitted
+PDF/audio/video inputs whose complete encoded inline request would exceed the
+18,000,000-byte SmartFetch threshold. Its upload identity stays request-local,
+its deletion is mandatory before success can be returned, and Google's
+documented automatic expiration of uploaded files after up to 48 hours is the
+bounded fallback if immediate deletion cannot be confirmed.
 
 The implementation PR must resolve and freeze compatible stable versions
 without upgrading x402, CDP SDK, FastAPI, Uvicorn, MCP, or unrelated packages.
@@ -921,6 +969,8 @@ the next stage.
 - Exact REST and MCP schemas, defaults, finite enums, unknown-property
   rejection, cross-field rules, domain/freshness normalization, and response
   caps.
+- Structured search proves `max_sources` is 1–3, defaults to 3, cannot exceed
+  `max_results`, and controls the exact number of SmartFetch retrievals.
 - Property-based/fuzz tests for schema byte size, depth, property count,
   arrays, enums, nullable types, unknown keywords, recursion, remote refs,
   malicious keys, huge integers, non-finite numbers, and pathological nesting.
@@ -950,17 +1000,19 @@ the next stage.
   canaries to prove normalization and redaction.
 - Exa request parameters, result count, domains, freshness, highlights, timeout,
   no retry, and cost extraction are bounded.
-- Gemini enables only Google Search for answer mode and no tools for extraction.
+- Exa is called for results, answer, and structured search; Gemini has no
+  enabled tools in any V1.11 mode.
 - Both allowlisted model IDs are selectable only by server routing; caller model
   input is rejected.
 - Output tokens/thinking and timeouts are capped, malformed outputs fail safely,
-  and grounding citations come only from metadata.
+  and Gemini citation IDs must resolve to the Exa-selected, SmartFetch-retrieved
+  source registry.
 - Provider SDK logs and exceptions cannot expose keys or bodies.
 
 ### Retrieval and media
 
-- `auto`, `never`, and `always` exercise the real retrieval boundary and prove
-  current existing-call behavior is unchanged.
+- `auto` and `always` exercise the real retrieval boundary and prove current
+  existing-call behavior is unchanged; no HTTP-only core path is added.
 - Search structured mode retrieves at most three sources through the existing
   engine, including HTTP-to-browser fallback.
 - Initial and redirected media URLs pass the existing public-target policy.
@@ -968,6 +1020,10 @@ the next stage.
   redirect loops, slow streams, decompression bombs, corrupt containers, and
   temp-file cleanup are covered.
 - Over-limit PDF/audio/video fails before Gemini and without settlement.
+- Inline-size accounting includes base64, schema, prompt, instructions, and
+  serialization overhead. Larger permitted PDF/audio/video uses the Files API,
+  deletes the provider file in `finally`, and cannot settle when immediate
+  deletion is unconfirmed. Provider file identities never reach output/logs.
 - Semaphore and timeout tests prove new pools cannot consume existing fetch or
   browser capacity.
 
@@ -1029,11 +1085,11 @@ is reviewable and preserves a passing main branch.
   circuit state, usage/cost accounting, and mocked contract tests.
 - Still expose no production route/tool.
 
-### PR 3 — safe media ingestion and render modes
+### PR 3 — safe media ingestion
 
-- Add bounded media downloader/inspectors and Docker `ffprobe` support.
-- Add the default-preserving HTTP-only retrieval option needed by
-  `render_mode=never`.
+- Add bounded media downloader/inspectors, inline-size accounting, transient
+  Files API upload/deletion, and Docker `ffprobe` support.
+- Map webpage `auto` and `always` directly to the existing retrieval engine.
 - Prove existing retrieval behavior and protected security tests are unchanged.
 
 ### PR 4 — static HTTP and MCP payment integration
@@ -1099,7 +1155,6 @@ Expected later additions:
 
 Expected later modifications, kept narrow:
 
-- `smartfetch/core.py` only for the default-preserving HTTP-only option;
 - `smartfetch/config.py` for V1.11 limits, provider configuration, and version;
 - `smartfetch/payments.py` only to combine the existing `/fetch` config with the
   finite static V1.11 route configs using the same official resource server;
@@ -1111,24 +1166,26 @@ Expected later modifications, kept narrow:
 - `requirements.txt`, `Dockerfile`, `README.md`, `server.json`, and version-
   dependent tests/smokes.
 
-Payment verification/settlement internals, browser implementation, SSRF policy,
-existing output projections, paid buyer examples, Railway configuration, and
-GitHub configuration are not expected to change. Any test that appears to
-require such a change stops the relevant implementation PR for review.
+`smartfetch/core.py`, payment verification/settlement internals, browser
+implementation, SSRF policy, existing output projections, paid buyer examples,
+Railway configuration, and GitHub configuration are not expected to change.
+Any test that appears to require such a change stops the relevant
+implementation PR for review.
 
 ## 19. Design blockers and decisions still required
 
-The architecture and route shape are approved. These gates remain before a
-production V1.11 release:
+The public route/tool shape is approved; this full draft still awaits final
+approval. These gates remain before a production V1.11 release:
 
 1. approve compatible pinned provider/media dependency versions after a clean
    resolver and vulnerability review;
-2. approve adding `ffprobe` to the image, or remove audio/video from V1.11;
+2. approve adding `ffprobe` to the container image, or remove audio/video from
+   V1.11;
 3. supply server-side Exa and Gemini accounts/keys with spend ceilings;
 4. authorize the paid benchmark and its hard maximum budget;
 5. approve the measured per-variant Gemini routing table;
-6. approve any price change required by the 3× P95 margin gate—especially
-   results mode and grounded answers;
+6. approve any price change required by the 3× observed-worst-case margin
+   gate;
 7. approve deployment and later external discovery publication separately.
 
 ## 20. Self-review
@@ -1146,11 +1203,13 @@ production V1.11 release:
 - **Schema safety:** support is explicitly a bounded subset, with no refs,
   recursion, regex, evaluation, or code execution.
 - **Media safety:** limits are enforced before Gemini; URLs are never delegated
-  to Gemini; temporary data is bounded and deleted; persistent Files API use is
-  excluded.
+  to Gemini; temporary data is bounded and deleted; larger permitted
+  PDF/audio/video inputs use the Files API only with mandatory request-local
+  identity tracking and confirmed deletion.
 - **Cost honesty:** provisional prices are not declared viable. January 2027
-  rates, grounding-query multiplicity, non-settled failure costs, and a 3× P95
-  gate are explicit.
+  rates, Exa plus Gemini costs, non-settled failure costs, and a 3× observed-
+  worst-case gate are explicit. Operational P95 waits for approximately 100
+  real calls per variant.
 - **Scope:** exactly two public MCP tools and eight concrete REST routes are
   added. Existing tools and `/fetch` remain unchanged. No A2A, wallet, CAPTCHA,
   authenticated action, upload, free demo, search-provider scraping, or
@@ -1167,14 +1226,12 @@ production V1.11 release:
   <https://docs.x402.org/guides/mcp-server-with-x402>
 - x402 HTTP/payment lifecycle:
   <https://docs.x402.org/core-concepts/http-402>
-- Gemini 3.6 Flash model:
-  <https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash>
+- Gemini 3.7 Flash model:
+  <https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash>
 - Gemini 3.5 Flash-Lite model:
   <https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite>
 - Gemini pricing:
   <https://ai.google.dev/gemini-api/docs/pricing>
-- Gemini Google Search grounding:
-  <https://ai.google.dev/gemini-api/docs/google-search>
 - Gemini structured output:
   <https://ai.google.dev/gemini-api/docs/structured-output>
 - Gemini file input methods:
