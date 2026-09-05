@@ -42,6 +42,8 @@ The following are release invariants:
 - No provider, download, retrieval, or model work starts until the applicable
   x402 authorization has been verified.
 - No failed, partial, invalid, or status-400-or-higher result settles.
+  Schema-permitted nulls disclosed under section 6.3 are not partial or invalid
+  when usable non-null requested data remains and all other checks succeed.
 - No payment retry, provider retry, or automatic paid retry is added.
 - Provider credentials, payment proofs, schemas, prompts, URLs, source content,
   media, and model output never enter activity logs.
@@ -100,6 +102,10 @@ has produced a contract-valid success result. The official wrappers settle
 before that result is returned through the transport, so neither HTTP nor MCP
 can prove that the client received every response byte before settlement. The
 documentation and tests must state this transport-level limitation explicitly.
+
+For structured extraction, settlement eligibility includes the missing-value
+rules in section 6.3. Properly disclosed schema-permitted nulls can be part of
+a contract-valid success; an all-missing/null extraction cannot settle.
 
 ### 2.3 Dynamic-pricing feasibility
 
@@ -484,6 +490,11 @@ a delivery failure and does not settle.
 }
 ```
 
+The example above is settlement eligible under the section 5.1 schema:
+`version` is usable non-null data supported by evidence, while `release_date`
+explicitly permits null and has both a `missing_fields` pointer and a bounded
+`uncertainties` entry. No positive evidence for the absent date is required.
+
 The same envelope is returned by `extract_structured_data`, with
 `source_type` and `retrieval_method` added. `retrieval_method` is one of
 `http`, `browser`, `image`, `pdf`, `audio`, or `video`.
@@ -505,14 +516,34 @@ Limits:
 For textual webpage and PDF evidence, a normalized quote must occur in the
 bounded source text supplied to the model. Image evidence uses a bounded visual
 description. Audio/video evidence uses inspected time ranges. Evidence must
-refer to a returned source and a real field in `data`. Every present required
-leaf field, including required leaves nested in objects and arrays, must have
-at least one evidence entry whose `field` is its canonical RFC 6901 JSON
-Pointer. Array indices are explicit pointer segments. Missing required fields
-must appear as `null` only when the caller schema permits null and must also be
-listed in `missing_fields`. Otherwise validation fails and no settlement
-occurs. The existing 100-entry evidence cap therefore also bounds the maximum
-number of present required leaves a request can deliver.
+refer to a returned source and a real field in `data`. Every non-null present
+required leaf field, including required leaves nested in objects and arrays,
+must have at least one valid bounded evidence entry whose `field` is its
+canonical RFC 6901 JSON Pointer. Array indices are explicit pointer segments.
+The 100-entry evidence cap bounds the number of evidenced non-null required
+leaves a request can deliver.
+
+A required leaf may be null only when the caller's schema explicitly permits
+null. Every allowed null must be present in `data`, listed by canonical pointer
+in `missing_fields`, and have a corresponding bounded `uncertainties` entry
+explaining its absence. Allowed nulls are exempt from positive quote, visual,
+or timestamp evidence: absence cannot be proven by a positive value citation.
+These disclosures remain subject to the existing 64-entry bounds.
+
+An allowed, properly disclosed null does not make the result partial or
+invalid. It may settle if usable non-null requested data remains and the rest
+of the contract succeeds. A missing required value whose schema does not
+permit null fails validation. If all requested values are missing/null and
+there is no usable non-null requested data, extraction fails with the existing
+finite `evidence_validation_failed` contract (HTTP 422 or MCP error result).
+Neither failure settles. Metadata, source records, evidence, and uncertainty
+text do not count as usable requested data.
+
+Omitted required values, undisclosed nulls, unevidenced non-null required
+leaves, schema-invalid values, and contradictory values remain failed/partial
+results and must not settle. Optional omissions remain governed by the caller
+schema; they cannot bypass the usable-data requirement. These rules apply to
+structured search and every direct structured-extraction source type.
 
 ## 7. Failure contract and status mapping
 
@@ -619,6 +650,20 @@ bounded output token limit and server-controlled low thinking effort where
 supported, with no automatic retry. Gemini 3.8 Flash uses `low`; `minimal` is
 unsupported and must not be sent. Model-specific settings are validated against
 the official API before benchmarking.
+
+Every Gemini `interactions.create` request must explicitly set `store=false`;
+API defaults are never sufficient. V1.11 provider adapters must not send
+`previous_interaction_id` or enable `background=true`. No Gemini prompt,
+schema, retrieved content, media analysis, model output, or interaction object
+may be intentionally stored for conversational reuse. These stateless-request
+requirements are separate from Gemini Files API upload and deletion: file
+deletion does not replace `store=false`, and `store=false` does not delete an
+uploaded file. Both protections apply when a request uses the Files API.
+
+Outbound-request contract tests must enforce these settings across every
+Gemini adapter path. SDK updates or refactors must fail those tests if they
+omit or change stateless mode; no fallback to a storage-enabled request is
+permitted.
 
 Only these environment variables are new secrets:
 
@@ -1007,6 +1052,13 @@ the next stage.
 
 ### Providers and model routing
 
+- Adapter contract tests inspect the actual serialized outbound request at a
+  mocked transport boundary for every Gemini path: `store` is explicitly
+  boolean `false`, `previous_interaction_id` is absent, and `background` is
+  absent or explicitly boolean `false`. No provider network call is made.
+  These assertions remain mandatory on SDK upgrades and refactors, including
+  Files API-backed analysis; checking only an isolated settings object is not
+  sufficient.
 - Contract tests use recorded synthetic provider objects with secrets and
   canaries to prove normalization and redaction.
 - Exa request parameters, result count, domains, freshness, highlights, timeout,
@@ -1041,8 +1093,18 @@ the next stage.
 ### Evidence and public responses
 
 - JSON parses and validates against the guarded caller schema locally.
-- Required fields have valid bounded evidence; source IDs and locators resolve;
-  text quotes occur in source text; pages/timestamps stay in range.
+- Non-null required leaves have valid bounded evidence; source IDs and locators
+  resolve; text quotes occur in source text; pages/timestamps stay in range.
+- A schema-permitted missing/null field, disclosed in `missing_fields` and
+  `uncertainties`, alongside usable evidenced non-null requested data succeeds
+  and is settlement eligible through both mocked HTTP and MCP payment flows.
+- A missing required non-nullable field fails without settlement.
+- A null absent from `missing_fields` fails without settlement.
+- A null without a corresponding bounded uncertainty fails without settlement.
+- A non-null required leaf without valid evidence fails without settlement.
+- All requested values missing/null fail with the finite evidence/validation
+  error contract without settlement, even when every null is schema-permitted
+  and disclosed. Exercise nested RFC 6901 pointers as well as top-level fields.
 - Provider objects and unsupported fields are absent from public output.
 - All failures use finite codes and retain the same public envelope in REST and
   MCP.
@@ -1213,6 +1275,12 @@ approval. These gates remain before a production V1.11 release:
   caller contract, URL, log, exception, discovery document, or repository file.
 - **Schema safety:** support is explicitly a bounded subset, with no refs,
   recursion, regex, evaluation, or code execution.
+- **Structured completeness:** disclosed schema-permitted nulls are valid only
+  alongside usable non-null requested data; non-null required leaves need
+  evidence, and failed/partial or all-missing/null results do not settle.
+- **Interaction privacy:** all Gemini creation requests explicitly disable
+  storage, prohibit conversational continuation and background execution, and
+  retain outbound-request regression coverage independently of file cleanup.
 - **Media safety:** limits are enforced before Gemini; URLs are never delegated
   to Gemini; temporary data is bounded and deleted; larger permitted
   PDF/audio/video inputs use the Files API only with mandatory request-local
