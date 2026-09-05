@@ -612,11 +612,13 @@ through SmartFetch, and gives Gemini only those records. SmartFetch does not
 scrape Exa or expose the Exa response.
 
 `GeminiProvider` uses the current recommended Google GenAI Interactions API.
-Server-controlled routing chooses either stable `gemini-3.7-flash` or stable
+Server-controlled routing chooses either stable `gemini-3.8-flash` or stable
 `gemini-3.5-flash-lite` for each variant after the benchmark. The caller cannot
 select a model or thinking level. Generation is one non-streaming call with a
-bounded output token limit, minimal or low thinking chosen by benchmark, and no
-automatic retry.
+bounded output token limit and server-controlled low thinking effort where
+supported, with no automatic retry. Gemini 3.8 Flash uses `low`; `minimal` is
+unsupported and must not be sent. Model-specific settings are validated against
+the official API before benchmarking.
 
 Only these environment variables are new secrets:
 
@@ -647,7 +649,7 @@ startup dependent on external availability.
 ### 9.2 Model selection
 
 No single Gemini model is permanently assigned in the design. The benchmark
-compares stable `gemini-3.7-flash` with stable
+compares stable `gemini-3.8-flash` with stable
 `gemini-3.5-flash-lite` independently for:
 
 - Exa-sourced cited answers;
@@ -665,9 +667,18 @@ may select only one of the two approved stable model IDs; it cannot accept
 arbitrary model names. January 1, 2027 standard prices are used for margin
 decisions even if the benchmark runs during promotional pricing:
 
-- Gemini 3.7 Flash: `$1.50`/M input tokens and `$7.50`/M output/thinking tokens;
+- Gemini 3.8 Flash: `$1.50`/M input tokens and `$7.50`/M output/thinking tokens;
 - Gemini 3.5 Flash-Lite: `$0.30`/M multimodal input tokens and `$2.50`/M
   output/thinking tokens.
+
+Verified against official Google documentation on September 5, 2026: Gemini
+3.8 Flash is stable and has the same listed per-token pricing as 3.7 Flash,
+but can use more reasoning tokens on complex tasks. Equal token prices do not
+imply equal cost per result. Routing must compare measured contract-valid and
+evidence-valid accuracy and actual total token cost per successful result,
+including input, output, and reasoning tokens without double-counting usage.
+The benchmark remains exactly these two models; Gemini 3.8 Flash Cyber is
+outside SmartFetch's use case and is not a candidate or allowed override.
 
 Exa costs are added to both answer and structured-search model costs. Free
 quotas and promotional discounts are excluded. The answer and structured
@@ -1226,8 +1237,10 @@ approval. These gates remain before a production V1.11 release:
   <https://docs.x402.org/guides/mcp-server-with-x402>
 - x402 HTTP/payment lifecycle:
   <https://docs.x402.org/core-concepts/http-402>
-- Gemini 3.7 Flash model:
-  <https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash>
+- Gemini 3.8 Flash model:
+  <https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash>
+- Gemini 3.8 Flash release, reasoning, and migration guidance:
+  <https://ai.google.dev/gemini-api/docs/latest-model>
 - Gemini 3.5 Flash-Lite model:
   <https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite>
 - Gemini pricing:
