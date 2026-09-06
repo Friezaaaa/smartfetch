@@ -7,15 +7,16 @@ definitions to the existing SmartFetch payment and retrieval layers.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import ipaddress
 import re
 import socket
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .schema_guard import validate_schema
 
@@ -45,6 +46,15 @@ FailureCode = Literal[
     "provider_timeout",
     "retrieval_timeout",
 ]
+
+
+def _require_utc(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() != timedelta(0):
+        raise ValueError("timestamp must be timezone-aware UTC")
+    return value
+
+
+UTCDateTime = Annotated[datetime, AfterValidator(_require_utc)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,11 +127,13 @@ class SearchAndExtractRequest(_StrictModel):
     json_schema: dict[str, Any] | None = None
     instructions: str | None = Field(default=None, min_length=1, max_length=2000)
 
-    @field_validator("query", "instructions")
+    @field_validator("query", "instructions", mode="before")
     @classmethod
-    def _trim_strings(cls, value: str | None) -> str | None:
+    def _trim_strings(cls, value: Any) -> Any:
         if value is None:
             return None
+        if not isinstance(value, str):
+            return value
         value = value.strip()
         if not value:
             raise ValueError("value cannot be blank")
@@ -142,7 +154,8 @@ class SearchAndExtractRequest(_StrictModel):
     def _guard_schema(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
         if value is not None:
             validate_schema(value)
-        return value
+            return deepcopy(value)
+        return None
 
     @model_validator(mode="after")
     def _validate_mode_fields(self) -> "SearchAndExtractRequest":
@@ -174,12 +187,18 @@ class DirectExtractionRequest(_StrictModel):
     @classmethod
     def _guard_schema(cls, value: dict[str, Any]) -> dict[str, Any]:
         validate_schema(value)
+        return deepcopy(value)
+
+    @field_validator("source_url", mode="before")
+    @classmethod
+    def _trim_source_url(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip()
         return value
 
     @field_validator("source_url")
     @classmethod
     def _validate_source_url(cls, value: str) -> str:
-        value = value.strip()
         parsed = urlsplit(value)
         if parsed.scheme.lower() != "https" or not parsed.hostname:
             raise ValueError("source_url must be an HTTPS URL")
@@ -194,11 +213,13 @@ class DirectExtractionRequest(_StrictModel):
         _normalized_public_dns_name(parsed.hostname)
         return value
 
-    @field_validator("instructions")
+    @field_validator("instructions", mode="before")
     @classmethod
-    def _trim_instructions(cls, value: str | None) -> str | None:
+    def _trim_instructions(cls, value: Any) -> Any:
         if value is None:
             return None
+        if not isinstance(value, str):
+            return value
         value = value.strip()
         if not value:
             raise ValueError("instructions cannot be blank")
@@ -217,7 +238,7 @@ class CommonSuccess(_StrictModel):
     success: Literal[True] = True
     request_id: str = Field(min_length=1, max_length=64)
     service_version: str = Field(min_length=1, max_length=32)
-    retrieved_at: datetime
+    retrieved_at: UTCDateTime
 
 
 class SearchResultItem(_StrictModel):
@@ -226,14 +247,14 @@ class SearchResultItem(_StrictModel):
     title: str = Field(max_length=300)
     url: str = Field(max_length=4096)
     snippet: str = Field(max_length=800)
-    published_at: datetime | None = None
+    published_at: UTCDateTime | None = None
 
 
 class Citation(_StrictModel):
     citation_id: str = Field(min_length=1, max_length=64)
     title: str = Field(max_length=300)
     url: str = Field(max_length=4096)
-    published_at: datetime | None = None
+    published_at: UTCDateTime | None = None
 
 
 class Claim(_StrictModel):
@@ -246,11 +267,11 @@ class SourceRecord(_StrictModel):
     title: str = Field(max_length=300)
     url: str = Field(max_length=4096)
     retrieval_method: RetrievalMethod
-    retrieved_at: datetime
+    retrieved_at: UTCDateTime
 
 
 class EvidenceEntry(_StrictModel):
-    field: str = Field(min_length=1, max_length=256)
+    field: str = Field(max_length=256)
     source_id: str = Field(min_length=1, max_length=64)
     quote: str | None = Field(default=None, min_length=1, max_length=500)
     description: str | None = Field(default=None, min_length=1, max_length=300)
@@ -267,14 +288,14 @@ class Uncertainty(_StrictModel):
 class SearchResultsResponse(CommonSuccess):
     mode: Literal["results"] = "results"
     query: str = Field(min_length=1, max_length=500)
-    freshness_after: datetime | None = None
+    freshness_after: UTCDateTime | None = None
     results: tuple[SearchResultItem, ...] = Field(min_length=1, max_length=10)
 
 
 class SearchAnswerResponse(CommonSuccess):
     mode: Literal["answer"] = "answer"
     query: str = Field(min_length=1, max_length=500)
-    freshness_after: datetime | None = None
+    freshness_after: UTCDateTime | None = None
     answer: str = Field(min_length=1, max_length=12000)
     claims: tuple[Claim, ...] = Field(min_length=1, max_length=50)
     citations: tuple[Citation, ...] = Field(min_length=1, max_length=20)

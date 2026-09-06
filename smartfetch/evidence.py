@@ -20,6 +20,15 @@ MAX_DESCRIPTION_CHARS = 300
 MAX_UNCERTAINTY_REASON_CHARS = 300
 MAX_PAGE = 20
 
+_SOURCE_FIELDS = {"source_id", "title", "url", "retrieval_method", "retrieved_at"}
+_EVIDENCE_FIELDS = {
+    "field", "source_id", "quote", "description", "page",
+    "start_seconds", "end_seconds",
+}
+_UNCERTAINTY_FIELDS = {"field", "reason"}
+_CLAIM_FIELDS = {"text", "citation_ids"}
+_CITATION_FIELDS = {"citation_id", "source_id"}
+
 
 class EvidenceValidationError(ValueError):
     """A finite public-safe result-validation failure."""
@@ -47,7 +56,11 @@ def _escape_pointer_segment(segment: str) -> str:
 
 
 def _decode_pointer(pointer: str) -> tuple[str, ...]:
-    if not isinstance(pointer, str) or not pointer.startswith("/") or len(pointer) > MAX_FIELD_CHARS:
+    if not isinstance(pointer, str) or len(pointer) > MAX_FIELD_CHARS:
+        raise EvidenceValidationError()
+    if pointer == "":
+        return ()
+    if not pointer.startswith("/"):
         raise EvidenceValidationError()
     segments: list[str] = []
     for encoded in pointer[1:].split("/"):
@@ -183,7 +196,7 @@ def _validate_source_registry(sources: Sequence[Mapping[str, Any]], *, direct: b
     registry: dict[str, str] = {}
     allowed_methods = {"http", "browser", "image", "pdf", "audio", "video"}
     for source in sources:
-        if not isinstance(source, Mapping):
+        if not isinstance(source, Mapping) or set(source) - _SOURCE_FIELDS:
             raise EvidenceValidationError()
         source_id = source.get("source_id")
         method = source.get("retrieval_method")
@@ -232,7 +245,11 @@ def _validate_locator(
             raise EvidenceValidationError()
         if page is not None:
             page_count = page_counts.get(source_id)
-            if not isinstance(page_count, int) or page > page_count:
+            if (
+                not isinstance(page_count, int)
+                or isinstance(page_count, bool)
+                or page > page_count
+            ):
                 raise EvidenceValidationError()
         return
 
@@ -308,7 +325,7 @@ def validate_structured_result(
 
     uncertainty_fields: list[str] = []
     for uncertainty in uncertainties:
-        if not isinstance(uncertainty, Mapping):
+        if not isinstance(uncertainty, Mapping) or set(uncertainty) - _UNCERTAINTY_FIELDS:
             raise EvidenceValidationError()
         field = uncertainty.get("field")
         reason = uncertainty.get("reason")
@@ -324,7 +341,7 @@ def validate_structured_result(
     page_counts = page_counts or {}
     evidenced_fields: set[str] = set()
     for entry in evidence:
-        if not isinstance(entry, Mapping):
+        if not isinstance(entry, Mapping) or set(entry) - _EVIDENCE_FIELDS:
             raise EvidenceValidationError()
         field = entry.get("field")
         source_id = entry.get("source_id")
@@ -382,7 +399,7 @@ def validate_cited_answer(
         raise EvidenceValidationError("invalid_provider_output") from None
     citation_registry: dict[str, str] = {}
     for citation in citations:
-        if not isinstance(citation, Mapping):
+        if not isinstance(citation, Mapping) or set(citation) - _CITATION_FIELDS:
             raise EvidenceValidationError("invalid_provider_output")
         citation_id = citation.get("citation_id")
         source_id = citation.get("source_id")
@@ -395,7 +412,11 @@ def validate_cited_answer(
             raise EvidenceValidationError("invalid_provider_output")
         citation_registry[citation_id] = source_id
     for claim in claims:
-        if not isinstance(claim, Mapping) or not _bounded_string(claim.get("text"), 1, 500):
+        if (
+            not isinstance(claim, Mapping)
+            or set(claim) - _CLAIM_FIELDS
+            or not _bounded_string(claim.get("text"), 1, 500)
+        ):
             raise EvidenceValidationError("invalid_provider_output")
         ids = claim.get("citation_ids")
         if (

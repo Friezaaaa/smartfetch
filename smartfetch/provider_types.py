@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
+import json
 from typing import Any, Protocol, runtime_checkable
 
 from .costs import ProviderUsage
+
+
+def _owned_json(value: Any) -> Any:
+    try:
+        json.dumps(value, ensure_ascii=False, allow_nan=False)
+        return deepcopy(value)
+    except (TypeError, ValueError, OverflowError, UnicodeError, RecursionError):
+        raise ValueError("provider data must be bounded JSON") from None
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +74,9 @@ class StructuredTextRequest:
     instructions: str | None
     sources: tuple[tuple[str, str], ...]
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "schema", _owned_json(self.schema))
+
 
 @dataclass(frozen=True, slots=True)
 class StructuredMediaRequest:
@@ -71,6 +84,9 @@ class StructuredMediaRequest:
     instructions: str | None
     source_type: str
     source_handle: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "schema", _owned_json(self.schema))
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +96,11 @@ class StructuredModelResult:
     missing_fields: tuple[str, ...]
     uncertainties: tuple[dict[str, Any], ...]
     usage: ProviderUsage
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "data", _owned_json(self.data))
+        object.__setattr__(self, "evidence", tuple(_owned_json(item) for item in self.evidence))
+        object.__setattr__(self, "uncertainties", tuple(_owned_json(item) for item in self.uncertainties))
 
 
 @runtime_checkable

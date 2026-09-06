@@ -4,6 +4,7 @@ from pydantic import ValidationError
 
 from smartfetch.v111_contracts import (
     DirectExtractionRequest,
+    EvidenceEntry,
     FailureResponse,
     SearchAnswerResponse,
     SearchAndExtractRequest,
@@ -47,6 +48,61 @@ class VariantDefinitionTests(unittest.TestCase):
 
 
 class SearchRequestTests(unittest.TestCase):
+    def test_request_schemas_take_ownership_of_nested_caller_data(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["stable"]},
+            },
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        search = SearchAndExtractRequest.model_validate({
+            "query": "q",
+            "mode": "structured",
+            "json_schema": schema,
+        })
+        direct = DirectExtractionRequest.model_validate({
+            "source_type": "webpage",
+            "source_url": "https://example.com/",
+            "json_schema": schema,
+        })
+
+        schema["properties"]["status"]["enum"].append("mutated")
+        schema["properties"]["extra"] = {"type": "string"}
+        schema["outside"] = True
+
+        for contract in (search, direct):
+            owned = contract.json_schema
+            self.assertEqual(owned["properties"]["status"]["enum"], ["stable"])
+            self.assertNotIn("extra", owned["properties"])
+            self.assertNotIn("outside", owned)
+        self.assertIsNot(search.json_schema, direct.json_schema)
+        self.assertIsNot(
+            search.json_schema["properties"]["status"],
+            direct.json_schema["properties"]["status"],
+        )
+        self.assertEqual(
+            SearchAndExtractRequest.model_validate(search.model_dump()).json_schema,
+            search.json_schema,
+        )
+
+    def test_request_schemas_reject_cyclic_and_non_json_values_safely(self):
+        cyclic = {"type": "object", "properties": {}, "additionalProperties": False}
+        cyclic["properties"]["cycle"] = cyclic
+        non_json = {
+            "type": "object",
+            "properties": {"value": {"type": "string", "const": object()}},
+            "additionalProperties": False,
+        }
+        for schema in (cyclic, non_json):
+            with self.subTest(schema_type=type(schema).__name__), self.assertRaises(ValidationError):
+                SearchAndExtractRequest.model_validate({
+                    "query": "q",
+                    "mode": "structured",
+                    "json_schema": schema,
+                })
+
     def test_defaults_and_normalization_match_design(self):
         request = SearchAndExtractRequest.model_validate({
             "query": "  official x402 docs  ",
@@ -56,6 +112,29 @@ class SearchRequestTests(unittest.TestCase):
         self.assertEqual(request.query, "official x402 docs")
         self.assertEqual(request.max_results, 5)
         self.assertEqual(request.domains, ("docs.x402.org",))
+
+    def test_whitespace_is_trimmed_before_string_length_limits(self):
+        query = "q" * 500
+        instructions = "i" * 2000
+        request = SearchAndExtractRequest.model_validate({
+            "query": f"  {query}  ",
+            "mode": "structured",
+            "json_schema": MINIMAL_SCHEMA,
+            "instructions": f"\n{instructions}\t",
+        })
+        self.assertEqual(request.query, query)
+        self.assertEqual(request.instructions, instructions)
+
+        for field, value in (("query", "q" * 501), ("instructions", "i" * 2001)):
+            payload = {
+                "query": "q",
+                "mode": "structured",
+                "json_schema": MINIMAL_SCHEMA,
+                "instructions": "instructions",
+                field: f" {value} ",
+            }
+            with self.subTest(field=field), self.assertRaises(ValidationError):
+                SearchAndExtractRequest.model_validate(payload)
 
     def test_structured_mode_defaults_sources_and_requires_schema(self):
         request = SearchAndExtractRequest.model_validate({
@@ -200,6 +279,26 @@ class DirectExtractionRequestTests(unittest.TestCase):
                     "json_schema": MINIMAL_SCHEMA,
                 })
 
+    def test_source_url_and_instructions_trim_before_length_limits(self):
+        prefix = "https://example.com/"
+        source_url = prefix + ("a" * (4096 - len(prefix)))
+        instructions = "i" * 2000
+        request = DirectExtractionRequest.model_validate({
+            "source_type": "webpage",
+            "source_url": f"  {source_url}\n",
+            "json_schema": MINIMAL_SCHEMA,
+            "instructions": f"\t{instructions} ",
+        })
+        self.assertEqual(request.source_url, source_url)
+        self.assertEqual(request.instructions, instructions)
+
+        with self.assertRaises(ValidationError):
+            DirectExtractionRequest.model_validate({
+                "source_type": "webpage",
+                "source_url": source_url + "a",
+                "json_schema": MINIMAL_SCHEMA,
+            })
+
 
 class ResponseContractTests(unittest.TestCase):
     def setUp(self):
@@ -235,6 +334,83 @@ class ResponseContractTests(unittest.TestCase):
                 }],
                 "provider_response": {"secret": "canary"},
             })
+
+    def test_evidence_contract_accepts_the_rfc_6901_root_pointer(self):
+        evidence = EvidenceEntry.model_validate({
+            "field": "",
+            "source_id": "s1",
+            "quote": "whole value",
+        })
+        self.assertEqual(evidence.field, "")
+
+    def test_all_response_timestamps_require_timezone_aware_utc(self):
+        result_payload = {
+            **self.common,
+            "query": "query",
+            "freshness_after": "2026-09-01T00:00:00Z",
+            "results": [{
+                "source_id": "s1",
+                "rank": 1,
+                "title": "title",
+                "url": "https://example.com",
+                "snippet": "snippet",
+                "published_at": "2026-09-01T12:00:00Z",
+            }],
+        }
+        parsed = SearchResultsResponse.model_validate(result_payload)
+        self.assertEqual(parsed.retrieved_at.utcoffset().total_seconds(), 0)
+        self.assertIn('"retrieved_at":"2026-09-02T15:04:05Z"', parsed.model_dump_json())
+
+        invalid_paths = (
+            ("retrieved_at", None),
+            ("freshness_after", None),
+            ("published_at", "results"),
+        )
+        for field, container in invalid_paths:
+            for invalid in ("2026-09-02T15:04:05", "2026-09-02T16:04:05+01:00"):
+                payload = {
+                    **result_payload,
+                    "results": [dict(result_payload["results"][0])],
+                }
+                if container is None:
+                    payload[field] = invalid
+                else:
+                    payload[container][0][field] = invalid
+                with self.subTest(field=field, invalid=invalid), self.assertRaises(ValidationError):
+                    SearchResultsResponse.model_validate(payload)
+
+        answer_payload = {
+            **self.common,
+            "query": "query",
+            "answer": "answer",
+            "claims": [{"text": "claim", "citation_ids": ["c1"]}],
+            "citations": [{
+                "citation_id": "c1",
+                "title": "title",
+                "url": "https://example.com",
+                "published_at": "2026-09-02T16:04:05+01:00",
+            }],
+        }
+        with self.assertRaises(ValidationError):
+            SearchAnswerResponse.model_validate(answer_payload)
+
+        structured_payload = {
+            **self.common,
+            "mode": "structured",
+            "data": {"title": "Example"},
+            "sources": [{
+                "source_id": "s1",
+                "title": "title",
+                "url": "https://example.com",
+                "retrieval_method": "http",
+                "retrieved_at": "2026-09-02T15:04:05",
+            }],
+            "evidence": [],
+            "missing_fields": [],
+            "uncertainties": [],
+        }
+        with self.assertRaises(ValidationError):
+            StructuredResponse.model_validate(structured_payload)
 
     def test_empty_search_deliveries_are_not_valid_successes(self):
         with self.assertRaises(ValidationError):

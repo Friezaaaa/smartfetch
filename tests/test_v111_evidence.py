@@ -134,8 +134,81 @@ class NullableAndRequiredLeafTests(unittest.TestCase):
         )
         self.assertEqual(result.required_non_null_fields, ("/a~1b/0/~0name",))
 
+    def test_rfc_6901_root_pointer_is_valid_but_cannot_replace_leaf_evidence(self):
+        root_result = validate_structured_result(
+            schema={
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "additionalProperties": False,
+            },
+            data={"value": "whole value"},
+            sources=[SOURCE],
+            evidence=[{"field": "", "source_id": "s1", "quote": "whole value"}],
+            missing_fields=[],
+            uncertainties=[],
+            source_texts={"s1": "The whole value is present."},
+        )
+        self.assertTrue(root_result.settlement_eligible)
+
+        with self.assertRaises(EvidenceValidationError):
+            validate_structured_result(
+                schema={
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                    "additionalProperties": False,
+                },
+                data={"value": "whole value"},
+                sources=[SOURCE],
+                evidence=[{"field": "", "source_id": "s1", "quote": "whole value"}],
+                missing_fields=[],
+                uncertainties=[],
+                source_texts={"s1": "The whole value is present."},
+            )
+
 
 class EvidenceLocatorTests(unittest.TestCase):
+    def test_structured_provider_objects_reject_unknown_keys_without_echoing_canaries(self):
+        cases = [
+            {
+                "sources": [{**SOURCE, "raw_content": "SOURCE_SECRET_CANARY"}],
+                "evidence": [{"field": "/version", "source_id": "s1", "quote": "2.20.0"}],
+                "missing_fields": ["/release_date"],
+                "uncertainties": [{"field": "/release_date", "reason": "Absent."}],
+            },
+            {
+                "sources": [SOURCE],
+                "evidence": [{
+                    "field": "/version",
+                    "source_id": "s1",
+                    "quote": "2.20.0",
+                    "provider_payload": {"raw": "EVIDENCE_SECRET_CANARY"},
+                }],
+                "missing_fields": ["/release_date"],
+                "uncertainties": [{"field": "/release_date", "reason": "Absent."}],
+            },
+            {
+                "sources": [SOURCE],
+                "evidence": [{"field": "/version", "source_id": "s1", "quote": "2.20.0"}],
+                "missing_fields": ["/release_date"],
+                "uncertainties": [{
+                    "field": "/release_date",
+                    "reason": "Absent.",
+                    "raw": {"nested": "UNCERTAINTY_SECRET_CANARY"},
+                }],
+            },
+        ]
+        for case in cases:
+            with self.subTest(case=case), self.assertRaises(EvidenceValidationError) as caught:
+                validate_structured_result(
+                    schema=SCHEMA,
+                    data={"version": "2.20.0", "release_date": None},
+                    source_texts={"s1": "Version 2.20.0"},
+                    **case,
+                )
+            self.assertEqual(str(caught.exception), "evidence_validation_failed")
+            self.assertNotIn("CANARY", str(caught.exception))
+
     def test_text_quote_must_resolve_to_returned_source_content(self):
         with self.assertRaises(EvidenceValidationError):
             validate_structured_result(
@@ -245,6 +318,50 @@ class EvidenceLocatorTests(unittest.TestCase):
                 direct=True,
             )
 
+    def test_pdf_page_count_rejects_booleans(self):
+        schema = {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        }
+        pdf_source = {**SOURCE, "retrieval_method": "pdf"}
+        valid = validate_structured_result(
+            schema=schema,
+            data={"value": "total"},
+            sources=[pdf_source],
+            evidence=[{
+                "field": "/value",
+                "source_id": "s1",
+                "quote": "total",
+                "page": 1,
+            }],
+            missing_fields=[],
+            uncertainties=[],
+            source_texts={"s1": "total"},
+            page_counts={"s1": 1},
+            direct=True,
+        )
+        self.assertTrue(valid.settlement_eligible)
+        for page_count in (True, False):
+            with self.subTest(page_count=page_count), self.assertRaises(EvidenceValidationError):
+                validate_structured_result(
+                    schema=schema,
+                    data={"value": "total"},
+                    sources=[pdf_source],
+                    evidence=[{
+                        "field": "/value",
+                        "source_id": "s1",
+                        "quote": "total",
+                        "page": 1,
+                    }],
+                    missing_fields=[],
+                    uncertainties=[],
+                    source_texts={"s1": "total"},
+                    page_counts={"s1": page_count},
+                    direct=True,
+                )
+
     def test_hostile_numeric_and_container_shapes_fail_with_finite_error(self):
         schema = {
             "type": "object",
@@ -290,6 +407,36 @@ class EvidenceLocatorTests(unittest.TestCase):
 
 
 class CitationValidationTests(unittest.TestCase):
+    def test_claims_and_citations_reject_unknown_keys_without_echoing_canaries(self):
+        cases = [
+            (
+                [{
+                    "text": "claim",
+                    "citation_ids": ["c1"],
+                    "raw": {"nested": "CLAIM_SECRET_CANARY"},
+                }],
+                [{"citation_id": "c1", "source_id": "s1"}],
+            ),
+            (
+                [{"text": "claim", "citation_ids": ["c1"]}],
+                [{
+                    "citation_id": "c1",
+                    "source_id": "s1",
+                    "provider_object": {"raw": "CITATION_SECRET_CANARY"},
+                }],
+            ),
+        ]
+        for claims, citations in cases:
+            with self.subTest(claims=claims), self.assertRaises(EvidenceValidationError) as caught:
+                validate_cited_answer(
+                    answer="answer",
+                    claims=claims,
+                    citations=citations,
+                    retrieved_source_ids={"s1"},
+                )
+            self.assertEqual(str(caught.exception), "invalid_provider_output")
+            self.assertNotIn("CANARY", str(caught.exception))
+
     def test_empty_answer_evidence_is_not_delivery_eligible(self):
         with self.assertRaises(EvidenceValidationError):
             validate_cited_answer(

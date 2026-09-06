@@ -89,6 +89,11 @@ def _walk_schema(schema: Any, *, depth: int, counters: dict[str, int]) -> None:
     if len(schema.get("description", "")) > MAX_DESCRIPTION_CHARS:
         raise SchemaGuardError()
 
+    if "string" not in effective_types and ({"minLength", "maxLength"} & set(schema)):
+        raise SchemaGuardError()
+    if not ({"number", "integer"} & effective_types) and (_NUMBER_KEYWORDS & set(schema)):
+        raise SchemaGuardError()
+
     for keyword in _NUMBER_KEYWORDS:
         if keyword in schema:
             value = schema[keyword]

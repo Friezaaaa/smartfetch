@@ -99,6 +99,26 @@ class SchemaSubsetTests(unittest.TestCase):
             with self.subTest(schema=schema), self.assertRaises(SchemaGuardError):
                 validate_schema(schema)
 
+    def test_rejects_keywords_that_do_not_apply_to_the_declared_type(self):
+        invalid = [
+            object_schema({"value": {"type": "string", "minimum": 0}}),
+            object_schema({"value": {"type": "number", "minLength": 1}}),
+            object_schema({"value": {"type": "integer", "maxLength": 3}}),
+            object_schema({"value": {"type": "boolean", "maximum": 1}}),
+            object_schema({"value": {"type": "array", "items": {"type": "string"}, "maxLength": 3}}),
+            object_schema({"value": {"type": "object", "properties": {}, "additionalProperties": False, "minimum": 0}}),
+            object_schema({"value": {"type": ["string", "null"], "minimum": 0}}),
+            object_schema({"value": {"type": ["number", "null"], "maxLength": 3}}),
+        ]
+        for schema in invalid:
+            with self.subTest(schema=schema), self.assertRaises(SchemaGuardError):
+                validate_schema(schema)
+
+        validate_schema(object_schema({
+            "text": {"type": ["string", "null"], "minLength": 0, "maxLength": 3},
+            "count": {"type": ["integer", "null"], "minimum": 0, "maximum": 3},
+        }))
+
     def test_pathological_plain_data_fails_with_finite_error(self):
         deep = {"type": "string"}
         for _ in range(2000):

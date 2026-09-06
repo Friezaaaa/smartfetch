@@ -46,10 +46,20 @@ class ProviderUsage:
                 raise UsageAccountingError()
         if not _bounded_count(self.cost_micro_usd, maximum=MAX_PROVIDER_COST_MICRO_USD):
             raise UsageAccountingError()
+        if type(self.modality_tokens) is not tuple:
+            raise UsageAccountingError()
         allowed_modalities = {"text", "image", "pdf", "audio", "video"}
         seen: set[str] = set()
-        for modality, count in self.modality_tokens:
-            if modality not in allowed_modalities or modality in seen or not _bounded_count(count):
+        for entry in self.modality_tokens:
+            if type(entry) is not tuple or len(entry) != 2:
+                raise UsageAccountingError()
+            modality, count = entry
+            if (
+                not isinstance(modality, str)
+                or modality not in allowed_modalities
+                or modality in seen
+                or not _bounded_count(count)
+            ):
                 raise UsageAccountingError()
             seen.add(modality)
 
