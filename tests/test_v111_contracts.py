@@ -137,6 +137,15 @@ class SearchRequestTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValidationError):
                 SearchAndExtractRequest.model_validate(payload)
 
+    def test_pre_validation_does_not_invoke_hostile_string_subclasses(self):
+        class HostileText(str):
+            def strip(self, *args, **kwargs):
+                raise RuntimeError("STRIP_CANARY")
+
+        request = SearchAndExtractRequest(query=HostileText("query"), mode="results")
+        self.assertIs(type(request.query), str)
+        self.assertEqual(request.query, "query")
+
     def test_structured_mode_defaults_sources_and_requires_schema(self):
         request = SearchAndExtractRequest.model_validate({
             "query": "release details",
@@ -299,6 +308,22 @@ class DirectExtractionRequestTests(unittest.TestCase):
                 "source_url": source_url + "a",
                 "json_schema": MINIMAL_SCHEMA,
             })
+
+    def test_direct_pre_validation_does_not_invoke_hostile_string_subclasses(self):
+        class HostileText(str):
+            def strip(self, *args, **kwargs):
+                raise RuntimeError("STRIP_CANARY")
+
+        for field in ("source_url", "instructions"):
+            values = {
+                "source_type": "image",
+                "source_url": "https://example.com/image.png",
+                "json_schema": MINIMAL_SCHEMA,
+            }
+            values[field] = HostileText(values.get(field, "instructions"))
+            with self.subTest(field=field):
+                request = DirectExtractionRequest(**values)
+                self.assertIs(type(getattr(request, field)), str)
 
 
 class ResponseContractTests(unittest.TestCase):

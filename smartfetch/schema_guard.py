@@ -39,8 +39,40 @@ class SchemaGuardError(ValueError):
         super().__init__(code)
 
 
+def _require_plain_json(value: Any, active: set[int] | None = None) -> None:
+    if active is None:
+        active = set()
+    value_type = type(value)
+    if value is None or value_type in {str, int, bool}:
+        return
+    if value_type is float:
+        if not math.isfinite(value):
+            raise SchemaGuardError()
+        return
+    if value_type not in {dict, list}:
+        raise SchemaGuardError()
+    marker = id(value)
+    if marker in active:
+        raise SchemaGuardError()
+    active.add(marker)
+    try:
+        if value_type is list:
+            for item in value:
+                _require_plain_json(item, active)
+            return
+        for key, item in value.items():
+            if type(key) is not str:
+                raise SchemaGuardError()
+            _require_plain_json(item, active)
+    except RecursionError:
+        raise SchemaGuardError() from None
+    finally:
+        active.remove(marker)
+
+
 def _canonical_json_bytes(value: Any) -> bytes:
     try:
+        _require_plain_json(value)
         return json.dumps(
             value,
             ensure_ascii=False,
@@ -54,37 +86,36 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 def _bounded_nonnegative_integer(value: Any, *, upper: int | None = None) -> bool:
     return (
-        isinstance(value, int)
-        and not isinstance(value, bool)
+        type(value) is int
         and value >= 0
         and (upper is None or value <= upper)
     )
 
 
 def _walk_schema(schema: Any, *, depth: int, counters: dict[str, int]) -> None:
-    if not isinstance(schema, dict) or depth > MAX_DEPTH:
+    if type(schema) is not dict or depth > MAX_DEPTH:
         raise SchemaGuardError()
     if set(schema) - _ALLOWED_KEYWORDS:
         raise SchemaGuardError()
 
     schema_type = schema.get("type")
-    if isinstance(schema_type, list):
+    if type(schema_type) is list:
         if (
             len(schema_type) != 2
-            or any(not isinstance(item, str) for item in schema_type)
+            or any(type(item) is not str for item in schema_type)
             or len(set(schema_type)) != 2
             or "null" not in schema_type
             or any(item not in _ALLOWED_TYPES for item in schema_type)
         ):
             raise SchemaGuardError()
         effective_types = set(schema_type)
-    elif isinstance(schema_type, str) and schema_type in _ALLOWED_TYPES:
+    elif type(schema_type) is str and schema_type in _ALLOWED_TYPES:
         effective_types = {schema_type}
     else:
         raise SchemaGuardError()
 
     for text_key in ("title", "description", "$schema"):
-        if text_key in schema and not isinstance(schema[text_key], str):
+        if text_key in schema and type(schema[text_key]) is not str:
             raise SchemaGuardError()
     if len(schema.get("description", "")) > MAX_DESCRIPTION_CHARS:
         raise SchemaGuardError()
@@ -98,9 +129,8 @@ def _walk_schema(schema: Any, *, depth: int, counters: dict[str, int]) -> None:
         if keyword in schema:
             value = schema[keyword]
             if (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-                or (isinstance(value, float) and not math.isfinite(value))
+                type(value) not in {int, float}
+                or (type(value) is float and not math.isfinite(value))
             ):
                 raise SchemaGuardError()
 
@@ -123,7 +153,7 @@ def _walk_schema(schema: Any, *, depth: int, counters: dict[str, int]) -> None:
 
     if "enum" in schema:
         values = schema["enum"]
-        if not isinstance(values, list) or not values:
+        if type(values) is not list or not values:
             raise SchemaGuardError()
         counters["enum"] += len(values)
         if counters["enum"] > MAX_ENUM_VALUES:
@@ -133,13 +163,13 @@ def _walk_schema(schema: Any, *, depth: int, counters: dict[str, int]) -> None:
 
     if "object" in effective_types:
         properties = schema.get("properties")
-        if not isinstance(properties, dict) or schema.get("additionalProperties") is not False:
+        if type(properties) is not dict or schema.get("additionalProperties") is not False:
             raise SchemaGuardError()
         required = schema.get("required", [])
         if (
-            not isinstance(required, list)
+            type(required) is not list
             or len(required) > MAX_REQUIRED
-            or any(not isinstance(name, str) for name in required)
+            or any(type(name) is not str for name in required)
             or len(set(required)) != len(required)
             or any(name not in properties for name in required)
         ):
@@ -148,7 +178,7 @@ def _walk_schema(schema: Any, *, depth: int, counters: dict[str, int]) -> None:
         if counters["properties"] > MAX_PROPERTIES:
             raise SchemaGuardError()
         for name, child in properties.items():
-            if not isinstance(name, str) or len(name) > MAX_PROPERTY_NAME_CHARS:
+            if type(name) is not str or len(name) > MAX_PROPERTY_NAME_CHARS:
                 raise SchemaGuardError()
             _walk_schema(child, depth=depth + 1, counters=counters)
     elif "properties" in schema or "required" in schema or "additionalProperties" in schema:
@@ -166,7 +196,7 @@ def validate_schema(schema: Any) -> None:
     """Validate the bounded subset without imports, evaluation, or I/O."""
     if len(_canonical_json_bytes(schema)) > MAX_SCHEMA_BYTES:
         raise SchemaGuardError("schema_too_large")
-    if not isinstance(schema, dict) or schema.get("type") != "object":
+    if type(schema) is not dict or schema.get("type") != "object":
         raise SchemaGuardError()
     _walk_schema(schema, depth=1, counters={"properties": 0, "enum": 0})
     try:

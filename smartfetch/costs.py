@@ -18,7 +18,7 @@ class UsageAccountingError(ValueError):
 
 
 def _bounded_count(value: object, *, maximum: int = MAX_USAGE_COUNT) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= maximum
+    return type(value) is int and 0 <= value <= maximum
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +34,7 @@ class ProviderUsage:
 
     def __post_init__(self) -> None:
         if (
-            not isinstance(self.provider, str)
+            type(self.provider) is not str
             or not self.provider
             or len(self.provider) > len("gemini")
             or self.provider not in {"exa", "gemini"}
@@ -60,7 +60,7 @@ class ProviderUsage:
                 raise UsageAccountingError()
             modality, count = entry
             if (
-                not isinstance(modality, str)
+                type(modality) is not str
                 or modality not in allowed_modalities
                 or modality in seen
                 or not _bounded_count(count)

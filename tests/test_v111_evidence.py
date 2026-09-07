@@ -532,5 +532,137 @@ class CitationValidationTests(unittest.TestCase):
                 validate_cited_answer(answer="answer", **case)
 
 
+class EvidencePlainBoundaryTests(unittest.TestCase):
+    @staticmethod
+    def _valid_structured_kwargs():
+        return {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "value": {"type": "string"},
+                    "optional": {"type": ["string", "null"]},
+                },
+                "required": ["value", "optional"],
+                "additionalProperties": False,
+            },
+            "data": {"value": "ok", "optional": None},
+            "sources": [SOURCE],
+            "evidence": [{"field": "/value", "source_id": "s1", "quote": "ok"}],
+            "missing_fields": ["/optional"],
+            "uncertainties": [{"field": "/optional", "reason": "Absent."}],
+            "source_texts": {"s1": "ok"},
+        }
+
+    def test_pointer_values_are_exact_owned_strings_before_hashing(self):
+        class UnhashableText(str):
+            __hash__ = None
+
+        class HostileText(str):
+            def __len__(self):
+                raise RuntimeError("LENGTH_CANARY")
+
+            def __hash__(self):
+                raise RuntimeError("HASH_CANARY")
+
+            def __eq__(self, other):
+                raise RuntimeError("EQUALITY_CANARY")
+
+        cases = (
+            {"missing_fields": [UnhashableText("/optional")]},
+            {"missing_fields": [HostileText("/optional")]},
+            {"uncertainties": [{"field": UnhashableText("/optional"), "reason": "Absent."}]},
+            {"evidence": [{"field": HostileText("/value"), "source_id": "s1", "quote": "ok"}]},
+        )
+        for replacement in cases:
+            kwargs = self._valid_structured_kwargs()
+            kwargs.update(replacement)
+            with self.subTest(field=next(iter(replacement))):
+                with self.assertRaisesRegex(EvidenceValidationError, "^evidence_validation_failed$") as caught:
+                    validate_structured_result(**kwargs)
+                self.assertNotIn("CANARY", str(caught.exception))
+
+    def test_outer_provider_containers_are_exact_before_iteration_or_length(self):
+        class HostileList(list):
+            def __iter__(self):
+                raise RuntimeError("ITERATION_CANARY")
+
+            def __len__(self):
+                raise RuntimeError("LENGTH_CANARY")
+
+        class HostileTuple(tuple):
+            def __iter__(self):
+                raise RuntimeError("ITERATION_CANARY")
+
+            def __len__(self):
+                raise RuntimeError("LENGTH_CANARY")
+
+        class HostileDict(dict):
+            def __iter__(self):
+                raise RuntimeError("ITERATION_CANARY")
+
+            def __len__(self):
+                raise RuntimeError("LENGTH_CANARY")
+
+        cases = (
+            {"sources": HostileList([SOURCE])},
+            {"evidence": HostileTuple(())},
+            {"missing_fields": HostileList(["/optional"])},
+            {"uncertainties": HostileTuple(({"field": "/optional", "reason": "Absent."},))},
+            {"sources": [HostileDict(SOURCE)]},
+        )
+        for replacement in cases:
+            kwargs = self._valid_structured_kwargs()
+            kwargs.update(replacement)
+            with self.subTest(field=next(iter(replacement))):
+                with self.assertRaises(EvidenceValidationError) as caught:
+                    validate_structured_result(**kwargs)
+                self.assertNotIn("CANARY", str(caught.exception))
+
+    def test_numeric_subclasses_are_rejected_before_comparison(self):
+        class HostileInteger(int):
+            def __ge__(self, other):
+                raise RuntimeError("COMPARE_CANARY")
+
+            def __le__(self, other):
+                raise RuntimeError("COMPARE_CANARY")
+
+        class HostileFloat(float):
+            def __ge__(self, other):
+                raise RuntimeError("COMPARE_CANARY")
+
+            def __le__(self, other):
+                raise RuntimeError("COMPARE_CANARY")
+
+        pdf_kwargs = self._valid_structured_kwargs()
+        pdf_kwargs["sources"] = [{**SOURCE, "retrieval_method": "pdf"}]
+        pdf_kwargs["evidence"] = [{
+            "field": "/value", "source_id": "s1", "quote": "ok", "page": HostileInteger(1),
+        }]
+        pdf_kwargs["page_counts"] = {"s1": 1}
+        audio_kwargs = self._valid_structured_kwargs()
+        audio_kwargs["sources"] = [{**SOURCE, "retrieval_method": "audio"}]
+        audio_kwargs["evidence"] = [{
+            "field": "/value", "source_id": "s1",
+            "start_seconds": HostileFloat(0), "end_seconds": 1.0,
+        }]
+        audio_kwargs["media_durations"] = {"s1": 10.0}
+        for kwargs in (pdf_kwargs, audio_kwargs):
+            with self.subTest(method=kwargs["sources"][0]["retrieval_method"]):
+                with self.assertRaises(EvidenceValidationError) as caught:
+                    validate_structured_result(**kwargs)
+                self.assertNotIn("CANARY", str(caught.exception))
+
+    def test_valid_and_duplicate_canonical_pointers_keep_existing_semantics(self):
+        kwargs = self._valid_structured_kwargs()
+        summary = validate_structured_result(**kwargs)
+        self.assertTrue(summary.settlement_eligible)
+        self.assertEqual(summary.disclosed_null_fields, ("/optional",))
+
+        kwargs = self._valid_structured_kwargs()
+        kwargs["missing_fields"] = ["/optional", "/optional"]
+        with self.assertRaisesRegex(EvidenceValidationError, "^evidence_validation_failed$"):
+            validate_structured_result(**kwargs)
+
+
 if __name__ == "__main__":
     unittest.main()

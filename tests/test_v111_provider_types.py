@@ -279,6 +279,133 @@ class CostAccountingTypeTests(unittest.TestCase):
         with self.assertRaises((AttributeError, TypeError)):
             usage.modality_tokens += (("image", 1),)
 
+    def test_usage_rejects_hostile_builtin_subclasses_with_one_finite_error(self):
+        class UnhashableText(str):
+            __hash__ = None
+
+        class HostileText(str):
+            def __hash__(self):
+                raise RuntimeError("HASH_CANARY")
+
+            def __eq__(self, other):
+                raise RuntimeError("EQUALITY_CANARY")
+
+        class HostileInteger(int):
+            def __ge__(self, other):
+                raise RuntimeError("COMPARE_CANARY")
+
+            def __le__(self, other):
+                raise RuntimeError("COMPARE_CANARY")
+
+            def __add__(self, other):
+                raise RuntimeError("ARITHMETIC_CANARY")
+
+        class HostileList(list):
+            def __iter__(self):
+                raise RuntimeError("ITERATION_CANARY")
+
+            def __len__(self):
+                raise RuntimeError("LENGTH_CANARY")
+
+        class HostileTuple(tuple):
+            def __iter__(self):
+                raise RuntimeError("ITERATION_CANARY")
+
+            def __len__(self):
+                raise RuntimeError("LENGTH_CANARY")
+
+        class HostileDict(dict):
+            def __iter__(self):
+                raise RuntimeError("ITERATION_CANARY")
+
+        invalid = (
+            {"provider": UnhashableText("gemini")},
+            {"provider": HostileText("gemini")},
+            {"provider": "gemini", "input_tokens": HostileInteger(1)},
+            {"provider": "gemini", "modality_tokens": ((UnhashableText("text"), 1),)},
+            {"provider": "gemini", "modality_tokens": ((HostileText("text"), 1),)},
+            {"provider": "gemini", "modality_tokens": (("text", HostileInteger(1)),)},
+            {"provider": "gemini", "modality_tokens": HostileList((("text", 1),))},
+            {"provider": "gemini", "modality_tokens": HostileTuple((("text", 1),))},
+            {"provider": HostileDict()},
+        )
+        for values in invalid:
+            with self.subTest(value_type=type(next(iter(values.values()))).__name__):
+                with self.assertRaisesRegex(UsageAccountingError, "^invalid_provider_usage$") as caught:
+                    ProviderUsage(**values)
+                self.assertEqual(str(caught.exception), "invalid_provider_usage")
+
+    def test_usage_accepts_exact_builtin_boundary_values(self):
+        usage = ProviderUsage(
+            provider="exa",
+            search_queries=MAX_USAGE_COUNT,
+            input_tokens=0,
+            output_tokens=MAX_USAGE_COUNT,
+            thinking_tokens=0,
+            tool_use_tokens=MAX_USAGE_COUNT,
+            modality_tokens=(("text", 0), ("video", MAX_USAGE_COUNT)),
+            cost_micro_usd=MAX_PROVIDER_COST_MICRO_USD,
+        )
+        self.assertEqual(usage.total_tokens, MAX_USAGE_COUNT * 2)
+
+
+class ProviderPlainBoundaryTests(unittest.TestCase):
+    def test_owned_sequences_reject_hostile_containers_and_string_subclasses(self):
+        class HostileList(list):
+            def __iter__(self):
+                raise RuntimeError("ITERATION_CANARY")
+
+            def __len__(self):
+                raise RuntimeError("LENGTH_CANARY")
+
+        class HostileTuple(tuple):
+            def __iter__(self):
+                raise RuntimeError("ITERATION_CANARY")
+
+            def __len__(self):
+                raise RuntimeError("LENGTH_CANARY")
+
+        class HostileText(str):
+            def __len__(self):
+                raise RuntimeError("LENGTH_CANARY")
+
+            def __hash__(self):
+                raise RuntimeError("HASH_CANARY")
+
+        usage = ProviderUsage(provider="gemini")
+        cases = (
+            lambda: SearchRequest("query", 5, HostileList(["example.com"]), None),
+            lambda: SearchRequest("query", 5, HostileTuple(("example.com",)), None),
+            lambda: SearchRequest("query", 5, (HostileText("example.com"),), None),
+            lambda: AnswerRequest("query", (HostileList(["s1", "text"]),)),
+            lambda: AnswerRequest("query", ((HostileText("s1"), "text"),)),
+            lambda: AnswerClaim("claim", (HostileText("c1"),)),
+            lambda: StructuredModelResult({}, (), (HostileText("/missing"),), (), usage),
+        )
+        for construct in cases:
+            with self.subTest(construct=construct):
+                with self.assertRaisesRegex(ValueError, "^invalid_provider_output$") as caught:
+                    construct()
+                self.assertNotIn("CANARY", str(caught.exception))
+
+    def test_owned_plain_json_rejects_builtin_subclasses_before_using_them(self):
+        class HostileDict(dict):
+            def items(self):
+                raise RuntimeError("ITEMS_CANARY")
+
+            def __iter__(self):
+                raise RuntimeError("ITERATION_CANARY")
+
+        class HostileList(list):
+            def __iter__(self):
+                raise RuntimeError("ITERATION_CANARY")
+
+        for value in (HostileDict({"value": "ok"}), {"value": HostileList(["ok"])}):
+            with self.subTest(value_type=type(value).__name__):
+                with self.assertRaisesRegex(ValueError, "^provider data must be JSON-compatible$") as caught:
+                    StructuredModelResult(value, (), (), (), ProviderUsage(provider="gemini"))
+                self.assertNotIn("CANARY", str(caught.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

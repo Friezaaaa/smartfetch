@@ -7,7 +7,6 @@ and ownership isolation; it does not impose a raw provider-response limit.
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass
 import json
 from typing import Any, Protocol, runtime_checkable
@@ -15,23 +14,47 @@ from typing import Any, Protocol, runtime_checkable
 from .costs import ProviderUsage
 
 
+def _copy_plain_json(value: Any, active: set[int]) -> Any:
+    value_type = type(value)
+    if value is None or value_type in {str, int, bool, float}:
+        return value
+    if value_type not in {dict, list}:
+        raise ValueError
+    marker = id(value)
+    if marker in active:
+        raise ValueError
+    active.add(marker)
+    try:
+        if value_type is list:
+            return [_copy_plain_json(item, active) for item in value]
+        copied: dict[str, Any] = {}
+        for key, item in value.items():
+            if type(key) is not str:
+                raise ValueError
+            copied[key] = _copy_plain_json(item, active)
+        return copied
+    finally:
+        active.remove(marker)
+
+
 def _owned_json(value: Any) -> Any:
     try:
-        json.dumps(value, ensure_ascii=False, allow_nan=False)
-        return deepcopy(value)
+        owned = _copy_plain_json(value, set())
+        json.dumps(owned, ensure_ascii=False, allow_nan=False)
+        return owned
     except (TypeError, ValueError, OverflowError, UnicodeError, RecursionError):
         raise ValueError("provider data must be JSON-compatible") from None
 
 
 def _owned_sequence(value: Any, *, maximum: int) -> tuple[Any, ...]:
-    if not isinstance(value, (list, tuple)) or len(value) > maximum:
+    if type(value) not in {list, tuple} or len(value) > maximum:
         raise ValueError("invalid_provider_output")
     return tuple(value)
 
 
 def _owned_strings(value: Any, *, maximum: int, max_chars: int) -> tuple[str, ...]:
     items = _owned_sequence(value, maximum=maximum)
-    if any(not isinstance(item, str) or not item or len(item) > max_chars for item in items):
+    if any(type(item) is not str or not item or len(item) > max_chars for item in items):
         raise ValueError("invalid_provider_output")
     return items
 
@@ -40,13 +63,13 @@ def _owned_sources(value: Any) -> tuple[tuple[str, str], ...]:
     sources = _owned_sequence(value, maximum=3)
     owned: list[tuple[str, str]] = []
     for source in sources:
-        if not isinstance(source, (list, tuple)) or len(source) != 2:
+        if type(source) not in {list, tuple} or len(source) != 2:
             raise ValueError("invalid_provider_output")
         source_id, content = source
         if (
-            not isinstance(source_id, str)
+            type(source_id) is not str
             or not 1 <= len(source_id) <= 64
-            or not isinstance(content, str)
+            or type(content) is not str
             or len(content) > 50_000
         ):
             raise ValueError("invalid_provider_output")

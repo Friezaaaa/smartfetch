@@ -132,7 +132,7 @@ class SearchAndExtractRequest(_StrictModel):
     def _trim_strings(cls, value: Any) -> Any:
         if value is None:
             return None
-        if not isinstance(value, str):
+        if type(value) is not str:
             return value
         value = value.strip()
         if not value:
@@ -192,7 +192,7 @@ class DirectExtractionRequest(_StrictModel):
     @field_validator("source_url", mode="before")
     @classmethod
     def _trim_source_url(cls, value: Any) -> Any:
-        if isinstance(value, str):
+        if type(value) is str:
             return value.strip()
         return value
 
@@ -218,7 +218,7 @@ class DirectExtractionRequest(_StrictModel):
     def _trim_instructions(cls, value: Any) -> Any:
         if value is None:
             return None
-        if not isinstance(value, str):
+        if type(value) is not str:
             return value
         value = value.strip()
         if not value:

@@ -171,5 +171,90 @@ class LocalInstanceValidationTests(unittest.TestCase):
         self.assertIn(caught.exception.code, {"invalid_schema", "schema_validation_failed"})
 
 
+class SchemaPlainBoundaryTests(unittest.TestCase):
+    def test_schema_rejects_hostile_builtin_subclasses_with_finite_error(self):
+        class UnhashableText(str):
+            __hash__ = None
+
+        class HostileText(str):
+            def __len__(self):
+                raise RuntimeError("LENGTH_CANARY")
+
+            def __hash__(self):
+                raise RuntimeError("HASH_CANARY")
+
+        class HostileInteger(int):
+            def __ge__(self, other):
+                raise RuntimeError("COMPARE_CANARY")
+
+            def __le__(self, other):
+                raise RuntimeError("COMPARE_CANARY")
+
+        class HostileFloat(float):
+            def __ge__(self, other):
+                raise RuntimeError("COMPARE_CANARY")
+
+        class HostileList(list):
+            def __iter__(self):
+                raise RuntimeError("ITERATION_CANARY")
+
+            def __len__(self):
+                raise RuntimeError("LENGTH_CANARY")
+
+        class HostileTuple(tuple):
+            def __iter__(self):
+                raise RuntimeError("ITERATION_CANARY")
+
+        class HostileDict(dict):
+            def items(self):
+                raise RuntimeError("ITEMS_CANARY")
+
+            def __iter__(self):
+                raise RuntimeError("ITERATION_CANARY")
+
+        schemas = (
+            object_schema({"value": {"type": [UnhashableText("string"), "null"]}}),
+            object_schema({"value": {"type": HostileText("string")}}),
+            object_schema({"value": {"type": "integer", "minimum": HostileInteger(0)}}),
+            object_schema({"value": {"type": "number", "maximum": HostileFloat(1.0)}}),
+            object_schema({"value": {"type": HostileList(["string", "null"])}}),
+            HostileDict(object_schema({})),
+            object_schema({"value": HostileDict({"type": "string"})}),
+            object_schema({"value": {"type": "string", "enum": HostileList(["ok"])}}),
+            object_schema({"value": {"type": HostileTuple(("string", "null"))}}),
+        )
+        for schema in schemas:
+            with self.subTest(schema_type=type(schema).__name__):
+                with self.assertRaises(SchemaGuardError) as caught:
+                    validate_schema(schema)
+                self.assertEqual(str(caught.exception), "invalid_schema")
+                self.assertNotIn("CANARY", str(caught.exception))
+
+    def test_instance_rejects_hostile_plain_data_before_using_subclass_methods(self):
+        class HostileInteger(int):
+            def __ge__(self, other):
+                raise RuntimeError("COMPARE_CANARY")
+
+        class HostileList(list):
+            def __iter__(self):
+                raise RuntimeError("ITERATION_CANARY")
+
+        schema = object_schema({"count": {"type": "integer", "minimum": 0}}, ["count"])
+        for data in ({"count": HostileInteger(1)}, {"count": HostileList([1])}):
+            with self.subTest(value_type=type(data["count"]).__name__):
+                with self.assertRaises(SchemaGuardError) as caught:
+                    validate_instance(schema, data)
+                self.assertEqual(caught.exception.code, "schema_validation_failed")
+
+    def test_exact_builtin_schema_boundaries_remain_valid(self):
+        schema = object_schema({
+            "count": {"type": "integer", "minimum": 0, "maximum": 10},
+            "score": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "items": {"type": "array", "items": {"type": "string"}, "maxItems": 2},
+        }, ["count", "score", "items"])
+        validate_schema(schema)
+        validate_instance(schema, {"count": 0, "score": 1.0, "items": ["ok"]})
+
+
 if __name__ == "__main__":
     unittest.main()
