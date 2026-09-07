@@ -313,11 +313,16 @@ def validate_structured_result(
     if not usable_fields:
         raise EvidenceValidationError()
 
-    missing = tuple(missing_fields)
+    validated_missing: list[str] = []
+    for pointer in missing_fields:
+        _decode_pointer(pointer)
+        if pointer == "":
+            raise EvidenceValidationError()
+        validated_missing.append(pointer)
+    missing = tuple(validated_missing)
     if len(set(missing)) != len(missing):
         raise EvidenceValidationError()
     for pointer in missing:
-        _decode_pointer(pointer)
         if _resolve_pointer(data, pointer) is not None:
             raise EvidenceValidationError()
     if set(missing) != set(null_fields):

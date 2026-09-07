@@ -243,7 +243,7 @@ class CommonSuccess(_StrictModel):
 
 class SearchResultItem(_StrictModel):
     source_id: str = Field(min_length=1, max_length=64)
-    rank: int = Field(ge=1, le=10)
+    rank: int = Field(ge=1, le=10, strict=True)
     title: str = Field(max_length=300)
     url: str = Field(max_length=4096)
     snippet: str = Field(max_length=800)
@@ -275,9 +275,9 @@ class EvidenceEntry(_StrictModel):
     source_id: str = Field(min_length=1, max_length=64)
     quote: str | None = Field(default=None, min_length=1, max_length=500)
     description: str | None = Field(default=None, min_length=1, max_length=300)
-    page: int | None = Field(default=None, ge=1, le=1000)
-    start_seconds: float | None = Field(default=None, ge=0)
-    end_seconds: float | None = Field(default=None, ge=0)
+    page: int | None = Field(default=None, ge=1, le=20, strict=True)
+    start_seconds: float | None = Field(default=None, ge=0, le=1800, strict=True)
+    end_seconds: float | None = Field(default=None, ge=0, le=1800, strict=True)
 
 
 class Uncertainty(_StrictModel):

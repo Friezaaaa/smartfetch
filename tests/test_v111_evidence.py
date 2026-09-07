@@ -166,6 +166,45 @@ class NullableAndRequiredLeafTests(unittest.TestCase):
                 source_texts={"s1": "The whole value is present."},
             )
 
+    def test_missing_field_pointers_are_validated_before_duplicate_detection(self):
+        malformed = (
+            [[]],
+            [{}],
+            [True],
+            [1],
+            [None],
+            [""],
+            ["/bad~2escape"],
+            ["/" + ("x" * 256)],
+        )
+        for missing_fields in malformed:
+            with self.subTest(value_type=type(missing_fields[0]).__name__):
+                with self.assertRaisesRegex(
+                    EvidenceValidationError,
+                    "^evidence_validation_failed$",
+                ) as caught:
+                    validate_structured_result(
+                        schema=SCHEMA,
+                        data={"version": "2.20.0", "release_date": None},
+                        sources=[SOURCE],
+                        evidence=[{"field": "/version", "source_id": "s1", "quote": "2.20.0"}],
+                        missing_fields=missing_fields,
+                        uncertainties=[{"field": "/release_date", "reason": "Absent."}],
+                        source_texts={"s1": "Version 2.20.0"},
+                    )
+                self.assertEqual(str(caught.exception), "evidence_validation_failed")
+
+        with self.assertRaisesRegex(EvidenceValidationError, "^evidence_validation_failed$"):
+            validate_structured_result(
+                schema=SCHEMA,
+                data={"version": "2.20.0", "release_date": None},
+                sources=[SOURCE],
+                evidence=[{"field": "/version", "source_id": "s1", "quote": "2.20.0"}],
+                missing_fields=["/release_date", "/release_date"],
+                uncertainties=[{"field": "/release_date", "reason": "Absent."}],
+                source_texts={"s1": "Version 2.20.0"},
+            )
+
 
 class EvidenceLocatorTests(unittest.TestCase):
     def test_structured_provider_objects_reject_unknown_keys_without_echoing_canaries(self):

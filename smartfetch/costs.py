@@ -33,7 +33,12 @@ class ProviderUsage:
     cost_micro_usd: int = 0
 
     def __post_init__(self) -> None:
-        if self.provider not in {"exa", "gemini"}:
+        if (
+            not isinstance(self.provider, str)
+            or not self.provider
+            or len(self.provider) > len("gemini")
+            or self.provider not in {"exa", "gemini"}
+        ):
             raise UsageAccountingError()
         for count in (
             self.search_queries,

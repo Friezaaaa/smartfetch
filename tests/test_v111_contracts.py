@@ -8,6 +8,7 @@ from smartfetch.v111_contracts import (
     FailureResponse,
     SearchAnswerResponse,
     SearchAndExtractRequest,
+    SearchResultItem,
     SearchResultsResponse,
     StructuredResponse,
     V111_VARIANTS,
@@ -334,6 +335,60 @@ class ResponseContractTests(unittest.TestCase):
                 }],
                 "provider_response": {"secret": "canary"},
             })
+
+    def test_public_numeric_response_fields_are_strict_and_bounded(self):
+        result_base = {
+            "source_id": "s1",
+            "title": "title",
+            "url": "https://example.com",
+            "snippet": "snippet",
+        }
+        evidence_base = {
+            "field": "/value",
+            "source_id": "s1",
+            "quote": "value",
+        }
+        invalid_integer_values = (True, False, 1.0, "1", "1.0", "", [], {})
+        for value in invalid_integer_values:
+            with self.subTest(field="rank", value=value), self.assertRaises(ValidationError):
+                SearchResultItem.model_validate({**result_base, "rank": value})
+            with self.subTest(field="page", value=value), self.assertRaises(ValidationError):
+                EvidenceEntry.model_validate({**evidence_base, "page": value})
+
+        invalid_float_values = (True, False, "1", "1.0", "", [], {})
+        for value in invalid_float_values:
+            with self.subTest(field="start_seconds", value=value), self.assertRaises(ValidationError):
+                EvidenceEntry.model_validate({**evidence_base, "start_seconds": value})
+            with self.subTest(field="end_seconds", value=value), self.assertRaises(ValidationError):
+                EvidenceEntry.model_validate({**evidence_base, "end_seconds": value})
+
+        for rank in (1, 10):
+            self.assertEqual(SearchResultItem.model_validate({**result_base, "rank": rank}).rank, rank)
+        for page in (1, 20):
+            self.assertEqual(EvidenceEntry.model_validate({**evidence_base, "page": page}).page, page)
+        for seconds in (0, 1800):
+            self.assertEqual(
+                EvidenceEntry.model_validate({**evidence_base, "start_seconds": seconds}).start_seconds,
+                float(seconds),
+            )
+
+        for invalid_rank in (0, -1, 11, 10**9):
+            with self.subTest(rank=invalid_rank), self.assertRaises(ValidationError):
+                SearchResultItem.model_validate({**result_base, "rank": invalid_rank})
+        for invalid_page in (0, -1, 21, 10**9):
+            with self.subTest(page=invalid_page), self.assertRaises(ValidationError):
+                EvidenceEntry.model_validate({**evidence_base, "page": invalid_page})
+        for invalid_seconds in (-1, 1801, float("inf"), float("nan")):
+            with self.subTest(seconds=invalid_seconds), self.assertRaises(ValidationError):
+                EvidenceEntry.model_validate({**evidence_base, "start_seconds": invalid_seconds})
+
+        result_schema = SearchResultItem.model_json_schema()["properties"]["rank"]
+        evidence_schema = EvidenceEntry.model_json_schema()["properties"]
+        self.assertEqual(result_schema["type"], "integer")
+        self.assertEqual(result_schema["minimum"], 1)
+        self.assertEqual(result_schema["maximum"], 10)
+        self.assertEqual(evidence_schema["page"]["anyOf"][0]["type"], "integer")
+        self.assertEqual(evidence_schema["start_seconds"]["anyOf"][0]["type"], "number")
 
     def test_evidence_contract_accepts_the_rfc_6901_root_pointer(self):
         evidence = EvidenceEntry.model_validate({

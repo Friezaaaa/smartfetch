@@ -11,6 +11,8 @@ from smartfetch.costs import (
     UsageAccountingError,
 )
 from smartfetch.provider_types import (
+    AnswerCitation,
+    AnswerClaim,
     AnswerRequest,
     CitedAnswerResult,
     ModelProvider,
@@ -85,10 +87,81 @@ class ProviderProtocolTests(unittest.TestCase):
         invalid_values = (cyclic, {"bad": object()}, {"bad": float("nan")})
         for value in invalid_values:
             with self.subTest(value_type=type(value).__name__):
-                with self.assertRaisesRegex(ValueError, "provider data must be bounded JSON"):
+                with self.assertRaisesRegex(ValueError, "provider data must be JSON-compatible"):
                     StructuredTextRequest(value, None, ())
-                with self.assertRaisesRegex(ValueError, "provider data must be bounded JSON"):
+                with self.assertRaisesRegex(ValueError, "provider data must be JSON-compatible"):
                     StructuredModelResult(value, (), (), (), ProviderUsage(provider="gemini"))
+
+    def test_all_sequence_fields_take_ownership_without_aliasing(self):
+        domains = ["example.com"]
+        candidates = [SearchCandidate("s1", 1, "Title", "https://example.com", "Snippet", None)]
+        sources = [["s1", "bounded text"]]
+        citation_ids = ["c1"]
+        claims = [AnswerClaim("claim", citation_ids)]
+        citations = [AnswerCitation("c1", "s1")]
+        evidence = [{"field": "/value", "nested": ["quote"]}]
+        missing_fields = ["/missing"]
+        uncertainties = [{"field": "/missing", "reason": ["absent"]}]
+
+        search_request = SearchRequest("query", 5, domains, None)
+        search_result = SearchProviderResult(candidates, ProviderUsage(provider="exa"))
+        answer_request = AnswerRequest("query", sources)
+        answer_claim = AnswerClaim("claim", citation_ids)
+        answer_result = CitedAnswerResult("answer", claims, citations, ProviderUsage(provider="gemini"))
+        text_request = StructuredTextRequest({}, None, sources)
+        second_text_request = StructuredTextRequest({}, None, sources)
+        model_result = StructuredModelResult(
+            {"value": "ok"}, evidence, missing_fields, uncertainties, ProviderUsage(provider="gemini")
+        )
+
+        domains.append("mutated.example")
+        candidates.clear()
+        sources[0][1] = "mutated"
+        sources.append(["s2", "mutated"])
+        citation_ids.append("c2")
+        claims.clear()
+        citations.clear()
+        evidence[0]["nested"].append("mutated")
+        missing_fields.append("/mutated")
+        uncertainties[0]["reason"].append("mutated")
+
+        self.assertEqual(search_request.domains, ("example.com",))
+        self.assertEqual(len(search_result.candidates), 1)
+        self.assertEqual(answer_request.sources, (("s1", "bounded text"),))
+        self.assertEqual(answer_claim.citation_ids, ("c1",))
+        self.assertEqual(len(answer_result.claims), 1)
+        self.assertEqual(len(answer_result.citations), 1)
+        self.assertEqual(text_request.sources, (("s1", "bounded text"),))
+        self.assertEqual(second_text_request.sources, (("s1", "bounded text"),))
+        self.assertIsNot(text_request.sources, second_text_request.sources)
+        self.assertEqual(model_result.evidence[0]["nested"], ["quote"])
+        self.assertEqual(model_result.missing_fields, ("/missing",))
+        self.assertEqual(model_result.uncertainties[0]["reason"], ["absent"])
+
+    def test_sequence_fields_reject_malformed_or_oversized_containers(self):
+        usage = ProviderUsage(provider="gemini")
+        malformed = ("text", b"text", {"s1": "text"}, None, 1)
+        for value in malformed:
+            with self.subTest(value_type=type(value).__name__):
+                with self.assertRaisesRegex(ValueError, "^invalid_provider_output$"):
+                    SearchRequest("query", 5, value, None)
+                with self.assertRaisesRegex(ValueError, "^invalid_provider_output$"):
+                    AnswerRequest("query", value)
+                with self.assertRaisesRegex(ValueError, "^invalid_provider_output$"):
+                    StructuredModelResult({}, (), value, (), usage)
+        with self.assertRaisesRegex(ValueError, "^invalid_provider_output$"):
+            SearchProviderResult([SearchCandidate("s", 1, "t", "u", "s", None)] * 11, usage)
+        for value in ((["s1"],), (("s1", 1),), (([], "text"),)):
+            with self.subTest(nested=value), self.assertRaisesRegex(ValueError, "^invalid_provider_output$"):
+                AnswerRequest("query", value)
+
+    def test_provider_adapter_raw_response_caps_are_an_explicit_precondition(self):
+        import smartfetch.provider_types as module
+
+        documentation = inspect.getdoc(module) or ""
+        self.assertIn("raw-response caps", documentation)
+        self.assertIn("before constructing", documentation)
+        self.assertNotIn("bounded JSON", Path(inspect.getfile(module)).read_text(encoding="utf-8"))
 
     def test_protocols_are_inert_typed_async_boundaries(self):
         search = FakeSearchProvider()
@@ -159,6 +232,14 @@ class CostAccountingTypeTests(unittest.TestCase):
         for values in invalid:
             with self.subTest(values=values), self.assertRaises(UsageAccountingError):
                 ProviderUsage(**values)
+
+    def test_provider_name_malformed_shapes_have_one_finite_error(self):
+        malformed = ([], {}, True, False, 1, None, "", "x" * 1024)
+        for value in malformed:
+            with self.subTest(value_type=type(value).__name__):
+                with self.assertRaisesRegex(UsageAccountingError, "^invalid_provider_usage$") as caught:
+                    ProviderUsage(provider=value)
+                self.assertEqual(str(caught.exception), "invalid_provider_usage")
 
     def test_modality_tokens_require_an_immutable_exact_pair_container(self):
         class TupleSubclass(tuple):
