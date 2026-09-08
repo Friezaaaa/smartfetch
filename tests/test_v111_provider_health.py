@@ -117,6 +117,40 @@ class ProviderHealthTests(unittest.TestCase):
         self.assertEqual(outcomes.count("allowed"), 1)
         self.assertEqual(outcomes.count("rejected"), 7)
 
+    def test_permits_are_owner_bound_single_use_and_consumed_atomically(self) -> None:
+        exa = ProviderCircuitBreaker(provider="exa")
+        gemini = ProviderCircuitBreaker(provider="gemini")
+        foreign = gemini.begin_call()
+        with self.assertRaisesRegex(ValueError, "invalid_provider_permit"):
+            exa.record_success(foreign)
+
+        permit = exa.begin_call()
+        barrier = threading.Barrier(2)
+        outcomes: list[str] = []
+        lock = threading.Lock()
+
+        def finish() -> None:
+            barrier.wait()
+            try:
+                exa.record_success(permit)
+            except ValueError as exc:
+                outcome = str(exc)
+            else:
+                outcome = "accepted"
+            with lock:
+                outcomes.append(outcome)
+
+        threads = [threading.Thread(target=finish) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(outcomes.count("accepted"), 1)
+        self.assertEqual(outcomes.count("invalid_provider_permit"), 1)
+
+        with self.assertRaisesRegex(ValueError, "invalid_provider_permit"):
+            exa.record_failure(permit)
+
     def test_failure_codes_are_allowlisted_and_never_include_cause(self) -> None:
         secret = "provider-secret-canary"
         error = ProviderAdapterError("model_failed", provider="gemini", cause=RuntimeError(secret))

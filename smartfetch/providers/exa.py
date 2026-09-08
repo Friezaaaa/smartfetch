@@ -13,7 +13,7 @@ import socket
 from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
 
-import requests
+import httpx
 
 from ..costs import ProviderUsage, UsageAccountingError
 from ..provider_controls import RequestCostBudget, exa_cost_micro_usd
@@ -47,10 +47,10 @@ class ExaTransport(Protocol):
 
 
 class RequestsExaTransport:
-    """Documented Exa HTTPS transport with streaming response bounds and no retry."""
+    """Cancellable Exa HTTPS transport with streaming bounds and no retry."""
 
-    def __init__(self, session: requests.Session | None = None) -> None:
-        self._session = session or requests.Session()
+    def __init__(self, http_transport: httpx.AsyncBaseTransport | None = None) -> None:
+        self._http_transport = http_transport
 
     async def search(
         self,
@@ -60,34 +60,25 @@ class RequestsExaTransport:
         timeout_seconds: float,
         max_response_bytes: int,
     ) -> ExaHTTPResponse:
-        return await asyncio.to_thread(
-            self._search_sync,
-            api_key,
-            payload,
-            timeout_seconds,
-            max_response_bytes,
-        )
-
-    def _search_sync(
-        self,
-        api_key: str,
-        payload: dict[str, Any],
-        timeout_seconds: float,
-        max_response_bytes: int,
-    ) -> ExaHTTPResponse:
-        with self._session.post(
-            EXA_SEARCH_ENDPOINT,
-            headers={"x-api-key": api_key, "Content-Type": "application/json"},
-            json=payload,
-            stream=True,
-            timeout=(min(5.0, timeout_seconds), timeout_seconds),
-        ) as response:
-            body = bytearray()
-            for chunk in response.iter_content(chunk_size=16_384):
-                body.extend(chunk)
-                if len(body) > max_response_bytes:
-                    raise ProviderAdapterError("invalid_provider_output", provider="exa")
-            return ExaHTTPResponse(response.status_code, bytes(body))
+        timeout = httpx.Timeout(timeout_seconds, connect=min(5.0, timeout_seconds))
+        async with httpx.AsyncClient(
+            transport=self._http_transport,
+            follow_redirects=False,
+            timeout=timeout,
+            trust_env=False,
+        ) as client:
+            async with client.stream(
+                "POST",
+                EXA_SEARCH_ENDPOINT,
+                headers={"x-api-key": api_key, "Content-Type": "application/json"},
+                json=payload,
+            ) as response:
+                body = bytearray()
+                async for chunk in response.aiter_bytes(chunk_size=16_384):
+                    if len(body) + len(chunk) > max_response_bytes:
+                        raise ProviderAdapterError("invalid_provider_output", provider="exa")
+                    body.extend(chunk)
+                return ExaHTTPResponse(response.status_code, bytes(body))
 
 
 class ExaSearchProvider:
@@ -106,7 +97,11 @@ class ExaSearchProvider:
             raise ValueError("invalid_provider_config")
         if type(config) is not ProviderConfig or config.provider != "exa":
             raise ValueError("invalid_provider_config")
-        if type(circuit) is not ProviderCircuitBreaker or type(budget) is not RequestCostBudget:
+        if (
+            type(circuit) is not ProviderCircuitBreaker
+            or circuit.provider != "exa"
+            or type(budget) is not RequestCostBudget
+        ):
             raise ValueError("invalid_provider_config")
         self._mode = mode
         self._config = config
@@ -148,7 +143,7 @@ class ExaSearchProvider:
             _release_quietly(self._budget, reservation)
             self._circuit.record_failure(permit)
             raise
-        except (asyncio.TimeoutError, TimeoutError, requests.Timeout) as exc:
+        except (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException) as exc:
             _release_quietly(self._budget, reservation)
             self._circuit.record_failure(permit)
             raise ProviderAdapterError("provider_timeout", provider="exa", cause=exc) from None
@@ -156,7 +151,7 @@ class ExaSearchProvider:
             _release_quietly(self._budget, reservation)
             self._circuit.record_failure(permit)
             raise
-        except (requests.RequestException, TypeError, ValueError, UnicodeError, OverflowError) as exc:
+        except (httpx.RequestError, TypeError, ValueError, UnicodeError, OverflowError) as exc:
             _release_quietly(self._budget, reservation)
             self._circuit.record_failure(permit)
             raise ProviderAdapterError("search_failed", provider="exa", cause=exc) from None

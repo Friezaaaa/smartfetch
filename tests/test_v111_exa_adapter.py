@@ -1,7 +1,9 @@
+import asyncio
 from decimal import Decimal
 import json
 import unittest
-from unittest.mock import patch
+
+import httpx
 
 from smartfetch.provider_controls import RequestCostBudget
 from smartfetch.provider_health import ProviderAdapterError, ProviderCircuitBreaker, ProviderConfig
@@ -175,30 +177,13 @@ class ExaAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(budget.spent_micro_usd, 0)
 
     async def test_requests_transport_uses_one_streaming_call_and_enforces_cap(self) -> None:
-        class Response:
-            status_code = 200
+        calls: list[httpx.Request] = []
 
-            def __enter__(self):
-                return self
+        async def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(200, content=b"123456", request=request)
 
-            def __exit__(self, *args):
-                return False
-
-            def iter_content(self, *, chunk_size):
-                self.chunk_size = chunk_size
-                yield b"1234"
-                yield b"56"
-
-        class Session:
-            def __init__(self):
-                self.calls = []
-
-            def post(self, url, **kwargs):
-                self.calls.append((url, kwargs))
-                return Response()
-
-        session = Session()
-        transport = RequestsExaTransport(session=session)
+        transport = RequestsExaTransport(http_transport=httpx.MockTransport(handler))
         result = await transport.search(
             api_key="transport-secret-canary",
             payload={"query": "q"},
@@ -206,13 +191,12 @@ class ExaAdapterTests(unittest.IsolatedAsyncioTestCase):
             max_response_bytes=6,
         )
         self.assertEqual(result.body, b"123456")
-        self.assertEqual(len(session.calls), 1)
-        url, kwargs = session.calls[0]
-        self.assertEqual(url, "https://api.exa.ai/search")
-        self.assertTrue(kwargs["stream"])
-        self.assertEqual(kwargs["timeout"], (5.0, 10.0))
-        self.assertEqual(kwargs["headers"]["x-api-key"], "transport-secret-canary")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(str(calls[0].url), "https://api.exa.ai/search")
+        self.assertEqual(calls[0].headers["x-api-key"], "transport-secret-canary")
+        self.assertEqual(json.loads(calls[0].content), {"query": "q"})
 
+        transport = RequestsExaTransport(http_transport=httpx.MockTransport(handler))
         with self.assertRaisesRegex(ProviderAdapterError, "invalid_provider_output"):
             await transport.search(
                 api_key="transport-secret-canary",
@@ -220,20 +204,77 @@ class ExaAdapterTests(unittest.IsolatedAsyncioTestCase):
                 timeout_seconds=10.0,
                 max_response_bytes=5,
             )
-        self.assertEqual(len(session.calls), 2)
+        self.assertEqual(len(calls), 2)
 
-    async def test_missing_config_never_reaches_real_requests_boundary(self) -> None:
-        with patch("requests.Session.post", side_effect=AssertionError("provider-network-canary")) as post:
-            config = ProviderConfig("exa", None, 10.0, 1024, 10_000)
-            provider = ExaSearchProvider(
-                mode="results",
-                config=config,
-                circuit=ProviderCircuitBreaker(provider="exa"),
-                budget=RequestCostBudget(max_total_micro_usd=10_000),
+    async def test_async_transport_cancellation_closes_stream_without_background_work(self) -> None:
+        started = asyncio.Event()
+
+        class BlockingStream(httpx.AsyncByteStream):
+            def __init__(self) -> None:
+                self.closed = False
+                self.work_after_cancel = False
+
+            async def __aiter__(self):
+                started.set()
+                yield b"{"
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    self.work_after_cancel = False
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+        stream = BlockingStream()
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, stream=stream, request=request)
+
+        transport = RequestsExaTransport(http_transport=httpx.MockTransport(handler))
+        task = asyncio.create_task(
+            transport.search(
+                api_key="transport-secret-canary",
+                payload={"query": "q"},
+                timeout_seconds=10.0,
+                max_response_bytes=1024,
             )
-            with self.assertRaisesRegex(ProviderAdapterError, "provider_unavailable"):
-                await provider.search(SearchRequest("q", 1, (), None))
-            post.assert_not_called()
+        )
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertTrue(stream.closed)
+        self.assertFalse(stream.work_after_cancel)
+
+    def test_provider_rejects_a_circuit_for_the_other_provider(self) -> None:
+        with self.assertRaisesRegex(ValueError, "invalid_provider_config"):
+            ExaSearchProvider(
+                mode="results",
+                config=ProviderConfig("exa", "key", 10.0, 1024, 20_000),
+                circuit=ProviderCircuitBreaker(provider="gemini"),
+                budget=RequestCostBudget(max_total_micro_usd=20_000),
+                transport=FakeExaTransport(ExaHTTPResponse(200, response_body())),
+            )
+
+    async def test_missing_config_never_reaches_real_httpx_boundary(self) -> None:
+        calls = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            raise AssertionError("provider-network-canary")
+
+        config = ProviderConfig("exa", None, 10.0, 1024, 10_000)
+        provider = ExaSearchProvider(
+            mode="results",
+            config=config,
+            circuit=ProviderCircuitBreaker(provider="exa"),
+            budget=RequestCostBudget(max_total_micro_usd=10_000),
+            transport=RequestsExaTransport(http_transport=httpx.MockTransport(handler)),
+        )
+        with self.assertRaisesRegex(ProviderAdapterError, "provider_unavailable"):
+            await provider.search(SearchRequest("q", 1, (), None))
+        self.assertEqual(calls, 0)
 
     async def test_invalid_inputs_and_provider_fields_fail_closed(self) -> None:
         provider, transport, _, _ = make_provider()

@@ -1,5 +1,11 @@
+import asyncio
+import gzip
 import json
+import os
 import unittest
+from unittest.mock import patch
+
+import httpx
 
 from smartfetch.model_routing import BenchmarkModelRouter, GEMINI_WORKLOADS
 from smartfetch.provider_controls import RequestCostBudget
@@ -27,7 +33,7 @@ class FakeGeminiTransport:
         self.response = response
         self.calls: list[tuple[dict[str, object], float]] = []
 
-    async def create_interaction(self, *, payload, timeout_seconds):
+    async def create_interaction(self, *, payload, timeout_seconds, max_response_bytes):
         self.calls.append((payload, timeout_seconds))
         if isinstance(self.response, BaseException):
             raise self.response
@@ -118,8 +124,36 @@ class GeminiAdapterTests(unittest.IsolatedAsyncioTestCase):
         result = await provider.extract_text(StructuredTextRequest(schema, None, (("s1", "Example page"),)))
         self.assertEqual(result.data, {"title": "Example"})
         payload, _ = transport.calls[0]
-        self.assertEqual(payload["response_format"]["type"], "json_schema")
-        self.assertEqual(payload["response_format"]["json_schema"]["properties"]["data"], schema)
+        self.assertEqual(
+            payload["response_format"],
+            {
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "data": schema,
+                        "evidence": {
+                            "type": "array",
+                            "maxItems": 100,
+                            "items": {"type": "object"},
+                        },
+                        "missing_fields": {
+                            "type": "array",
+                            "maxItems": 64,
+                            "items": {"type": "string", "maxLength": 256},
+                        },
+                        "uncertainties": {
+                            "type": "array",
+                            "maxItems": 64,
+                            "items": {"type": "object"},
+                        },
+                    },
+                    "required": ["data", "evidence", "missing_fields", "uncertainties"],
+                    "additionalProperties": False,
+                },
+            },
+        )
         self.assertIs(payload["store"], False)
         self.assertIs(payload["stream"], False)
         self.assertEqual(payload["tools"], [])
@@ -248,60 +282,237 @@ class GeminiAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(str(caught.exception), "invalid_provider_output")
         self.assertNotIn("canary", repr(caught.exception))
 
+    async def test_all_required_usage_fields_must_be_present_and_exact(self) -> None:
+        valid_body = json.dumps({"answer": "a", "claims": [], "citations": []})
+        required = (
+            "total_input_tokens",
+            "total_output_tokens",
+            "total_thought_tokens",
+            "total_tool_use_tokens",
+            "input_tokens_by_modality",
+        )
+        malformed = []
+        for name in required:
+            usage = dict(USAGE)
+            usage.pop(name)
+            malformed.append(usage)
+        malformed.extend(
+            (
+                {**USAGE, "total_input_tokens": True},
+                {**USAGE, "total_output_tokens": "20"},
+                {**USAGE, "total_thought_tokens": -1},
+                {**USAGE, "input_tokens_by_modality": {"TEXT": 100}},
+            )
+        )
+        for usage in malformed:
+            with self.subTest(keys=tuple(sorted(usage))):
+                provider, transport, circuit, budget = make_provider(
+                    GeminiInteractionResponse(valid_body, usage)
+                )
+                with self.assertRaises(ProviderAdapterError) as caught:
+                    await provider.synthesize_answer(AnswerRequest("q", (("s1", "text"),)))
+                self.assertEqual(caught.exception.code, "invalid_provider_output")
+                self.assertEqual(len(transport.calls), 1)
+                self.assertEqual(budget.spent_micro_usd, 0)
+                self.assertEqual(budget.reserved_micro_usd, 0)
+                self.assertEqual(circuit.state, "open")
+
+    async def test_valid_usage_is_accounted_once_before_semantic_validation(self) -> None:
+        cases = (
+            "not-json-provider-output-canary",
+            json.dumps(
+                {
+                    "answer": "a",
+                    "claims": [{"text": "unsupported", "citation_ids": ["c1"]}],
+                    "citations": [{"citation_id": "c1", "source_id": "missing"}],
+                }
+            ),
+        )
+        for body in cases:
+            with self.subTest(body_is_json=body.startswith("{")):
+                provider, transport, circuit, budget = make_provider(
+                    GeminiInteractionResponse(body, USAGE)
+                )
+                with self.assertRaises(ProviderAdapterError) as caught:
+                    await provider.synthesize_answer(AnswerRequest("q", (("s1", "text"),)))
+                self.assertEqual(caught.exception.code, "invalid_provider_output")
+                self.assertEqual(len(transport.calls), 1)
+                self.assertEqual(budget.spent_micro_usd, 338)
+                self.assertEqual(budget.reserved_micro_usd, 0)
+                self.assertEqual(circuit.state, "open")
+
+    def test_provider_rejects_a_circuit_for_the_other_provider(self) -> None:
+        with self.assertRaisesRegex(ValueError, "invalid_provider_config"):
+            GeminiProvider(
+                config=ProviderConfig("gemini", "key", 30.0, 65_536, 100_000),
+                circuit=ProviderCircuitBreaker(provider="exa"),
+                budget=RequestCostBudget(max_total_micro_usd=100_000),
+                router=BenchmarkModelRouter(routes=routes()),
+                text_workload="structured_search",
+                transport=FakeGeminiTransport(GeminiInteractionResponse("{}", USAGE)),
+            )
+
 
 class GoogleSDKBoundaryTests(unittest.IsolatedAsyncioTestCase):
-    async def test_official_sdk_boundary_receives_stateless_kwargs_without_duplication(self) -> None:
-        class UsageObject:
-            def model_dump(self, *, exclude_none: bool):
-                self.exclude_none = exclude_none
-                return dict(USAGE)
+    @staticmethod
+    def _interaction_body(output_text: str) -> bytes:
+        return json.dumps(
+            {
+                "id": "interaction-test",
+                "status": "completed",
+                "model": "gemini-3.8-flash",
+                "steps": [
+                    {
+                        "type": "model_output",
+                        "content": [{"type": "text", "text": output_text}],
+                    }
+                ],
+                "usage": USAGE,
+            }
+        ).encode()
 
-        class InteractionObject:
-            output_text = json.dumps(
-                {
-                    "answer": "ok",
-                    "claims": [{"text": "ok", "citation_ids": ["c1"]}],
-                    "citations": [{"citation_id": "c1", "source_id": "s1"}],
-                }
+    async def test_official_sdk_serializer_uses_fixed_endpoint_and_interactions_format(self) -> None:
+        seen: dict[str, object] = {}
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            seen["url"] = str(request.url)
+            seen["body"] = json.loads(request.content)
+            seen["accept_encoding"] = request.headers.get("accept-encoding")
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                content=self._interaction_body("{}"),
+                request=request,
             )
-            usage = UsageObject()
 
-        class Interactions:
-            def __init__(self):
-                self.calls = []
-
-            async def create(self, **kwargs):
-                self.calls.append(kwargs)
-                return InteractionObject()
-
-        class Client:
-            def __init__(self):
-                self.aio = type("Aio", (), {})()
-                self.aio.interactions = Interactions()
-
-        client = Client()
-        sdk_transport = GoogleGenAIInteractionsTransport(
-            api_key="sdk-test-secret-canary",
-            client=client,
+        with patch.dict(
+            os.environ,
+            {
+                "GOOGLE_GEMINI_BASE_URL": "https://redirect-canary.invalid",
+                "GEMINI_API_BASE_URL": "https://another-canary.invalid",
+            },
+        ):
+            transport = GoogleGenAIInteractionsTransport(
+                api_key="sdk-test-secret-canary",
+                http_transport=httpx.MockTransport(handler),
+                max_response_bytes=65_536,
+            )
+            response = await transport.create_interaction(
+                payload={
+                    "model": "gemini-3.8-flash",
+                    "input": [{"type": "text", "text": "x"}],
+                    "response_format": {
+                        "type": "text",
+                        "mime_type": "application/json",
+                        "schema": {"type": "object"},
+                    },
+                    "generation_config": {"thinking_level": "low", "max_output_tokens": 64},
+                    "tools": [],
+                    "store": False,
+                    "stream": False,
+                },
+                timeout_seconds=30.0,
+                max_response_bytes=65_536,
+            )
+        self.assertEqual(response.output_text, "{}")
+        self.assertEqual(seen["url"], "https://generativelanguage.googleapis.com/v1beta/interactions")
+        sent = seen["body"]
+        self.assertIsInstance(sent, dict)
+        self.assertEqual(
+            sent["response_format"],
+            {"type": "text", "mime_type": "application/json", "schema": {"type": "object"}},
         )
-        provider, _, circuit, budget = make_provider(GeminiInteractionResponse("{}", USAGE))
-        provider = GeminiProvider(
-            config=ProviderConfig("gemini", "sdk-test-secret-canary", 30.0, 65_536, 100_000),
-            circuit=circuit,
-            budget=budget,
-            router=BenchmarkModelRouter(routes=routes()),
-            transport=sdk_transport,
-            text_workload="structured_search",
-        )
-        await provider.synthesize_answer(AnswerRequest("q", (("s1", "text"),)))
-        self.assertEqual(len(client.aio.interactions.calls), 1)
-        sent = client.aio.interactions.calls[0]
         self.assertIs(sent["store"], False)
         self.assertIs(sent["stream"], False)
         self.assertEqual(sent["tools"], [])
         self.assertNotIn("previous_interaction_id", sent)
         self.assertNotIn("background", sent)
-        self.assertEqual(sent["timeout"], 30.0)
+        self.assertNotIn("redirect-canary", str(seen))
+        self.assertEqual(seen["accept_encoding"], "identity")
+
+    async def test_sdk_response_cap_stops_and_closes_before_full_buffering(self) -> None:
+        class OversizedStream(httpx.AsyncByteStream):
+            def __init__(self) -> None:
+                self.closed = False
+                self.final_chunk_read = False
+
+            async def __aiter__(self):
+                yield b"{" + b"x" * 31
+                yield b"y" * 32
+                self.final_chunk_read = True
+                yield b"}"
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+        stream = OversizedStream()
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                stream=stream,
+                request=request,
+            )
+
+        transport = GoogleGenAIInteractionsTransport(
+            api_key="sdk-test-secret-canary",
+            http_transport=httpx.MockTransport(handler),
+            max_response_bytes=48,
+        )
+        with self.assertRaisesRegex(ValueError, "invalid_provider_output"):
+            await transport.create_interaction(
+                payload={
+                    "model": "gemini-3.8-flash",
+                    "input": "x",
+                    "response_format": {
+                        "type": "text",
+                        "mime_type": "application/json",
+                        "schema": {"type": "object"},
+                    },
+                    "store": False,
+                    "stream": False,
+                },
+                timeout_seconds=30.0,
+                max_response_bytes=48,
+            )
+        self.assertTrue(stream.closed)
+        self.assertFalse(stream.final_chunk_read)
+
+    async def test_sdk_response_cap_cannot_be_bypassed_by_compression(self) -> None:
+        expanded = self._interaction_body("A" * 10_000)
+        compressed = gzip.compress(expanded)
+        self.assertLess(len(compressed), 512)
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json", "content-encoding": "gzip"},
+                content=compressed,
+                request=request,
+            )
+
+        transport = GoogleGenAIInteractionsTransport(
+            api_key="sdk-test-secret-canary",
+            http_transport=httpx.MockTransport(handler),
+            max_response_bytes=512,
+        )
+        with self.assertRaisesRegex(ValueError, "invalid_provider_output"):
+            await transport.create_interaction(
+                payload={
+                    "model": "gemini-3.8-flash",
+                    "input": "x",
+                    "response_format": {
+                        "type": "text",
+                        "mime_type": "application/json",
+                        "schema": {"type": "object"},
+                    },
+                    "store": False,
+                    "stream": False,
+                },
+                timeout_seconds=30.0,
+                max_response_bytes=512,
+            )
 
 
 if __name__ == "__main__":

@@ -85,10 +85,11 @@ class ProviderConfig:
 
 
 class ProviderCallPermit:
-    __slots__ = ("_owner", "probe")
+    __slots__ = ("_active", "_owner", "probe")
 
     def __init__(self, owner: "ProviderCircuitBreaker", *, probe: bool) -> None:
         self._owner = owner
+        self._active = True
         self.probe = probe
 
 
@@ -129,6 +130,10 @@ class ProviderCircuitBreaker:
         with self._lock:
             return self._state
 
+    @property
+    def provider(self) -> ProviderName:
+        return self._provider
+
     def require_available(self) -> None:
         """Readiness check that performs no provider work and reserves no probe."""
         with self._lock:
@@ -150,24 +155,29 @@ class ProviderCircuitBreaker:
             return ProviderCallPermit(self, probe=False)
 
     def record_success(self, permit: ProviderCallPermit) -> None:
-        self._require_permit(permit)
         with self._lock:
+            self._consume_permit(permit)
             self._state = "closed"
             self._failures = 0
             self._probe_active = False
 
     def record_failure(self, permit: ProviderCallPermit) -> None:
-        self._require_permit(permit)
         with self._lock:
+            self._consume_permit(permit)
             self._failures += 1
             if permit.probe or self._failures >= self._failure_threshold:
                 self._state = "open"
                 self._opened_at = self._clock()
             self._probe_active = False
 
-    def _require_permit(self, permit: ProviderCallPermit) -> None:
-        if type(permit) is not ProviderCallPermit or permit._owner is not self:
+    def _consume_permit(self, permit: ProviderCallPermit) -> None:
+        if (
+            type(permit) is not ProviderCallPermit
+            or permit._owner is not self
+            or not permit._active
+        ):
             raise ValueError("invalid_provider_permit")
+        permit._active = False
 
 
 __all__ = [
