@@ -9,7 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MAX_CONCURRENT_FETCHES=4
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends chromium ca-certificates \
+ && apt-get install -y --no-install-recommends chromium ca-certificates ffmpeg=7:7.1.5-0+deb13u1 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
