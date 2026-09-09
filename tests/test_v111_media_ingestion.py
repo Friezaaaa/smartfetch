@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 from PIL import Image
 from pypdf import PdfWriter
@@ -15,6 +16,7 @@ from smartfetch.media import (
     MEDIA_LIMITS,
     DownloadedMedia,
     MediaFailure,
+    PinnedTarget,
     ProviderFileRef,
     choose_delivery,
     inspect_image,
@@ -28,6 +30,15 @@ from smartfetch.media import (
 )
 
 
+def _target(value):
+    parsed = urlsplit(value)
+    return PinnedTarget(value, parsed.hostname or "example.com", parsed.port or 443, ("8.8.8.8",))
+
+
+def _echo_fetch(url, *, force_browser, max_chars):
+    return {"success": True, "url": url, "force_browser": force_browser, "max_chars": max_chars}
+
+
 class _Response:
     def __init__(self, *, status=200, headers=None, chunks=()):
         self.status_code = status
@@ -35,7 +46,7 @@ class _Response:
         self._chunks = chunks
         self.closed = False
 
-    async def iter_bytes(self):
+    async def aiter_bytes(self):
         for chunk in self._chunks:
             if isinstance(chunk, BaseException):
                 raise chunk
@@ -50,8 +61,8 @@ class _Transport:
         self.responses = list(responses)
         self.urls = []
 
-    async def open(self, url, *, connect_timeout, read_timeout):
-        self.urls.append(url)
+    async def open(self, target, *, connect_timeout, read_timeout):
+        self.urls.append(target.url)
         return self.responses.pop(0)
 
 
@@ -98,7 +109,7 @@ class DownloadTests(unittest.IsolatedAsyncioTestCase):
     async def test_ingestion_inspects_before_yield_and_cleans_afterward(self):
         output = io.BytesIO(); Image.new("RGB", (4, 5), "white").save(output, format="PNG")
         response = _Response(headers={"content-type": "image/png"}, chunks=[output.getvalue()])
-        with patch("smartfetch.media.validate_public_url", side_effect=lambda value: value):
+        with patch("smartfetch.media._resolve_public_target", side_effect=_target):
             async with ingest_remote_media(
                 "https://public.example/image", "image", transport=_Transport([response])
             ) as item:
@@ -109,17 +120,16 @@ class DownloadTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_http_source_is_rejected_before_transport(self):
         transport = _Transport([])
-        with patch("smartfetch.media.validate_public_url", side_effect=lambda value: value):
-            with self.assertRaisesRegex(MediaFailure, "^invalid_source_url$"):
-                async with media_download("http://public.example/media", "image", transport=transport):
-                    pass
+        with self.assertRaisesRegex(MediaFailure, "^invalid_source_url$"):
+            async with media_download("http://public.example/media", "image", transport=transport):
+                pass
         self.assertEqual(transport.urls, [])
 
     async def test_streams_to_restrictive_random_temp_and_cleans(self):
         response = _Response(headers={"content-type": "image/png", "content-length": "8"},
                              chunks=[b"\x89PNG", b"data"])
         transport = _Transport([response])
-        with patch("smartfetch.media.validate_public_url", side_effect=lambda value: value) as validate:
+        with patch("smartfetch.media._resolve_public_target", side_effect=_target) as validate:
             async with media_download("https://public.example/a?secret=CANARY", "image", transport=transport) as item:
                 path = item.path
                 self.assertTrue(path.exists())
@@ -135,7 +145,7 @@ class DownloadTests(unittest.IsolatedAsyncioTestCase):
         redirect = _Response(status=302, headers={"location": "https://next.example/media"})
         final = _Response(headers={"content-type": "application/pdf"}, chunks=[b"%PDF-1.7"])
         transport = _Transport([redirect, final])
-        with patch("smartfetch.media.validate_public_url", side_effect=lambda value: value) as validate:
+        with patch("smartfetch.media._resolve_public_target", side_effect=_target) as validate:
             async with media_download("https://first.example/start", "pdf", transport=transport):
                 pass
         self.assertEqual(validate.call_count, 2)
@@ -143,8 +153,8 @@ class DownloadTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_redirect_ssrf_rejection_stops_before_second_open(self):
         transport = _Transport([_Response(status=302, headers={"location": "https://blocked.invalid/media"})])
-        with patch("smartfetch.media.validate_public_url", side_effect=[
-            "https://public.example/media", ValueError("CANARY-private-address")
+        with patch("smartfetch.media._resolve_public_target", side_effect=[
+            _target("https://public.example/media"), MediaFailure("invalid_source_url")
         ]):
             with self.assertRaisesRegex(MediaFailure, "^invalid_source_url$") as caught:
                 async with media_download("https://public.example/media", "video", transport=transport):
@@ -158,7 +168,7 @@ class DownloadTests(unittest.IsolatedAsyncioTestCase):
             for index in range(6)
         ]
         transport = _Transport(responses)
-        with patch("smartfetch.media.validate_public_url", side_effect=lambda value: value):
+        with patch("smartfetch.media._resolve_public_target", side_effect=_target):
             with self.assertRaisesRegex(MediaFailure, "^retrieval_failed$"):
                 async with media_download("https://example.com/0", "pdf", transport=transport):
                     pass
@@ -173,7 +183,7 @@ class DownloadTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(headers=response.headers):
                 transport = _Transport([response])
                 with tempfile.TemporaryDirectory() as directory, \
-                     patch("smartfetch.media.validate_public_url", side_effect=lambda value: value), \
+                     patch("smartfetch.media._resolve_public_target", side_effect=_target), \
                      patch("smartfetch.media.tempfile.tempdir", directory):
                     with self.assertRaisesRegex(MediaFailure, "^source_too_large$"):
                         async with media_download("https://example.com/media", "image", transport=transport):
@@ -182,7 +192,7 @@ class DownloadTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_false_content_type_fails_before_body(self):
         response = _Response(headers={"content-type": "text/html"}, chunks=[b"CANARY"])
-        with patch("smartfetch.media.validate_public_url", side_effect=lambda value: value):
+        with patch("smartfetch.media._resolve_public_target", side_effect=_target):
             with self.assertRaisesRegex(MediaFailure, "^unsupported_media_type$"):
                 async with media_download("https://example.com/media", "pdf", transport=_Transport([response])):
                     pass
@@ -193,7 +203,7 @@ class DownloadTests(unittest.IsolatedAsyncioTestCase):
             async with media_download("https://example.com/media", "image", transport=transport) as item:
                 await asyncio.sleep(0)
                 return item.path
-        with patch("smartfetch.media.validate_public_url", side_effect=lambda value: value):
+        with patch("smartfetch.media._resolve_public_target", side_effect=_target):
             first, second = await asyncio.gather(one(b"a"), one(b"b"))
         self.assertNotEqual(first, second)
         self.assertFalse(first.exists())
@@ -202,15 +212,16 @@ class DownloadTests(unittest.IsolatedAsyncioTestCase):
     async def test_cleanup_failure_prevents_success(self):
         response = _Response(headers={"content-type": "image/png"}, chunks=[b"data"])
         path = None
-        with patch("smartfetch.media.validate_public_url", side_effect=lambda value: value):
+        with patch("smartfetch.media._resolve_public_target", side_effect=_target):
             with self.assertRaisesRegex(MediaFailure, "^retrieval_failed$"):
-                with patch.object(Path, "unlink", side_effect=OSError("CANARY-private-path")):
+                with patch("smartfetch.media._cleanup_workspace", return_value=False):
                     async with media_download(
                         "https://example.com/media", "image", transport=_Transport([response])
                     ) as item:
                         path = item.path
         self.assertIsNotNone(path)
-        path.unlink(missing_ok=True)
+        import shutil
+        shutil.rmtree(path.parent)
 
 
 class InspectionTests(unittest.TestCase):
@@ -288,8 +299,19 @@ class InspectionTests(unittest.TestCase):
 
 
 class FfprobeBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    class Writer:
+        def write(self, value):
+            return None
+        async def drain(self):
+            return None
+        def close(self):
+            return None
+        async def wait_closed(self):
+            return None
+
     class Process:
         def __init__(self, stdout, stderr=b"", returncode=0):
+            self.stdin = FfprobeBoundaryTests.Writer()
             self.stdout = asyncio.StreamReader(); self.stdout.feed_data(stdout); self.stdout.feed_eof()
             self.stderr = asyncio.StreamReader(); self.stderr.feed_data(stderr); self.stderr.feed_eof()
             self.returncode = None
@@ -307,12 +329,16 @@ class FfprobeBoundaryTests(unittest.IsolatedAsyncioTestCase):
         captured = {}
         async def create(*args, **kwargs):
             captured["args"] = args; captured["kwargs"] = kwargs; return process
-        with patch("smartfetch.media.shutil.which", return_value="/usr/bin/ffprobe"), \
-             patch("smartfetch.media.asyncio.create_subprocess_exec", side_effect=create):
-            result = await run_ffprobe(Path("private-file.bin"))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private-file.bin"
+            path.write_bytes(b"media")
+            with patch("smartfetch.media.shutil.which", return_value="/usr/bin/ffprobe"), \
+                 patch("smartfetch.media.asyncio.create_subprocess_exec", side_effect=create):
+                result = await run_ffprobe(path)
         self.assertEqual(result["format"]["duration"], "1")
         self.assertEqual(captured["args"][0], "/usr/bin/ffprobe")
-        self.assertIn("file,pipe", captured["args"])
+        self.assertIn("pipe", captured["args"])
+        self.assertIn("pipe:0", captured["args"])
         self.assertNotIn("shell", captured["kwargs"])
         self.assertEqual(captured["kwargs"]["env"], {"LANG": "C", "LC_ALL": "C"})
 
@@ -400,25 +426,22 @@ class ProviderFileLifecycleTests(unittest.IsolatedAsyncioTestCase):
             async def delete(self, file_id):
                 self.calls.append("delete")
                 await asyncio.Future()
-        client = HungClient()
+        client = HungClient(readback="present")
         with patch("smartfetch.media.PROVIDER_FILE_TIMEOUT_SECONDS", 0.01):
             with self.assertRaisesRegex(MediaFailure, "^provider_cleanup_failed$"):
                 async with transient_provider_file(client, Path("ignored"), "application/pdf"):
                     pass
-        self.assertEqual(client.calls, ["upload", "delete"])
+        self.assertEqual(client.calls, ["upload", "delete", "get"])
 
 
 class WebpageModeTests(unittest.IsolatedAsyncioTestCase):
     async def test_auto_and_always_reuse_existing_engine(self):
-        calls = []
-        def fetch(url, *, force_browser, max_chars):
-            calls.append((url, force_browser, max_chars)); return {"success": True}
-        self.assertTrue((await retrieve_webpage("https://example.com", "auto", fetcher=fetch))["success"])
-        self.assertTrue((await retrieve_webpage("https://example.com", "always", fetcher=fetch))["success"])
-        self.assertEqual(calls, [("https://example.com", False, 50_000), ("https://example.com", True, 50_000)])
+        automatic = await retrieve_webpage("https://example.com", "auto", fetcher=_echo_fetch)
+        forced = await retrieve_webpage("https://example.com", "always", fetcher=_echo_fetch)
+        self.assertEqual((automatic["force_browser"], automatic["max_chars"]), (False, 50_000))
+        self.assertEqual((forced["force_browser"], forced["max_chars"]), (True, 50_000))
         with self.assertRaisesRegex(MediaFailure, "^invalid_request$"):
-            await retrieve_webpage("https://example.com", "never", fetcher=fetch)
-        self.assertEqual(len(calls), 2)
+            await retrieve_webpage("https://example.com", "never", fetcher=_echo_fetch)
 
 
 if __name__ == "__main__":
