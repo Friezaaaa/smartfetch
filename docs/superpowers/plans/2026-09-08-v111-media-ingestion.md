@@ -2,9 +2,9 @@
 
 > Execute test-first in the isolated `feat/v1.11-media-ingestion` worktree. This stage adds internal foundations only; it must not expose routes, tools, payments, or provider calls.
 
-**Goal:** Add privacy-safe, request-local ingestion and validation for image, PDF, audio, and video inputs, plus bounded inline accounting and a fail-closed transient provider-file lifecycle.
+**Goal:** Add privacy-safe, request-local ingestion and validation for image, PDF, audio, and video inputs, plus bounded inline-only request accounting.
 
-**Architecture:** A new internal media package owns immutable limits, finite failures, byte-signature classification, streaming download/temp-file lifecycle, format inspectors, and prepared-media decisions. It reuses `validate_public_url` at every URL/redirect boundary and injects transports, subprocess runners, retrieval callables, and provider-file clients so tests make no network/provider calls. Existing Stage 1–2 contracts and all public server surfaces remain untouched.
+**Architecture:** A new internal media package owns immutable limits, finite failures, byte-signature classification, streaming download/temp-file lifecycle, format inspectors, and inline prepared-media decisions. It reuses `validate_public_url` at every URL/redirect boundary and injects transports, subprocess runners, and retrieval callables so tests make no network/provider calls. Existing Stage 1–2 contracts and all public server surfaces remain untouched. V1.11 never uses the Gemini Files API or persists media remotely.
 
 **Dependencies:** `Pillow==12.3.0`, `pypdf==6.18.0`, and the Debian `ffmpeg` system package providing `ffprobe`.
 
@@ -43,13 +43,12 @@
 - [ ] Parse only allowlisted JSON fields and emit finite safe failures.
 - [ ] Run audio/video tests GREEN.
 
-## Task 5: Prepared media and transient Files API lifecycle
+## Task 5: Prepared inline media
 
-- [ ] Add RED tests for complete 18,000,000-byte inline accounting including base64/schema/prompt/instructions.
-- [ ] Prove images never use provider files; oversized permitted PDF/audio/video selects provider-file lifecycle.
-- [ ] Add RED fake-client tests proving request-local identifiers, deletion in `finally` after success/failure/timeout/cancellation, one bounded read-back only when deletion is inconclusive, and fail-closed cleanup errors.
-- [ ] Implement inert client protocols and a transient lifecycle abstraction with no provider SDK calls, credentials, retries, retained state, or background work.
-- [ ] Run lifecycle tests GREEN.
+- [ ] Add RED tests for complete 100,000,000-byte inline request accounting including base64/schema/prompt/instructions, with exact-limit acceptance and limit-plus-one rejection.
+- [ ] Enforce the 50,000,000-byte official PDF ceiling in addition to SmartFetch's lower 20 MiB source cap.
+- [ ] Prove image, PDF, audio, and video decisions are inline-only and no Files API abstraction, upload, polling, deletion, read-back, provider SDK call, credential, retained state, or background work exists.
+- [ ] Run inline-delivery tests GREEN.
 
 ## Task 6: New webpage render-mode adapter
 

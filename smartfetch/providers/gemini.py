@@ -34,7 +34,7 @@ from ..provider_types import (
 
 
 TextWorkload = Literal["structured_search", "webpage"]
-MAX_GEMINI_REQUEST_BYTES = 18_000_000
+MAX_GEMINI_REQUEST_BYTES = 100_000_000
 GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com"
 _STRUCTURED_KEYS = {"data", "evidence", "missing_fields", "uncertainties"}
 _ANSWER_KEYS = {"answer", "claims", "citations"}

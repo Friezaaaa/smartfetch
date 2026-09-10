@@ -40,7 +40,6 @@ FailureCode = Literal[
     "search_failed",
     "retrieval_failed",
     "model_failed",
-    "provider_cleanup_failed",
     "provider_unavailable",
     "capacity_unavailable",
     "provider_timeout",

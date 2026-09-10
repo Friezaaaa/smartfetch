@@ -569,7 +569,7 @@ returns raw provider exceptions. Stable codes and HTTP statuses are:
 | 413 | `source_too_large`, `schema_too_large` |
 | 415 | `unsupported_media_type` |
 | 422 | `invalid_provider_output`, `schema_validation_failed`, `evidence_validation_failed` |
-| 502 | `search_failed`, `retrieval_failed`, `model_failed`, `provider_cleanup_failed` |
+| 502 | `search_failed`, `retrieval_failed`, `model_failed` |
 | 503 | `provider_unavailable`, `capacity_unavailable` |
 | 504 | `provider_timeout`, `retrieval_timeout` |
 
@@ -655,10 +655,9 @@ Every Gemini `interactions.create` request must explicitly set `store=false`;
 API defaults are never sufficient. V1.11 provider adapters must not send
 `previous_interaction_id` or enable `background=true`. No Gemini prompt,
 schema, retrieved content, media analysis, model output, or interaction object
-may be intentionally stored for conversational reuse. These stateless-request
-requirements are separate from Gemini Files API upload and deletion: file
-deletion does not replace `store=false`, and `store=false` does not delete an
-uploaded file. Both protections apply when a request uses the Files API.
+may be intentionally stored for conversational reuse. V1.11 sends media inline
+only and does not use the Gemini Files API, so SmartFetch creates no remotely
+persisted provider file or file identifier.
 
 Outbound-request contract tests must enforce these settings across every
 Gemini adapter path. SDK updates or refactors must fail those tests if they
@@ -736,13 +735,15 @@ Gemini never receives a caller URL. SmartFetch first performs an HTTPS-only
 streaming download using the same public-target and per-redirect SSRF
 validation. Transport selection occurs only after local MIME and limit checks.
 
-Inline Gemini requests have a total request-size limit below 20 MB once base64
-expansion, schema, prompt, and instructions are included. SmartFetch computes
-the complete serialized request size before submission and uses inline data
-only when it is at most 18,000,000 bytes, leaving deterministic headroom below
-the provider limit. Larger permitted PDF, audio, and video inputs use the
-Gemini Files API. Images remain inline under the 10 MiB image cap; an image that
-cannot fit the complete inline request fails safely rather than being uploaded.
+V1.11 uses inline Gemini media exclusively. Google's current documented limits
+are 100 MB for an inline request/payload and 50 MB for a PDF. SmartFetch's own
+accepted source caps remain lower: image 10 MiB, PDF 20 MiB, audio 25 MiB, and
+video 50 MiB (about 69.9 MB after base64 encoding). Before any provider call,
+SmartFetch deterministically serializes or measures the complete outbound
+request, including base64, schema, prompt, instructions, and serialization
+overhead. A request above 100,000,000 bytes, or a PDF above 50,000,000 bytes,
+fails closed before provider work. No accepted media is uploaded to or
+persisted through a provider file service.
 
 Limits are checked from declared length, streamed byte count, MIME signature,
 and local inspection before Gemini invocation:
@@ -771,20 +772,10 @@ no network, bounded output capture, and a minimal environment.
 
 Temporary files are created with restrictive permissions in the process temp
 directory, never inside the repository, and deleted in `finally` on success,
-failure, timeout, and cancellation. For a Files API request, SmartFetch keeps
-the returned provider file identity only in private request-local memory and
-deletes it in the same `finally` block. Deletion is confirmed through the
-SDK's documented deletion result; if that result is not conclusive, SmartFetch
-performs one bounded read-back and requires a not-found result. Provider file
-names and URIs never enter logs, activity metadata, exceptions, or responses.
-
-If immediate provider deletion cannot be confirmed, the handler returns
-`provider_cleanup_failed`, does not deliver a success result, does not settle,
-and opens a short Gemini circuit. The bounded public message states only that
-Google automatically expires uploaded files after up to 48 hours. There is no
-cleanup retry. Media bytes and derived text are never cached. Download, media,
-search, and model concurrency use separate bounded semaphores so new workloads
-cannot exhaust the existing fetch/browser pools.
+failure, timeout, and cancellation. Media bytes and derived text are never
+cached or persisted remotely by SmartFetch. Download, media, search, and model
+concurrency use separate bounded semaphores so new workloads cannot exhaust the
+existing fetch/browser pools.
 
 ## 10. Payment and execution data flows
 
@@ -986,12 +977,11 @@ dependencies, pinned after compatibility checks, are:
 - system `ffprobe` from a pinned Debian `ffmpeg` package for audio/video
   duration and container validation.
 
-The Gemini Files API is a deliberate transient-media dependency for permitted
-PDF/audio/video inputs whose complete encoded inline request would exceed the
-18,000,000-byte SmartFetch threshold. Its upload identity stays request-local,
-its deletion is mandatory before success can be returned, and Google's
-documented automatic expiration of uploaded files after up to 48 hours is the
-bounded fallback if immediate deletion cannot be confirmed.
+The Gemini Files API is not used. Every permitted media request is inline and
+must pass the complete serialized 100,000,000-byte request limit before a
+provider call; PDFs additionally remain below both SmartFetch's 20 MiB source
+cap and Google's 50,000,000-byte PDF limit. Oversized requests fail closed
+without remote persistence.
 
 The implementation PR must resolve and freeze compatible stable versions
 without upgrading x402, CDP SDK, FastAPI, Uvicorn, MCP, or unrelated packages.
@@ -1056,9 +1046,8 @@ the next stage.
   mocked transport boundary for every Gemini path: `store` is explicitly
   boolean `false`, `previous_interaction_id` is absent, and `background` is
   absent or explicitly boolean `false`. No provider network call is made.
-  These assertions remain mandatory on SDK upgrades and refactors, including
-  Files API-backed analysis; checking only an isolated settings object is not
-  sufficient.
+  These assertions remain mandatory on SDK upgrades and refactors; checking
+  only an isolated settings object is not sufficient.
 - Contract tests use recorded synthetic provider objects with secrets and
   canaries to prove normalization and redaction.
 - Exa request parameters, result count, domains, freshness, highlights, timeout,
@@ -1084,9 +1073,8 @@ the next stage.
   temp-file cleanup are covered.
 - Over-limit PDF/audio/video fails before Gemini and without settlement.
 - Inline-size accounting includes base64, schema, prompt, instructions, and
-  serialization overhead. Larger permitted PDF/audio/video uses the Files API,
-  deletes the provider file in `finally`, and cannot settle when immediate
-  deletion is unconfirmed. Provider file identities never reach output/logs.
+  serialization overhead. Exact-limit requests are accepted; limit-plus-one
+  requests fail before Gemini. No Files API or provider-file identity exists.
 - Semaphore and timeout tests prove new pools cannot consume existing fetch or
   browser capacity.
 
@@ -1160,8 +1148,8 @@ is reviewable and preserves a passing main branch.
 
 ### PR 3 — safe media ingestion
 
-- Add bounded media downloader/inspectors, inline-size accounting, transient
-  Files API upload/deletion, and Docker `ffprobe` support.
+- Add bounded media downloader/inspectors, inline-only complete-request size
+  accounting, and Docker `ffprobe` support.
 - Map webpage `auto` and `always` directly to the existing retrieval engine.
 - Prove existing retrieval behavior and protected security tests are unchanged.
 
@@ -1280,11 +1268,11 @@ approval. These gates remain before a production V1.11 release:
   evidence, and failed/partial or all-missing/null results do not settle.
 - **Interaction privacy:** all Gemini creation requests explicitly disable
   storage, prohibit conversational continuation and background execution, and
-  retain outbound-request regression coverage independently of file cleanup.
+  retain outbound-request regression coverage.
 - **Media safety:** limits are enforced before Gemini; URLs are never delegated
-  to Gemini; temporary data is bounded and deleted; larger permitted
-  PDF/audio/video inputs use the Files API only with mandatory request-local
-  identity tracking and confirmed deletion.
+  to Gemini; temporary data is bounded and deleted; every accepted media input
+  is inline-only and the complete outbound request is bounded before provider
+  work. SmartFetch creates no remotely persisted provider file.
 - **Cost honesty:** provisional prices are not declared viable. January 2027
   rates, Exa plus Gemini costs, non-settled failure costs, and a 3× observed-
   worst-case gate are explicit. Operational P95 waits for approximately 100
@@ -1315,7 +1303,7 @@ approval. These gates remain before a production V1.11 release:
   <https://ai.google.dev/gemini-api/docs/pricing>
 - Gemini structured output:
   <https://ai.google.dev/gemini-api/docs/structured-output>
-- Gemini file input methods:
+- Gemini inline media input limits:
   <https://ai.google.dev/gemini-api/docs/file-input-methods>
 - Gemini media resolution:
   <https://ai.google.dev/gemini-api/docs/media-resolution>

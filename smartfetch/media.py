@@ -1,7 +1,7 @@
 """Private, bounded media-ingestion primitives for future V1.11 orchestration.
 
-This module exposes no route or tool. Network, subprocess, retrieval, and provider-file
-boundaries are injectable so callers can keep each operation request-local.
+This module exposes no route or tool. Network, subprocess, and retrieval boundaries
+are injectable so callers can keep each operation request-local.
 """
 
 from __future__ import annotations
@@ -18,8 +18,10 @@ import multiprocessing
 import os
 from pathlib import Path
 import shutil
+import signal
 import socket
 import stat
+import subprocess
 import tempfile
 import threading
 from types import MappingProxyType
@@ -36,14 +38,14 @@ from .security import validate_public_url
 
 
 MiB = 1024 * 1024
-INLINE_REQUEST_MAX_BYTES = 18_000_000
+GEMINI_INLINE_REQUEST_MAX_BYTES = 100_000_000
+GEMINI_INLINE_PDF_MAX_BYTES = 50_000_000
 MAX_REDIRECTS = 5
 CONNECT_TIMEOUT_SECONDS = 5.0
 READ_TIMEOUT_SECONDS = 15.0
 DOWNLOAD_TIMEOUT_SECONDS = 25.0
 FFPROBE_TIMEOUT_SECONDS = 5.0
 FFPROBE_OUTPUT_MAX_BYTES = 65_536
-PROVIDER_FILE_TIMEOUT_SECONDS = 10.0
 WEBPAGE_TIMEOUT_SECONDS = 60.0
 WORKER_EXIT_TIMEOUT_SECONDS = 1.0
 WORKER_RESULT_MAX_BYTES = 1_000_000
@@ -58,7 +60,6 @@ FAILURE_CODES = frozenset({
     "unsupported_media_type",
     "retrieval_failed",
     "retrieval_timeout",
-    "provider_cleanup_failed",
     "provider_unavailable",
     "capacity_unavailable",
 })
@@ -271,17 +272,51 @@ class StreamingTransport(Protocol):
     ) -> StreamingResponse: ...
 
 
+class _OwnedHttpxResponse:
+    __slots__ = ("_response", "_transport", "status_code", "headers")
+
+    def __init__(
+        self, response: httpx.Response, transport: httpx.AsyncBaseTransport
+    ) -> None:
+        self._response = response
+        self._transport = transport
+        self.status_code = response.status_code
+        self.headers = response.headers
+
+    def aiter_bytes(self) -> AsyncIterator[bytes]:
+        return self._response.aiter_bytes()
+
+    async def aclose(self) -> None:
+        failed = False
+        try:
+            await self._response.aclose()
+        except BaseException:
+            failed = True
+        try:
+            await self._transport.aclose()
+        except BaseException:
+            failed = True
+        if failed:
+            raise MediaFailure("retrieval_failed")
+
+
 class HttpxStreamingTransport:
     """No-proxy, no-auto-redirect transport for explicitly validated public URLs."""
 
-    __slots__ = ("_transport",)
+    __slots__ = ("_transport_factory",)
 
-    def __init__(self, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
-        self._transport = transport or httpx.AsyncHTTPTransport(retries=0)
+    def __init__(
+        self,
+        *,
+        transport_factory: Callable[[], httpx.AsyncBaseTransport] | None = None,
+    ) -> None:
+        self._transport_factory = transport_factory or (
+            lambda: httpx.AsyncHTTPTransport(retries=0)
+        )
 
     async def open(
         self, target: PinnedTarget, *, connect_timeout: float, read_timeout: float
-    ) -> httpx.Response:
+    ) -> StreamingResponse:
         started = asyncio.get_running_loop().time()
         last_error: BaseException | None = None
         for address in target.addresses:
@@ -300,16 +335,28 @@ class HttpxStreamingTransport:
                     "sni_hostname": target.hostname,
                 },
             )
+            transport = self._transport_factory()
             try:
-                return await self._transport.handle_async_request(request)
+                response = await transport.handle_async_request(request)
+                return _OwnedHttpxResponse(response, transport)
             except (httpx.ConnectError, httpx.ConnectTimeout) as error:
                 last_error = error
+                try:
+                    await transport.aclose()
+                except BaseException:
+                    raise httpx.ConnectError("approved transport cleanup failed") from None
+            except BaseException:
+                try:
+                    await transport.aclose()
+                except BaseException:
+                    pass
+                raise
         if isinstance(last_error, httpx.TimeoutException):
             raise last_error
         raise httpx.ConnectError("all approved addresses failed")
 
     async def aclose(self) -> None:
-        await self._transport.aclose()
+        return None
 
 
 def _cleanup_workspace(workspace: Path | None) -> bool:
@@ -352,6 +399,8 @@ async def _download(
     workspace: Path | None = None
     path: Path | None = None
     response: StreamingResponse | None = None
+    result: DownloadedMedia | None = None
+    failure: BaseException | None = None
     try:
         for redirect_count in range(MAX_REDIRECTS + 1):
             target = _resolve_public_target(current)
@@ -411,25 +460,48 @@ async def _download(
                 except OSError:
                     pass
                 raise
-            return DownloadedMedia(path, source_type, mime_type, size, workspace)
-        raise MediaFailure("retrieval_failed")
+            result = DownloadedMedia(path, source_type, mime_type, size, workspace)
+            break
+        if result is None:
+            raise MediaFailure("retrieval_failed")
     except BaseException as error:
-        cleanup_ok = _cleanup_workspace(workspace)
-        if not cleanup_ok:
+        failure = error
+
+    close_failure: BaseException | None = None
+    if response is not None:
+        try:
+            await response.aclose()
+        except BaseException as error:
+            close_failure = error
+
+    if failure is not None or close_failure is not None:
+        if not _cleanup_workspace(workspace):
             raise MediaFailure("retrieval_failed") from None
-        if isinstance(error, MediaFailure):
-            raise error
-        if isinstance(error, asyncio.CancelledError):
-            raise
-        if isinstance(error, (TimeoutError, asyncio.TimeoutError, httpx.TimeoutException)):
+        effective = failure if failure is not None else close_failure
+        if isinstance(effective, asyncio.CancelledError):
+            raise effective
+        if isinstance(effective, MediaFailure):
+            raise effective
+        if isinstance(effective, (TimeoutError, asyncio.TimeoutError, httpx.TimeoutException)):
             raise MediaFailure("retrieval_timeout") from None
         raise MediaFailure("retrieval_failed") from None
-    finally:
-        if response is not None:
-            try:
-                await response.aclose()
-            except Exception:
-                raise MediaFailure("retrieval_failed") from None
+    return result
+
+
+async def _finalize_download(
+    item: DownloadedMedia | None,
+    transport: StreamingTransport,
+    *,
+    close_transport: bool,
+) -> bool:
+    transport_ok = True
+    if close_transport:
+        try:
+            await transport.aclose()  # type: ignore[attr-defined]
+        except BaseException:
+            transport_ok = False
+    cleanup_ok = _cleanup_workspace(item.workspace if item else None)
+    return transport_ok and cleanup_ok
 
 
 @asynccontextmanager
@@ -442,24 +514,38 @@ async def media_download(
     owned_transport = transport is None
     active_transport = transport or HttpxStreamingTransport()
     item: DownloadedMedia | None = None
-    try:
-        async with _capacity("download"):
+    async with _capacity("download"):
+        body_error: BaseException | None = None
+        try:
             item = await asyncio.wait_for(
                 _download(url, source_type, active_transport),
                 timeout=DOWNLOAD_TIMEOUT_SECONDS,
             )
             yield item
-    except asyncio.TimeoutError:
-        raise MediaFailure("retrieval_timeout") from None
-    finally:
-        cleanup_ok = _cleanup_workspace(item.workspace if item else None)
-        if owned_transport:
+        except BaseException as error:
+            body_error = error
+        cleanup = asyncio.create_task(
+            _finalize_download(item, active_transport, close_transport=owned_transport)
+        )
+        cleanup_cancelled: asyncio.CancelledError | None = None
+        try:
+            lifecycle_ok = await asyncio.shield(cleanup)
+        except asyncio.CancelledError as cancelled:
+            cleanup_cancelled = cancelled
             try:
-                await active_transport.aclose()  # type: ignore[attr-defined]
-            except Exception:
-                raise MediaFailure("retrieval_failed") from None
-        if not cleanup_ok:
+                lifecycle_ok = await asyncio.shield(cleanup)
+            except BaseException:
+                lifecycle_ok = False
+        except BaseException:
+            lifecycle_ok = False
+        if not lifecycle_ok:
             raise MediaFailure("retrieval_failed")
+        if body_error is not None:
+            if isinstance(body_error, asyncio.TimeoutError):
+                raise MediaFailure("retrieval_timeout") from None
+            raise body_error
+        if cleanup_cancelled is not None:
+            raise cleanup_cancelled
 
 
 @dataclass(frozen=True, slots=True)
@@ -576,6 +662,8 @@ def _worker_operation(request: dict[str, Any]) -> dict[str, Any]:
 
 def _worker_entry(sender: Any, request_bytes: bytes) -> None:
     try:
+        if os.name == "posix":
+            os.setsid()
         request = json.loads(request_bytes.decode("utf-8"))
         if type(request) is not dict:
             raise MediaFailure("retrieval_failed")
@@ -622,14 +710,125 @@ async def _wait_process_exit(
     return not process.is_alive()
 
 
+def _linux_descendants(root_pid: int) -> tuple[int, ...]:
+    if os.name != "posix" or not Path("/proc").is_dir():
+        return ()
+    parents: dict[int, int] = {}
+    try:
+        entries = tuple(Path("/proc").iterdir())
+    except OSError:
+        return ()
+    for entry in entries:
+        if not entry.name.isdecimal():
+            continue
+        try:
+            raw = (entry / "stat").read_text(encoding="ascii", errors="strict")
+            remainder = raw[raw.rindex(")") + 2 :].split()
+            pid = int(entry.name)
+            parent = int(remainder[1])
+        except (OSError, UnicodeError, ValueError, IndexError):
+            continue
+        parents[pid] = parent
+    descendants: list[int] = []
+    pending = [root_pid]
+    while pending:
+        parent = pending.pop()
+        children = [pid for pid, ppid in parents.items() if ppid == parent]
+        descendants.extend(children)
+        pending.extend(children)
+    return tuple(descendants)
+
+
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+async def _wait_pids_exit(pids: tuple[int, ...], timeout: float | None) -> bool:
+    deadline = None if timeout is None else asyncio.get_running_loop().time() + timeout
+    while any(_pid_exists(pid) for pid in pids):
+        if deadline is not None:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(0.01, remaining))
+        else:
+            await asyncio.sleep(0.01)
+    return True
+
+
+async def _windows_kill_tree(pid: int, *, force: bool) -> None:
+    arguments = ["taskkill", "/PID", str(pid), "/T"]
+    if force:
+        arguments.append("/F")
+    process = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *arguments,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(process.wait(), timeout=WORKER_EXIT_TIMEOUT_SECONDS)
+    except BaseException:
+        if process is not None and process.returncode is None:
+            process.kill()
+            try:
+                await process.wait()
+            except BaseException:
+                pass
+
+
 async def _terminate_process(process: multiprocessing.Process) -> None:
-    if process.is_alive():
-        process.terminate()
+    pid = process.pid
+    if type(pid) is not int or pid <= 0:
+        raise MediaFailure("retrieval_failed")
+    descendants = _linux_descendants(pid)
+    if os.name == "nt":
+        await _windows_kill_tree(pid, force=False)
+        if process.is_alive():
+            process.terminate()
+    else:
+        signalled_group = False
+        try:
+            if os.getpgid(pid) == pid:
+                os.killpg(pid, signal.SIGTERM)
+                signalled_group = True
+        except OSError:
+            pass
+        if not signalled_group and process.is_alive():
+            process.terminate()
+        for descendant in descendants:
+            try:
+                os.kill(descendant, signal.SIGTERM)
+            except OSError:
+                pass
+    root_exited = await _wait_process_exit(process, WORKER_EXIT_TIMEOUT_SECONDS)
+    descendants_exited = await _wait_pids_exit(descendants, WORKER_EXIT_TIMEOUT_SECONDS)
+    if not root_exited or not descendants_exited:
+        if os.name == "nt":
+            await _windows_kill_tree(pid, force=True)
+            if process.is_alive():
+                process.kill()
+        else:
+            try:
+                if os.getpgid(pid) == pid:
+                    os.killpg(pid, signal.SIGKILL)
+            except OSError:
+                pass
+            if process.is_alive():
+                process.kill()
+            for descendant in descendants:
+                try:
+                    os.kill(descendant, signal.SIGKILL)
+                except OSError:
+                    pass
         await _wait_process_exit(process, WORKER_EXIT_TIMEOUT_SECONDS)
-    if process.is_alive():
-        process.kill()
-        await _wait_process_exit(process, None)
-    if process.is_alive():
+        await _wait_pids_exit(descendants, WORKER_EXIT_TIMEOUT_SECONDS)
+    if process.is_alive() or any(_pid_exists(child) for child in descendants):
         raise MediaFailure("retrieval_failed")
 
 
@@ -1030,11 +1229,11 @@ async def ingest_remote_media(
 
 @dataclass(frozen=True, slots=True, init=False)
 class DeliveryDecision:
-    kind: Literal["inline", "provider_file"]
+    kind: Literal["inline"]
     _payload_json: bytes = field(repr=False)
 
-    def __init__(self, kind: Literal["inline", "provider_file"], payload: dict[str, Any]) -> None:
-        if type(kind) is not str or kind not in {"inline", "provider_file"} or type(payload) is not dict:
+    def __init__(self, kind: Literal["inline"], payload: dict[str, Any]) -> None:
+        if type(kind) is not str or kind != "inline" or type(payload) is not dict:
             raise MediaFailure("invalid_request")
         try:
             encoded = json.dumps(
@@ -1080,84 +1279,11 @@ def choose_delivery(
         size = len(json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8"))
     except (TypeError, ValueError, OverflowError, UnicodeError, RecursionError):
         raise MediaFailure("invalid_request") from None
-    if size <= INLINE_REQUEST_MAX_BYTES:
-        return DeliveryDecision("inline", payload)
-    if source_type == "image":
+    if source_type == "pdf" and len(content) > GEMINI_INLINE_PDF_MAX_BYTES:
         raise MediaFailure("source_too_large")
-    return DeliveryDecision("provider_file", {"mime_type": mime_type})
-
-
-@dataclass(frozen=True, slots=True)
-class ProviderFileRef:
-    file_id: str = field(repr=False)
-
-    def __post_init__(self) -> None:
-        if type(self.file_id) is not str or not self.file_id or len(self.file_id) > 512:
-            raise MediaFailure("provider_cleanup_failed")
-
-
-class ProviderFileClient(Protocol):
-    async def upload(self, *, path: Path, mime_type: str) -> ProviderFileRef: ...
-    async def delete(self, file_id: str) -> bool | None: ...
-    async def get_status(self, file_id: str) -> str: ...
-
-
-async def _delete_provider_file(client: ProviderFileClient, file_id: str) -> None:
-    deleted = False
-    try:
-        deleted = await asyncio.wait_for(
-            client.delete(file_id), timeout=PROVIDER_FILE_TIMEOUT_SECONDS
-        )
-        if deleted is True:
-            return
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        pass
-    try:
-        if await asyncio.wait_for(
-            client.get_status(file_id), timeout=PROVIDER_FILE_TIMEOUT_SECONDS
-        ) == "not_found":
-            return
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        pass
-    raise MediaFailure("provider_cleanup_failed")
-
-
-@asynccontextmanager
-async def transient_provider_file(
-    client: ProviderFileClient, path: Path, mime_type: str
-) -> AsyncIterator[ProviderFileRef]:
-    try:
-        ref = await asyncio.wait_for(
-            client.upload(path=path, mime_type=mime_type),
-            timeout=PROVIDER_FILE_TIMEOUT_SECONDS,
-        )
-        if type(ref) is not ProviderFileRef:
-            raise MediaFailure("provider_cleanup_failed")
-    except MediaFailure:
-        raise
-    except Exception:
-        raise MediaFailure("provider_cleanup_failed") from None
-    body_error: BaseException | None = None
-    try:
-        yield ref
-    except BaseException as error:
-        body_error = error
-    cleanup = asyncio.create_task(_delete_provider_file(client, ref.file_id))
-    try:
-        await asyncio.shield(cleanup)
-    except asyncio.CancelledError as cancelled:
-        try:
-            await asyncio.shield(cleanup)
-        except Exception:
-            raise MediaFailure("provider_cleanup_failed") from None
-        if body_error is None:
-            raise cancelled
-    if body_error is not None:
-        raise body_error
+    if size > GEMINI_INLINE_REQUEST_MAX_BYTES:
+        raise MediaFailure("source_too_large")
+    return DeliveryDecision("inline", payload)
 
 
 async def retrieve_webpage(
@@ -1190,8 +1316,8 @@ async def retrieve_webpage(
 
 __all__ = [
     "CONNECT_TIMEOUT_SECONDS", "DOWNLOAD_TIMEOUT_SECONDS", "DownloadedMedia",
-    "FFPROBE_OUTPUT_MAX_BYTES", "FFPROBE_TIMEOUT_SECONDS", "INLINE_REQUEST_MAX_BYTES",
-    "MEDIA_LIMITS", "MAX_REDIRECTS", "MediaFailure", "PROVIDER_FILE_TIMEOUT_SECONDS", "ProviderFileRef",
+    "FFPROBE_OUTPUT_MAX_BYTES", "FFPROBE_TIMEOUT_SECONDS", "GEMINI_INLINE_PDF_MAX_BYTES",
+    "GEMINI_INLINE_REQUEST_MAX_BYTES", "MEDIA_LIMITS", "MAX_REDIRECTS", "MediaFailure",
     "choose_delivery", "ingest_remote_media", "inspect_image", "inspect_pdf", "inspect_timed_media",
-    "media_download", "retrieve_webpage", "run_ffprobe", "transient_provider_file",
+    "media_download", "retrieve_webpage", "run_ffprobe",
 ]

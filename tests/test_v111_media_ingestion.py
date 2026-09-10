@@ -12,12 +12,11 @@ from PIL import Image
 from pypdf import PdfWriter
 
 from smartfetch.media import (
-    INLINE_REQUEST_MAX_BYTES,
+    GEMINI_INLINE_REQUEST_MAX_BYTES,
     MEDIA_LIMITS,
     DownloadedMedia,
     MediaFailure,
     PinnedTarget,
-    ProviderFileRef,
     choose_delivery,
     inspect_image,
     inspect_pdf,
@@ -25,7 +24,6 @@ from smartfetch.media import (
     ingest_remote_media,
     media_download,
     run_ffprobe,
-    transient_provider_file,
     retrieve_webpage,
 )
 
@@ -92,17 +90,18 @@ class MediaContractTests(unittest.TestCase):
         )
         self.assertEqual(inline.kind, "inline")
         encoded = json.dumps(inline.payload, ensure_ascii=False, separators=(",", ":")).encode()
-        self.assertLessEqual(len(encoded), INLINE_REQUEST_MAX_BYTES)
-        with patch("smartfetch.media.INLINE_REQUEST_MAX_BYTES", 8):
+        self.assertLessEqual(len(encoded), GEMINI_INLINE_REQUEST_MAX_BYTES)
+        with patch("smartfetch.media.GEMINI_INLINE_REQUEST_MAX_BYTES", 8):
             with self.assertRaisesRegex(MediaFailure, "^source_too_large$"):
                 choose_delivery(source_type="image", mime_type="image/png", content=content,
                                 schema={}, instructions=None, prompt="p")
 
-    def test_large_permitted_non_image_selects_files(self):
-        with patch("smartfetch.media.INLINE_REQUEST_MAX_BYTES", 32):
-            result = choose_delivery(source_type="pdf", mime_type="application/pdf",
-                                     content=b"x" * 20, schema={}, instructions=None, prompt="p")
-        self.assertEqual(result.kind, "provider_file")
+    def test_permitted_non_image_uses_inline_delivery(self):
+        result = choose_delivery(
+            source_type="pdf", mime_type="application/pdf",
+            content=b"x" * 20, schema={}, instructions=None, prompt="p",
+        )
+        self.assertEqual(result.kind, "inline")
 
 
 class DownloadTests(unittest.IsolatedAsyncioTestCase):
@@ -365,73 +364,6 @@ class FfprobeBoundaryTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(MediaFailure, "^retrieval_timeout$"):
                 await run_ffprobe(Path("private-file.bin"))
         self.assertTrue(process.killed)
-
-
-class ProviderFileLifecycleTests(unittest.IsolatedAsyncioTestCase):
-    class Client:
-        def __init__(self, delete=True, readback="not_found"):
-            self.calls = []
-            self.delete_result = delete
-            self.readback = readback
-        async def upload(self, *, path, mime_type):
-            self.calls.append("upload")
-            return ProviderFileRef("private-id")
-        async def delete(self, file_id):
-            self.calls.append("delete")
-            return self.delete_result
-        async def get_status(self, file_id):
-            self.calls.append("get")
-            return self.readback
-
-    async def test_delete_finally_on_success_and_failure(self):
-        for fail in (False, True):
-            client = self.Client()
-            with self.subTest(fail=fail):
-                try:
-                    async with transient_provider_file(client, Path("ignored"), "application/pdf") as ref:
-                        self.assertEqual(ref.file_id, "private-id")
-                        if fail: raise RuntimeError("CANARY")
-                except RuntimeError:
-                    pass
-                self.assertEqual(client.calls, ["upload", "delete"])
-
-    async def test_inconclusive_delete_gets_once_and_fails_closed(self):
-        client = self.Client(delete=None, readback="not_found")
-        async with transient_provider_file(client, Path("ignored"), "application/pdf"):
-            pass
-        self.assertEqual(client.calls, ["upload", "delete", "get"])
-        client = self.Client(delete=None, readback="present")
-        with self.assertRaisesRegex(MediaFailure, "^provider_cleanup_failed$"):
-            async with transient_provider_file(client, Path("ignored"), "application/pdf"):
-                pass
-
-    async def test_private_values_are_hidden_from_representations(self):
-        ref = ProviderFileRef("CANARY-provider-secret")
-        item = DownloadedMedia(Path("CANARY-private-path"), "pdf", "application/pdf", 1)
-        self.assertNotIn("CANARY", repr(ref))
-        self.assertNotIn("CANARY", repr(item))
-
-    async def test_cancellation_still_deletes(self):
-        client = self.Client()
-        entered = asyncio.Event()
-        async def task():
-            async with transient_provider_file(client, Path("ignored"), "application/pdf"):
-                entered.set(); await asyncio.Future()
-        pending = asyncio.create_task(task()); await entered.wait(); pending.cancel()
-        with self.assertRaises(asyncio.CancelledError): await pending
-        self.assertEqual(client.calls, ["upload", "delete"])
-
-    async def test_hung_cleanup_is_bounded_and_fails_closed(self):
-        class HungClient(self.Client):
-            async def delete(self, file_id):
-                self.calls.append("delete")
-                await asyncio.Future()
-        client = HungClient(readback="present")
-        with patch("smartfetch.media.PROVIDER_FILE_TIMEOUT_SECONDS", 0.01):
-            with self.assertRaisesRegex(MediaFailure, "^provider_cleanup_failed$"):
-                async with transient_provider_file(client, Path("ignored"), "application/pdf"):
-                    pass
-        self.assertEqual(client.calls, ["upload", "delete", "get"])
 
 
 class WebpageModeTests(unittest.IsolatedAsyncioTestCase):

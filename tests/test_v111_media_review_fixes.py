@@ -4,15 +4,20 @@ import io
 import json
 import logging
 import multiprocessing
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import time
+from typing import get_args
 import unittest
 from unittest.mock import patch
 
 import httpx
 
 import smartfetch.media as media
+from smartfetch.v111_contracts import FailureCode
 
 
 def _blocking_fetcher(marker, *, force_browser, max_chars):
@@ -34,6 +39,49 @@ def _success_fetcher(url, *, force_browser, max_chars):
     return {"success": True, "force_browser": force_browser, "max_chars": max_chars}
 
 
+def _descendant_fetcher(marker, *, force_browser, max_chars):
+    options = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name != "nt":
+        options["start_new_session"] = True
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        **options,
+    )
+    Path(marker).write_text(str(child.pid), encoding="ascii")
+    time.sleep(60)
+    return {"success": True}
+
+
+def _process_exists(pid):
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _force_stop_test_process(pid):
+    if not _process_exists(pid):
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    else:
+        try:
+            os.kill(pid, 9)
+        except OSError:
+            pass
+
+
 class HttpxStreamingRegressionTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_httpx_response_streams_with_aiter_bytes(self):
         async def handler(request):
@@ -43,7 +91,9 @@ class HttpxStreamingRegressionTests(unittest.IsolatedAsyncioTestCase):
                 content=b"bounded-media",
             )
 
-        transport = media.HttpxStreamingTransport(transport=httpx.MockTransport(handler))
+        transport = media.HttpxStreamingTransport(
+            transport_factory=lambda: httpx.MockTransport(handler)
+        )
         target = media.PinnedTarget(
             url="https://public.example/image",
             hostname="public.example",
@@ -65,7 +115,9 @@ class HttpxStreamingRegressionTests(unittest.IsolatedAsyncioTestCase):
             captured["sni"] = request.extensions.get("sni_hostname")
             return httpx.Response(200, headers={"content-type": "image/png"}, content=b"x")
 
-        transport = media.HttpxStreamingTransport(transport=httpx.MockTransport(handler))
+        transport = media.HttpxStreamingTransport(
+            transport_factory=lambda: httpx.MockTransport(handler)
+        )
         target = media.PinnedTarget(
             url="https://public.example/private/path?secret=CANARY",
             hostname="public.example",
@@ -90,7 +142,9 @@ class HttpxStreamingRegressionTests(unittest.IsolatedAsyncioTestCase):
         logger.setLevel(logging.INFO)
         logger.addHandler(handler_output)
         try:
-            transport = media.HttpxStreamingTransport(transport=httpx.MockTransport(handler))
+            transport = media.HttpxStreamingTransport(
+                transport_factory=lambda: httpx.MockTransport(handler)
+            )
             target = media.PinnedTarget(
                 url="https://private-host.example/private-path?secret=PRIVATE-QUERY-CANARY",
                 hostname="private-host.example",
@@ -177,11 +231,49 @@ class HttpxStreamingRegressionTests(unittest.IsolatedAsyncioTestCase):
                 raise httpx.ConnectError("CANARY", request=request)
             return httpx.Response(200, headers={"content-type": "image/png"}, content=b"x")
 
-        transport = media.HttpxStreamingTransport(transport=httpx.MockTransport(handler))
+        transport = media.HttpxStreamingTransport(
+            transport_factory=lambda: httpx.MockTransport(handler)
+        )
         response = await transport.open(target, connect_timeout=5.0, read_timeout=15.0)
         await response.aclose()
         await transport.aclose()
         self.assertEqual(seen, ["93.184.216.34", "1.1.1.1"])
+
+    async def test_cross_host_redirect_uses_fresh_pool_and_redirected_sni(self):
+        first = media.PinnedTarget(
+            "https://first.example/start", "first.example", 443, ("203.0.113.10",)
+        )
+        second = media.PinnedTarget(
+            "https://second.example/media", "second.example", 443, ("203.0.113.10",)
+        )
+        pools = []
+        seen = []
+
+        def factory():
+            pool_number = len(pools)
+
+            async def handler(request):
+                seen.append((pool_number, request.extensions.get("sni_hostname")))
+                if pool_number == 0:
+                    return httpx.Response(
+                        302, headers={"location": second.url}, content=b""
+                    )
+                return httpx.Response(
+                    200, headers={"content-type": "image/png"}, content=b"x"
+                )
+
+            pool = httpx.MockTransport(handler)
+            pools.append(pool)
+            return pool
+
+        transport = media.HttpxStreamingTransport(transport_factory=factory)
+        with patch(
+            "smartfetch.media._resolve_public_target", side_effect=[first, second]
+        ):
+            async with media.media_download(first.url, "image", transport=transport):
+                pass
+        self.assertEqual(len(pools), 2)
+        self.assertEqual(seen, [(0, "first.example"), (1, "second.example")])
 
 
 class KillableWorkTests(unittest.IsolatedAsyncioTestCase):
@@ -193,7 +285,7 @@ class KillableWorkTests(unittest.IsolatedAsyncioTestCase):
     async def test_webpage_timeout_terminates_worker_before_return(self):
         with tempfile.TemporaryDirectory() as directory:
             marker = str(Path(directory) / "worker")
-            with patch("smartfetch.media.WEBPAGE_TIMEOUT_SECONDS", 4.0):
+            with patch("smartfetch.media.WEBPAGE_TIMEOUT_SECONDS", 10.0):
                 with self.assertRaisesRegex(media.MediaFailure, "^retrieval_timeout$"):
                     await media.retrieve_webpage(marker, "auto", fetcher=_blocking_fetcher)
             self.assertTrue(Path(marker).exists())
@@ -259,6 +351,57 @@ class KillableWorkTests(unittest.IsolatedAsyncioTestCase):
             result = await media.retrieve_webpage("https://example.com", "auto", fetcher=_success_fetcher)
             self.assertIs(type(result), dict)
             media._reset_capacity_limiters_for_tests()
+
+    async def test_webpage_timeout_terminates_detached_descendant_before_return(self):
+        with tempfile.TemporaryDirectory() as directory:
+            marker = str(Path(directory) / "descendant.pid")
+            descendant_pid = None
+            try:
+                with patch("smartfetch.media.WEBPAGE_TIMEOUT_SECONDS", 10.0):
+                    with self.assertRaisesRegex(media.MediaFailure, "^retrieval_timeout$"):
+                        await media.retrieve_webpage(
+                            marker, "auto", fetcher=_descendant_fetcher
+                        )
+                descendant_pid = int(Path(marker).read_text(encoding="ascii"))
+                self.assertFalse(_process_exists(descendant_pid))
+            finally:
+                if descendant_pid is None and Path(marker).exists():
+                    descendant_pid = int(Path(marker).read_text(encoding="ascii"))
+                if descendant_pid is not None:
+                    _force_stop_test_process(descendant_pid)
+
+    async def test_webpage_cancellation_terminates_descendant_before_return(self):
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "descendant.pid"
+            descendant_pid = None
+            task = asyncio.create_task(
+                media.retrieve_webpage(str(marker), "auto", fetcher=_descendant_fetcher)
+            )
+            try:
+                deadline = asyncio.get_running_loop().time() + 30.0
+                while (
+                    not marker.exists()
+                    and not task.done()
+                    and asyncio.get_running_loop().time() < deadline
+                ):
+                    await asyncio.sleep(0.05)
+                self.assertTrue(marker.exists())
+                descendant_pid = int(marker.read_text(encoding="ascii"))
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+                self.assertFalse(_process_exists(descendant_pid))
+            finally:
+                if not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except BaseException:
+                        pass
+                if descendant_pid is None and marker.exists():
+                    descendant_pid = int(marker.read_text(encoding="ascii"))
+                if descendant_pid is not None:
+                    _force_stop_test_process(descendant_pid)
 
 
 class CleanupAndCapacityTests(unittest.IsolatedAsyncioTestCase):
@@ -352,6 +495,147 @@ class CleanupAndCapacityTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await task
             self.assertTrue(response.closed)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    async def test_response_close_failure_still_closes_transport_and_cleans_workspace(self):
+        target = media.PinnedTarget(
+            "https://example.com/x", "example.com", 443, ("203.0.113.10",)
+        )
+
+        class FailingCloseResponse(self.Response):
+            async def aclose(inner_self):
+                raise RuntimeError("CANARY-response-close-private-path")
+
+        class OwnedTransport(self.Transport):
+            def __init__(inner_self):
+                super().__init__(FailingCloseResponse([b"x"]))
+                inner_self.closed = False
+
+            async def aclose(inner_self):
+                inner_self.closed = True
+
+        owned = OwnedTransport()
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "smartfetch.media.tempfile.tempdir", directory
+        ), patch("smartfetch.media._resolve_public_target", return_value=target), patch(
+            "smartfetch.media.HttpxStreamingTransport", return_value=owned
+        ):
+            with self.assertRaisesRegex(media.MediaFailure, "^retrieval_failed$") as caught:
+                async with media.media_download(target.url, "image"):
+                    pass
+            self.assertEqual(str(caught.exception), "retrieval_failed")
+            self.assertNotIn("CANARY", str(caught.exception))
+            self.assertTrue(owned.closed)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    async def test_download_capacity_is_held_through_owned_transport_cleanup(self):
+        target = media.PinnedTarget(
+            "https://example.com/x", "example.com", 443, ("203.0.113.10",)
+        )
+        cleanup_started = asyncio.Event()
+        allow_cleanup = asyncio.Event()
+
+        class SlowCloseTransport(self.Transport):
+            async def aclose(inner_self):
+                cleanup_started.set()
+                await allow_cleanup.wait()
+
+        class FastCloseTransport(self.Transport):
+            async def aclose(inner_self):
+                return None
+
+        first_transport = SlowCloseTransport(self.Response([b"x"]))
+        second_transport = FastCloseTransport(self.Response([b"y"]))
+        transports = iter((first_transport, second_transport))
+
+        with patch("smartfetch.media._resolve_public_target", return_value=target), patch(
+            "smartfetch.media.HttpxStreamingTransport", side_effect=lambda: next(transports)
+        ), patch("smartfetch.media.DOWNLOAD_CONCURRENCY", 1), patch(
+            "smartfetch.media.CAPACITY_WAIT_SECONDS", 0.05
+        ):
+            media._reset_capacity_limiters_for_tests()
+
+            async def consume_first():
+                async with media.media_download(target.url, "image"):
+                    pass
+
+            first = asyncio.create_task(consume_first())
+            await cleanup_started.wait()
+            with self.assertRaisesRegex(media.MediaFailure, "^capacity_unavailable$"):
+                async with media.media_download(target.url, "image"):
+                    pass
+            allow_cleanup.set()
+            await first
+            media._reset_capacity_limiters_for_tests()
+
+    async def test_cancellation_during_cleanup_is_re_raised_after_cleanup(self):
+        target = media.PinnedTarget(
+            "https://example.com/x", "example.com", 443, ("203.0.113.10",)
+        )
+        cleanup_started = asyncio.Event()
+        allow_cleanup = asyncio.Event()
+
+        class SlowCloseTransport(self.Transport):
+            async def aclose(inner_self):
+                cleanup_started.set()
+                await allow_cleanup.wait()
+
+        owned = SlowCloseTransport(self.Response([b"x"]))
+        with patch("smartfetch.media._resolve_public_target", return_value=target), patch(
+            "smartfetch.media.HttpxStreamingTransport", return_value=owned
+        ):
+            async def consume():
+                async with media.media_download(target.url, "image"):
+                    pass
+
+            task = asyncio.create_task(consume())
+            await cleanup_started.wait()
+            task.cancel()
+            allow_cleanup.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+    async def test_cancellation_during_real_httpx_response_close_cleans_and_propagates(self):
+        target = media.PinnedTarget(
+            "https://example.com/x", "example.com", 443, ("203.0.113.10",)
+        )
+        close_started = asyncio.Event()
+        transport_closed = asyncio.Event()
+
+        class BlockingStream(httpx.AsyncByteStream):
+            async def __aiter__(inner_self):
+                yield b"x"
+
+            async def aclose(inner_self):
+                close_started.set()
+                await asyncio.Future()
+
+        class Pool(httpx.AsyncBaseTransport):
+            async def handle_async_request(inner_self, request):
+                return httpx.Response(
+                    200,
+                    headers={"content-type": "image/png"},
+                    stream=BlockingStream(),
+                    request=request,
+                )
+
+            async def aclose(inner_self):
+                transport_closed.set()
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "smartfetch.media.tempfile.tempdir", directory
+        ), patch("smartfetch.media._resolve_public_target", return_value=target):
+            transport = media.HttpxStreamingTransport(transport_factory=Pool)
+            task = asyncio.create_task(
+                media.media_download(
+                    target.url, "image", transport=transport
+                ).__aenter__()
+            )
+            await close_started.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            self.assertTrue(transport_closed.is_set())
             self.assertEqual(list(Path(directory).iterdir()), [])
 
 
@@ -477,8 +761,8 @@ class FfprobePipeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bytes(process.stdin.data), b"validated-bytes")
 
 
-class ImmutableDecisionAndDeletionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_delivery_checks_raw_cap_and_owns_nested_payload(self):
+class ImmutableInlineDecisionTests(unittest.TestCase):
+    def test_delivery_checks_raw_cap_and_owns_nested_payload(self):
         schema = {"type": "object", "properties": {"x": {"type": "string"}}}
         decision = media.choose_delivery(
             source_type="image",
@@ -503,30 +787,46 @@ class ImmutableDecisionAndDeletionTests(unittest.IsolatedAsyncioTestCase):
                 prompt="p",
             )
 
-    async def test_delete_false_or_exception_always_confirms_absence(self):
-        class Client:
-            def __init__(self, result):
-                self.result = result
-                self.calls = []
-
-            async def delete(self, file_id):
-                self.calls.append("delete")
-                if isinstance(self.result, Exception):
-                    raise self.result
-                return self.result
-
-            async def get_status(self, file_id):
-                self.calls.append("get")
-                return "not_found"
-
-        for result in (False, RuntimeError("CANARY-provider-path")):
-            client = Client(result)
-            await media._delete_provider_file(client, "private-id")
-            self.assertEqual(client.calls, ["delete", "get"])
-
     def test_media_limits_are_not_mutable(self):
         with self.assertRaises(TypeError):
             media.MEDIA_LIMITS["image"] = media.MEDIA_LIMITS["pdf"]
+
+    def test_inline_only_payload_limit_is_exact_and_files_api_is_absent(self):
+        self.assertEqual(media.GEMINI_INLINE_REQUEST_MAX_BYTES, 100_000_000)
+        self.assertEqual(media.GEMINI_INLINE_PDF_MAX_BYTES, 50_000_000)
+        self.assertLess(media.MEDIA_LIMITS["pdf"].max_bytes, media.GEMINI_INLINE_PDF_MAX_BYTES)
+        self.assertFalse(hasattr(media, "transient_provider_file"))
+        self.assertFalse(hasattr(media, "ProviderFileRef"))
+        self.assertNotIn("provider_cleanup_failed", media.FAILURE_CODES)
+        self.assertNotIn("provider_cleanup_failed", get_args(FailureCode))
+
+        values = {
+            "source_type": "video",
+            "mime_type": "video/mp4",
+            "content": b"x",
+            "schema": {"type": "object"},
+            "instructions": None,
+            "prompt": "p",
+        }
+        payload = {
+            "media": {
+                "mime_type": "video/mp4",
+                "data": "eA==",
+            },
+            "schema": {"type": "object"},
+            "instructions": None,
+            "prompt": "p",
+        }
+        serialized_size = len(
+            json.dumps(
+                payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+            ).encode("utf-8")
+        )
+        with patch("smartfetch.media.GEMINI_INLINE_REQUEST_MAX_BYTES", serialized_size):
+            self.assertEqual(media.choose_delivery(**values).kind, "inline")
+        with patch("smartfetch.media.GEMINI_INLINE_REQUEST_MAX_BYTES", serialized_size - 1):
+            with self.assertRaisesRegex(media.MediaFailure, "^source_too_large$"):
+                media.choose_delivery(**values)
 
 
 if __name__ == "__main__":
