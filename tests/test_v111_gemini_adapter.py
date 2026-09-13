@@ -12,6 +12,7 @@ from smartfetch.provider_controls import RequestCostBudget
 from smartfetch.provider_health import ProviderAdapterError, ProviderCircuitBreaker, ProviderConfig
 from smartfetch.provider_types import AnswerRequest, StructuredMediaRequest, StructuredTextRequest
 from smartfetch.providers.gemini import (
+    MAX_GEMINI_REQUEST_BYTES,
     GeminiInteractionResponse,
     GeminiProvider,
     GoogleGenAIInteractionsTransport,
@@ -80,6 +81,29 @@ def make_provider(
 
 
 class GeminiAdapterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_complete_inline_request_limit_is_exact_before_transport(self) -> None:
+        self.assertEqual(MAX_GEMINI_REQUEST_BYTES, 100_000_000)
+        provider, transport, _, _ = make_provider(
+            GeminiInteractionResponse("{}", USAGE)
+        )
+        with patch(
+            "smartfetch.providers.gemini._json_size",
+            return_value=MAX_GEMINI_REQUEST_BYTES,
+        ):
+            await provider._invoke({"model": "gemini-3.8-flash"})
+        self.assertEqual(len(transport.calls), 1)
+
+        provider, transport, _, _ = make_provider(
+            GeminiInteractionResponse("{}", USAGE)
+        )
+        with patch(
+            "smartfetch.providers.gemini._json_size",
+            return_value=MAX_GEMINI_REQUEST_BYTES + 1,
+        ):
+            with self.assertRaisesRegex(ProviderAdapterError, "invalid_provider_output"):
+                await provider._invoke({"model": "gemini-3.8-flash"})
+        self.assertEqual(transport.calls, [])
+
     async def test_answer_uses_one_stateless_tool_free_server_routed_interaction(self) -> None:
         body = json.dumps(
             {
