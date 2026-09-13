@@ -1178,20 +1178,59 @@ is reviewable and preserves a passing main branch.
 
 ## 17. Rollout and rollback
 
-The new capabilities are guarded by server-controlled enablement plus provider
-configuration. On deployment:
+The new capabilities use the single restart-only environment gate
+`SMARTFETCH_V111_ENABLED`. Only the exact lowercase value `true` requests
+enablement. Missing, empty, and exact lowercase `false` disable V1.11. Every
+other value is invalid, fails closed to disabled, and emits only the bounded
+structured warning code `v111_config_invalid`; the supplied value is never
+logged. Invalid V1.11 configuration never prevents the existing V1.10.6
+service from starting.
 
-1. keep new capability enablement false while existing V1.10.6 routes boot;
+Activation is all-or-nothing. V1.11 becomes active only when the flag is
+exactly `true`, Exa configuration is complete, Gemini configuration is
+complete, and all required provider controls, spend ceilings, and model routes
+validate locally. Startup activation performs no network request, credential
+logging, circuit permit acquisition, payment, or wallet operation. If any
+requirement is missing or invalid, none of the eight REST routes or two MCP
+tools is registered: the REST paths retain the existing bounded 404 behavior,
+OpenAPI and runtime discovery do not advertise them, and MCP `tools/list`
+continues to return exactly the four existing tools. The service never exposes
+a partial set of routes or five tools. Configuration is evaluated once while
+the application is constructed and changes take effect only after restart.
+
+When fully active, all eight fixed REST routes and both new MCP tools are
+registered together. Before a payment challenge, the selected variant and its
+bounded input are validated and the required provider circuits are inspected
+through a non-consuming readiness snapshot. No permit is reserved or consumed
+and no provider, retrieval, or media work occurs. An open or unavailable
+circuit returns a free bounded `provider_unavailable` error (HTTP 503 for REST,
+the corresponding structured tool error for MCP) with no challenge, signing,
+provider work, or settlement.
+
+After payment verification and immediately before provider work, the real
+provider circuit permit is acquired and consumed exactly once by the adapter.
+No permit is held while an unpaid caller considers a challenge. A circuit may
+become unavailable between the free preflight and the paid retry; that race is
+accepted. The paid retry then returns `provider_unavailable`, performs no
+provider work, does not settle, and is never retried automatically or allowed
+to reuse a permit. Concurrent requests own independent request budgets and
+cannot share or replay permits.
+
+On deployment:
+
+1. keep `SMARTFETCH_V111_ENABLED` absent or `false` while existing V1.10.6
+   routes boot;
 2. validate free discovery and the unchanged four tools;
-3. enable configured variants only after model routing and prices pass the
-   benchmark gate;
+3. set the flag to exact lowercase `true` only after complete provider
+   configuration, model routing, and provisional prices pass the benchmark
+   gate, then restart the application;
 4. verify free challenges only before any separately authorized paid smoke.
 
-Rollback disables the new capability flag or redeploys the V1.10.6 commit.
-Existing `/fetch` and four MCP tools do not depend on provider keys, media
-packages, or new wrappers and remain operational. A provider circuit opening
-removes execution availability for only affected new variants; it does not make
-them free and does not alter existing resources.
+Rollback disables `SMARTFETCH_V111_ENABLED` and restarts, or redeploys the
+V1.10.6 commit. Existing `/fetch` and four MCP tools do not depend on provider
+keys, media packages, or new wrappers and remain operational. A provider
+circuit opening removes execution availability for only affected new variants;
+it does not make them free and does not alter existing resources.
 
 ## 18. Expected file changes
 

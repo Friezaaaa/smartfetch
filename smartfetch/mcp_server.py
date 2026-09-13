@@ -1,12 +1,14 @@
 """Native MCP Streamable HTTP transport for the SmartFetch retrieval engine."""
 
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import wraps
+import json
 import time
-from typing import Annotated, Awaitable, Callable, Optional
+from typing import Annotated, Any, Awaitable, Callable, Optional
 
-from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult, TextContent
+from mcp.server.fastmcp import Context, FastMCP
 from pydantic import Field
 from starlette.routing import Route
 from x402.schemas import PaymentRequirements, ResourceInfo
@@ -29,13 +31,19 @@ from .bazaar import (
     TEXT_OUTPUT_SCHEMA,
     mcp_discovery_extension,
 )
-from .activity import emit_activity
+from .activity import current_request_id, emit_activity
 from .config import (
     HOST,
     MAX_REQUEST_BODY_BYTES,
 )
 from .mcp_logging import configure_mcp_sdk_logging
 from .payments import X402Settings, create_x402_resource_server
+from .v111_contracts import (
+    DirectExtractionRequest,
+    SearchAndExtractRequest,
+    V111_VARIANTS,
+)
+from .v111_service import V111ExecutionError, V111Service
 
 
 MCP_PATH = "/mcp"
@@ -45,6 +53,10 @@ MCP_TOOLS = (
     "webpage_to_markdown",
     "extract_webpage_text",
     "render_webpage",
+)
+V111_MCP_TOOLS = (
+    "search_and_extract",
+    "extract_structured_data",
 )
 MCP_TRANSPORT = "streamable-http"
 MCP_DEFAULT_MAX_CHARS = 20000
@@ -73,6 +85,9 @@ class SmartFetchMCP:
     route: Route
     resource_server: Optional[object]
     accepts: list[PaymentRequirements]
+    v111_accepts: dict[str, list[PaymentRequirements]] = field(
+        default_factory=dict
+    )
 
     @asynccontextmanager
     async def lifespan(self, _application):
@@ -167,7 +182,13 @@ def _payment_result_details(result):
     return "payment_required", False
 
 
-def _observe_payment_result(name: str, handler, settings: X402Settings):
+def _observe_payment_result(
+    name: str,
+    handler,
+    settings: X402Settings,
+    *,
+    price: str | None = None,
+):
     @wraps(handler)
     async def observed(**kwargs):
         result = await handler(**kwargs)
@@ -179,7 +200,7 @@ def _observe_payment_result(name: str, handler, settings: X402Settings):
             "payment_present": payment_present,
             "payment_network": settings.network,
             "payment_asset": "USDC",
-            "payment_amount": settings.price,
+            "payment_amount": price or settings.price,
             "failure_reason": failure_reason,
         }
         if failure_reason == "settlement_failed":
@@ -210,6 +231,8 @@ def _observe_payment_result(name: str, handler, settings: X402Settings):
 def create_smartfetch_mcp(
     settings: X402Settings,
     fetch_handler: FetchHandler,
+    *,
+    v111_service: V111Service | None = None,
 ) -> SmartFetchMCP:
     """Create the native MCP server and eagerly secure each paid tool."""
     mcp = FastMCP(
@@ -223,6 +246,7 @@ def create_smartfetch_mcp(
     configure_mcp_sdk_logging()
     resource_server = None
     accepts = []
+    v111_accepts: dict[str, list[PaymentRequirements]] = {}
 
     async def fetch_webpage(
         url: str,
@@ -385,10 +409,229 @@ def create_smartfetch_mcp(
             structured_output=False,
         )(tool_handler)
 
+    if settings.enabled and type(v111_service) is V111Service:
+        from x402.mcp import PaymentWrapperHooks
+        from x402.server import ResourceConfig
+
+        def error_result(code: str) -> CallToolResult:
+            normalized = V111ExecutionError(code)
+            body = {
+                "success": False,
+                "error_code": normalized.code,
+                "error": normalized.public_message,
+            }
+            return CallToolResult(
+                isError=True,
+                content=[TextContent(
+                    type="text",
+                    text=json.dumps(body, separators=(",", ":")),
+                )],
+                structuredContent=body,
+            )
+
+        def make_runner(definition):
+            async def run_v111(*, request):
+                started = time.perf_counter()
+                emit_activity(
+                    "tool_started",
+                    transport="mcp",
+                    tool=definition.capability,
+                    stage="execution",
+                    outcome="started",
+                )
+                try:
+                    if definition.capability == "search_and_extract":
+                        result = await v111_service.execute_search(
+                            request,
+                            request_id=current_request_id() or "mcp-request",
+                        )
+                    else:
+                        result = await v111_service.execute_extraction(
+                            request,
+                            request_id=current_request_id() or "mcp-request",
+                        )
+                except V111ExecutionError as exc:
+                    emit_activity(
+                        "tool_failed",
+                        transport="mcp",
+                        tool=definition.capability,
+                        stage="execution",
+                        outcome="failed",
+                        duration_ms=(time.perf_counter() - started) * 1000,
+                    )
+                    return error_result(exc.code)
+                except Exception:
+                    emit_activity(
+                        "tool_failed",
+                        transport="mcp",
+                        tool=definition.capability,
+                        stage="execution",
+                        outcome="failed",
+                        duration_ms=(time.perf_counter() - started) * 1000,
+                    )
+                    return error_result("invalid_provider_output")
+                emit_activity(
+                    "tool_completed",
+                    transport="mcp",
+                    tool=definition.capability,
+                    stage="execution",
+                    outcome="completed",
+                    duration_ms=(time.perf_counter() - started) * 1000,
+                )
+                return result.model_dump(mode="json")
+
+            return run_v111
+
+        def make_wrapper(definition):
+            variant_accepts = resource_server.build_payment_requirements(
+                ResourceConfig(
+                    scheme="exact",
+                    payTo=settings.pay_to,
+                    price=definition.price,
+                    network=settings.network,
+                )
+            )
+            v111_accepts[definition.mcp_resource] = variant_accepts
+
+            def verified(_context):
+                emit_activity(
+                    "payment_verified",
+                    transport="mcp",
+                    tool=definition.capability,
+                    stage="verification",
+                    outcome="verified",
+                    payment_present=True,
+                    payment_stage="verification",
+                    payment_network=settings.network,
+                    payment_asset="USDC",
+                    payment_amount=definition.price,
+                )
+                return True
+
+            def settled(_context):
+                emit_activity(
+                    "payment_settled",
+                    transport="mcp",
+                    tool=definition.capability,
+                    stage="settlement",
+                    outcome="settled",
+                    payment_present=True,
+                    payment_stage="settlement",
+                    payment_network=settings.network,
+                    payment_asset="USDC",
+                    payment_amount=definition.price,
+                )
+
+            wrapper = create_payment_wrapper(
+                resource_server,
+                accepts=variant_accepts,
+                resource=ResourceInfo(
+                    url=definition.mcp_resource,
+                    description=(
+                        f"SmartFetch {definition.capability} "
+                        f"{definition.variant}"
+                    ),
+                    mimeType="application/json",
+                    serviceName="SmartFetch",
+                ),
+                hooks=PaymentWrapperHooks(
+                    on_before_execution=verified,
+                    on_after_settlement=settled,
+                ),
+            )(make_runner(definition))
+            return _observe_payment_result(
+                definition.capability,
+                wrapper,
+                settings,
+                price=definition.price,
+            )
+
+        wrappers = {
+            definition.variant: make_wrapper(definition)
+            for definition in V111_VARIANTS
+        }
+
+        async def search_and_extract(
+            query: str,
+            mode: str,
+            max_results: int = 5,
+            max_sources: int | None = None,
+            domains: list[str] | None = None,
+            freshness: str | None = None,
+            json_schema: dict[str, Any] | None = None,
+            instructions: str | None = None,
+            *,
+            ctx: Context,
+        ) -> dict:
+            try:
+                request = SearchAndExtractRequest(
+                    query=query,
+                    mode=mode,
+                    max_results=max_results,
+                    max_sources=max_sources,
+                    domains=domains,
+                    freshness=freshness,
+                    json_schema=json_schema,
+                    instructions=instructions,
+                )
+                v111_service.require_ready(request.mode)
+            except V111ExecutionError as exc:
+                return error_result(exc.code)
+            except Exception:
+                return error_result("invalid_request")
+            return await wrappers[request.mode](request=request, ctx=ctx)
+
+        async def extract_structured_data(
+            source_type: str,
+            source_url: str,
+            json_schema: dict[str, Any],
+            render_mode: str | None = None,
+            instructions: str | None = None,
+            *,
+            ctx: Context,
+        ) -> dict:
+            try:
+                request = DirectExtractionRequest(
+                    source_type=source_type,
+                    source_url=source_url,
+                    json_schema=json_schema,
+                    render_mode=render_mode,
+                    instructions=instructions,
+                )
+                v111_service.require_ready(request.source_type)
+            except V111ExecutionError as exc:
+                return error_result(exc.code)
+            except Exception:
+                return error_result("invalid_request")
+            return await wrappers[request.source_type](request=request, ctx=ctx)
+
+        mcp.tool(
+            name="search_and_extract",
+            description=(
+                "Search public sources and return results, an answer, "
+                "or schema-valid data."
+            ),
+            structured_output=False,
+        )(search_and_extract)
+        mcp.tool(
+            name="extract_structured_data",
+            description=(
+                "Extract schema-valid data from one public webpage or "
+                "media source."
+            ),
+            structured_output=False,
+        )(extract_structured_data)
+
     http_app = mcp.streamable_http_app()
     route = next(
         candidate
         for candidate in http_app.routes
         if isinstance(candidate, Route) and candidate.path == MCP_PATH
     )
-    return SmartFetchMCP(mcp, route, resource_server, accepts)
+    return SmartFetchMCP(
+        mcp,
+        route,
+        resource_server,
+        accepts,
+        v111_accepts,
+    )

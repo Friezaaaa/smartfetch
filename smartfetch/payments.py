@@ -163,7 +163,7 @@ def create_x402_resource_server(
     return server
 
 
-def install_x402(app, settings: X402Settings) -> bool:
+def install_x402(app, settings: X402Settings, *, additional_routes=None) -> bool:
     """Install and eagerly initialize official x402 protection when enabled."""
     if not settings.enabled:
         return False
@@ -201,6 +201,11 @@ def install_x402(app, settings: X402Settings) -> bool:
                 extensions=fetch_discovery_extension(),
             )
         }
+        if additional_routes:
+            overlap = set(routes).intersection(additional_routes)
+            if overlap:
+                raise ValueError("duplicate x402 route")
+            routes.update(additional_routes)
 
         # The middleware initializes lazily by default. Eager initialization is
         # deliberate so an enabled deployment cannot start with a free fallback.

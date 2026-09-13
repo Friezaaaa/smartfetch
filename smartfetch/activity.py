@@ -182,3 +182,8 @@ def emit_activity(event: str, **fields) -> None:
         ))
     except Exception:
         return None
+
+
+def current_request_id() -> Optional[str]:
+    """Return the opaque ID bound to the current request, if any."""
+    return _REQUEST_ID.get()

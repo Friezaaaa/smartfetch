@@ -59,18 +59,16 @@ class ProviderStage2ScopeTests(unittest.IsolatedAsyncioTestCase):
                 await provider.synthesize_answer(AnswerRequest("q", (("s1", "source"),)))
             client.assert_not_called()
 
-    def test_stage2_does_not_change_release_version_or_public_tool_wiring(self) -> None:
+    def test_stage2_does_not_change_release_version_or_contain_public_tool_wiring(self) -> None:
         self.assertEqual(SERVICE_VERSION, "1.10.6")
-        mcp_source = (ROOT / "smartfetch" / "mcp_server.py").read_text(encoding="utf-8")
-        for name in (
-            "fetch_webpage",
-            "webpage_to_markdown",
-            "extract_webpage_text",
-            "render_webpage",
-        ):
-            self.assertIn(name, mcp_source)
-        self.assertNotIn("search_and_extract", mcp_source)
-        self.assertNotIn("extract_structured_data", mcp_source)
+        provider_source = "\n".join(
+            (ROOT / "smartfetch" / "providers" / filename).read_text(
+                encoding="utf-8"
+            )
+            for filename in ("exa.py", "gemini.py")
+        )
+        self.assertNotIn("search_and_extract", provider_source)
+        self.assertNotIn("extract_structured_data", provider_source)
 
     def test_finite_errors_do_not_retain_causes_or_canaries(self) -> None:
         canary = "provider-stage2-secret-canary"

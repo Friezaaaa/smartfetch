@@ -6,7 +6,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+from typing import Mapping, Optional
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -44,6 +44,7 @@ from .mcp_server import (
     MCP_TOOL,
     MCP_TOOLS,
     MCP_TRANSPORT,
+    V111_MCP_TOOLS,
     create_smartfetch_mcp,
 )
 from .payments import (
@@ -51,6 +52,18 @@ from .payments import (
     X402Settings,
     install_x402,
     load_x402_settings,
+)
+from .v111_contracts import (
+    DirectExtractionRequest,
+    FailureResponse,
+    SearchAndExtractRequest,
+    V111_VARIANTS,
+)
+from .v111_payments import build_v111_http_routes
+from .v111_service import (
+    V111ExecutionError,
+    V111RuntimeConfig,
+    load_v111_activation,
 )
 
 
@@ -62,6 +75,25 @@ _FETCH_SLOTS = threading.BoundedSemaphore(max(1, MAX_CONCURRENT_FETCHES))
 _RATE_LOCK = threading.Lock()
 _RATE_BUCKETS = defaultdict(deque)
 _STARTED = time.time()
+_V111_HTTP_STATUS = {
+    'invalid_request': 400,
+    'invalid_schema': 400,
+    'invalid_filter': 400,
+    'invalid_source_url': 400,
+    'source_too_large': 413,
+    'schema_too_large': 413,
+    'unsupported_media_type': 415,
+    'invalid_provider_output': 422,
+    'schema_validation_failed': 422,
+    'evidence_validation_failed': 422,
+    'search_failed': 502,
+    'retrieval_failed': 502,
+    'model_failed': 502,
+    'provider_unavailable': 503,
+    'capacity_unavailable': 503,
+    'provider_timeout': 504,
+    'retrieval_timeout': 504,
+}
 
 
 def _rate_allowed(client: str) -> bool:
@@ -135,13 +167,19 @@ def _http_payment_present(request: Request) -> bool:
     )
 
 
-def _payment_activity_fields(settings, present: bool, stage: str):
+def _payment_activity_fields(
+    settings,
+    present: bool,
+    stage: str,
+    *,
+    price: str | None = None,
+):
     return {
         'payment_present': present,
         'payment_stage': stage,
         'payment_network': settings.network,
         'payment_asset': 'USDC',
-        'payment_amount': settings.price,
+        'payment_amount': price or settings.price,
     }
 
 
@@ -176,7 +214,7 @@ async def _mcp_activity_operation(request: Request):
     if method == 'tools/call':
         params = payload.get('params')
         if isinstance(params, dict):
-            if params.get('name') in MCP_TOOLS:
+            if params.get('name') in (*MCP_TOOLS, *V111_MCP_TOOLS):
                 tool = params['name']
             metadata = params.get('_meta')
             payment_present = (
@@ -231,8 +269,17 @@ async def _run_mcp_fetch(
 
 def create_app(
     payment_settings: Optional[X402Settings] = None,
+    *,
+    v111_runtime: Optional[V111RuntimeConfig] = None,
+    v111_environ: Optional[Mapping[str, str]] = None,
 ) -> FastAPI:
     settings = payment_settings or load_x402_settings()
+    activation = load_v111_activation(
+        os.environ if v111_environ is None else v111_environ,
+        v111_runtime,
+    )
+    if not settings.enabled:
+        activation = type(activation)(False, None)
     payment_mode = (
         'not-enabled-yet'
         if not settings.enabled
@@ -242,7 +289,11 @@ def create_app(
             else 'x402-enabled-testnet'
         )
     )
-    smartfetch_mcp = create_smartfetch_mcp(settings, _run_mcp_fetch)
+    smartfetch_mcp = create_smartfetch_mcp(
+        settings,
+        _run_mcp_fetch,
+        v111_service=activation.service,
+    )
     application = FastAPI(
         title=SERVICE_NAME,
         docs_url=None,
@@ -251,6 +302,7 @@ def create_app(
         lifespan=smartfetch_mcp.lifespan,
     )
     application.state.smartfetch_mcp = smartfetch_mcp
+    application.state.v111_activation = activation
 
     async def framework_not_found(request: Request, _exception):
         return _not_found(request)
@@ -548,6 +600,112 @@ def create_app(
         finally:
             _FETCH_SLOTS.release()
 
+    def v111_failure(
+        request: Request,
+        code: str,
+        message: str = 'Invalid request',
+    ):
+        try:
+            payload = FailureResponse(
+                error_code=code,
+                error=message,
+                request_id=_request_id(request),
+                service_version=SERVICE_VERSION,
+            ).model_dump(mode='json')
+        except Exception:
+            payload = {
+                'success': False,
+                'error_code': 'invalid_request',
+                'error': 'Invalid request',
+            }
+        return _json_response(
+            request,
+            _V111_HTTP_STATUS.get(code, 400),
+            payload,
+        )
+
+    if activation.enabled and activation.service is not None:
+        v111_service = activation.service
+        definitions_by_path = {
+            definition.rest_path: definition for definition in V111_VARIANTS
+        }
+
+        async def v111_handler(request: Request):
+            model = request.state.v111_request
+            definition = definitions_by_path[request.url.path]
+            if getattr(request.state, 'payment_payload', None) is not None:
+                emit_activity(
+                    'payment_verified',
+                    transport='http',
+                    tool=definition.capability,
+                    stage='verification',
+                    outcome='verified',
+                    **_payment_activity_fields(
+                        settings, True, 'verification',
+                        price=definition.price,
+                    ),
+                )
+            started = time.perf_counter()
+            emit_activity(
+                'tool_started',
+                transport='http',
+                tool=definition.capability,
+                stage='execution',
+                outcome='started',
+            )
+            try:
+                if type(model) is SearchAndExtractRequest:
+                    result = await v111_service.execute_search(
+                        model, request_id=_request_id(request)
+                    )
+                else:
+                    result = await v111_service.execute_extraction(
+                        model, request_id=_request_id(request)
+                    )
+            except V111ExecutionError as exc:
+                emit_activity(
+                    'tool_failed',
+                    transport='http',
+                    tool=definition.capability,
+                    stage='execution',
+                    outcome='failed',
+                    duration_ms=(time.perf_counter() - started) * 1000,
+                )
+                return v111_failure(request, exc.code, exc.public_message)
+            except Exception:
+                emit_activity(
+                    'tool_failed',
+                    transport='http',
+                    tool=definition.capability,
+                    stage='execution',
+                    outcome='failed',
+                    duration_ms=(time.perf_counter() - started) * 1000,
+                )
+                return v111_failure(
+                    request,
+                    'invalid_provider_output',
+                    'Invalid provider output',
+                )
+            emit_activity(
+                'tool_completed',
+                transport='http',
+                tool=definition.capability,
+                stage='execution',
+                outcome='completed',
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            return _json_response(
+                request, 200, result.model_dump(mode='json')
+            )
+
+        for definition in V111_VARIANTS:
+            application.add_api_route(
+                definition.rest_path,
+                v111_handler,
+                methods=['POST'],
+                include_in_schema=False,
+            )
+
     application.router.routes.append(smartfetch_mcp.route)
 
     @application.api_route('/{path:path}', methods=[
@@ -562,7 +720,53 @@ def create_app(
     async def not_found(request: Request, path: str):
         return _not_found(request)
 
-    install_x402(application, settings)
+    v111_payment_routes = (
+        build_v111_http_routes(settings) if activation.enabled else {}
+    )
+    install_x402(
+        application,
+        settings,
+        additional_routes=v111_payment_routes,
+    )
+
+    if activation.enabled and activation.service is not None:
+        @application.middleware('http')
+        async def v111_preflight(request: Request, call_next):
+            definition = definitions_by_path.get(request.url.path)
+            if request.method != 'POST' or definition is None:
+                return await call_next(request)
+            try:
+                length = int(request.headers.get('content-length') or 0)
+            except ValueError:
+                return v111_failure(request, 'invalid_request')
+            if length <= 0 or length > MAX_REQUEST_BODY_BYTES:
+                return v111_failure(request, 'invalid_request')
+            body_bytes = await request.body()
+            if len(body_bytes) > MAX_REQUEST_BODY_BYTES:
+                return v111_failure(request, 'invalid_request')
+            try:
+                body = json.loads(body_bytes)
+                if type(body) is not dict:
+                    raise ValueError
+                if definition.capability == 'search_and_extract':
+                    if 'mode' in body:
+                        raise ValueError
+                    model = SearchAndExtractRequest(
+                        **body, mode=definition.variant
+                    )
+                else:
+                    if 'source_type' in body:
+                        raise ValueError
+                    model = DirectExtractionRequest(
+                        **body, source_type=definition.variant
+                    )
+                v111_service.require_ready(definition.variant)
+            except V111ExecutionError as exc:
+                return v111_failure(request, exc.code, exc.public_message)
+            except Exception:
+                return v111_failure(request, 'invalid_request')
+            request.state.v111_request = model
+            return await call_next(request)
 
     @application.middleware('http')
     async def response_headers(request: Request, call_next):
@@ -573,16 +777,27 @@ def create_app(
         is_http_fetch = (
             request.method == 'POST' and request.url.path == '/fetch'
         )
+        v111_definition = (
+            definitions_by_path.get(request.url.path)
+            if activation.enabled and request.method == 'POST'
+            else None
+        )
+        http_tool = (
+            MCP_TOOL if is_http_fetch else (
+                v111_definition.capability if v111_definition else None
+            )
+        )
+        is_paid_http = is_http_fetch or v111_definition is not None
         with activity_context(
             request_id,
             route=(MCP_PATH if method is not None else request.url.path),
             client_category=_client_category(request),
         ):
-            if is_http_fetch:
+            if is_paid_http:
                 emit_activity(
                     'tool_call_attempted',
                     transport='http',
-                    tool=MCP_TOOL,
+                    tool=http_tool,
                     stage='request',
                     outcome='received',
                     payment_present=_http_payment_present(request),
@@ -617,7 +832,7 @@ def create_app(
                     ),
                     status=response.status_code,
                 )
-            if is_http_fetch:
+            if is_paid_http:
                 if (
                     response.status_code == 402
                     and getattr(request.state, 'payment_payload', None) is None
@@ -625,7 +840,7 @@ def create_app(
                     emit_activity(
                         'payment_challenged',
                         transport='http',
-                        tool=MCP_TOOL,
+                        tool=http_tool,
                         stage='challenge',
                         outcome='payment_required',
                         status=402,
@@ -638,6 +853,10 @@ def create_app(
                             settings,
                             _http_payment_present(request),
                             'challenge',
+                            price=(
+                                v111_definition.price
+                                if v111_definition else None
+                            ),
                         ),
                     )
                 elif (
@@ -647,7 +866,7 @@ def create_app(
                     emit_activity(
                         'payment_settled',
                         transport='http',
-                        tool=MCP_TOOL,
+                        tool=http_tool,
                         stage='settlement',
                         outcome='settled',
                         status=response.status_code,
@@ -655,6 +874,10 @@ def create_app(
                             settings,
                             True,
                             'settlement',
+                            price=(
+                                v111_definition.price
+                                if v111_definition else None
+                            ),
                         ),
                     )
         if (
