@@ -107,6 +107,26 @@ For structured extraction, settlement eligibility includes the missing-value
 rules in section 6.3. Properly disclosed schema-permitted nulls can be part of
 a contract-valid success; an all-missing/null extraction cannot settle.
 
+For Base USDC's official `exact` EIP-3009 mechanism, the token-transfer
+authorization signs the payer, payee, amount, validity window, and nonce. It
+does not cryptographically sign SmartFetch's route, variant, challenge
+`resource`, or HTTP/MCP request body. Requirements with the same scheme,
+network, asset, payee, and amount are therefore payment-equivalent even when
+their informational `resource` values differ. The fully validated route and
+body on the paid retry determine the operation SmartFetch executes, and the
+body is validated again before verified execution. SmartFetch must not claim
+stronger route or body binding than the official protocol provides.
+
+SmartFetch uses a bounded process-local claim on the verified payer/nonce to
+prevent a replay from starting a second V1.11 execution or settlement attempt
+in the same running process, including after an ambiguous settlement result.
+It never retries settlement automatically. Across processes or restarts, the
+EIP-3009 on-chain nonce is the authoritative guarantee that one authorization
+cannot settle successfully twice; a mocked facilitator cannot prove that
+on-chain property. TLS protects the payment header in transit. V1.11 adds no
+custom cryptography, proprietary payment extension, extra wallet/payee, or
+artificial price discrimination.
+
 ### 2.3 Dynamic-pricing feasibility
 
 The installed x402 Python 2.20.0 HTTP API permits `DynamicPrice`, but its
@@ -204,9 +224,10 @@ The internal MCP resources are:
 - `mcp://tool/extract_structured_data/audio`
 - `mcp://tool/extract_structured_data/video`
 
-The distinct identities make payment and Bazaar records variant-specific. The
-MCP `toolName` remains exactly `search_and_extract` or
-`extract_structured_data`.
+The distinct identities keep challenges and Bazaar records informative and
+variant-specific. They do not add cryptographic route or body binding to the
+underlying EIP-3009 authorization. The MCP `toolName` remains exactly
+`search_and_extract` or `extract_structured_data`.
 
 Every requirement is built from the existing x402 resource server with:
 
@@ -759,8 +780,12 @@ All types permit at most five redirects. Connect timeout is 5 seconds, read
 timeout 15 seconds, and download wall time 25 seconds. Variant wall times are
 bounded independently: results 15 seconds, answer 40 seconds, structured
 search 60 seconds, webpage/image/PDF 60 seconds, audio 90 seconds, and video
-120 seconds. These limits apply only to new capabilities and do not modify
-V1.10.6 timeouts.
+120 seconds. Each variant deadline covers the complete post-verification
+operation: real circuit-permit acquisition, provider/retrieval/media work,
+schema/citation/evidence validation, response construction, and required local
+cleanup. Timeout cancels the operation, waits for cleanup, returns only the
+finite timeout contract, never retries, and never settles. These limits apply
+only to new capabilities and do not modify V1.10.6 timeouts.
 
 MIME validation requires agreement among the allowlisted `Content-Type`, magic
 bytes/container probe, and path-independent local inspector. A generic or
@@ -821,9 +846,12 @@ wrapper. All external work lives inside the wrapped handler. Wrapper maps are
 immutable after startup and keyed by enum values, preventing shared mutable
 state or request-to-request leakage.
 
-A payment created for `$0.05` results mode cannot satisfy the `$0.10` answer or
-`$0.15` structured requirement: each dispatch path verifies against its own
-exact amount and resource. The same isolation applies to source types.
+An authorization with an insufficient amount, or the wrong scheme, network,
+asset, or payee, cannot satisfy a variant's requirement. A `$0.05`
+authorization may satisfy another `$0.05` variant because those requirements
+are payment-equivalent under official EIP-3009 semantics. The paid retry's
+independently validated route/body chooses the only operation executed; the
+challenge `resource` remains accurate informational metadata.
 
 ## 11. Privacy-safe activity logging
 
@@ -1178,20 +1206,59 @@ is reviewable and preserves a passing main branch.
 
 ## 17. Rollout and rollback
 
-The new capabilities are guarded by server-controlled enablement plus provider
-configuration. On deployment:
+The new capabilities use the single restart-only environment gate
+`SMARTFETCH_V111_ENABLED`. Only the exact lowercase value `true` requests
+enablement. Missing, empty, and exact lowercase `false` disable V1.11. Every
+other value is invalid, fails closed to disabled, and emits only the bounded
+structured warning code `v111_config_invalid`; the supplied value is never
+logged. Invalid V1.11 configuration never prevents the existing V1.10.6
+service from starting.
 
-1. keep new capability enablement false while existing V1.10.6 routes boot;
+Activation is all-or-nothing. V1.11 becomes active only when the flag is
+exactly `true`, Exa configuration is complete, Gemini configuration is
+complete, and all required provider controls, spend ceilings, and model routes
+validate locally. Startup activation performs no network request, credential
+logging, circuit permit acquisition, payment, or wallet operation. If any
+requirement is missing or invalid, none of the eight REST routes or two MCP
+tools is registered: the REST paths retain the existing bounded 404 behavior,
+OpenAPI and runtime discovery do not advertise them, and MCP `tools/list`
+continues to return exactly the four existing tools. The service never exposes
+a partial set of routes or five tools. Configuration is evaluated once while
+the application is constructed and changes take effect only after restart.
+
+When fully active, all eight fixed REST routes and both new MCP tools are
+registered together. Before a payment challenge, the selected variant and its
+bounded input are validated and the required provider circuits are inspected
+through a non-consuming readiness snapshot. No permit is reserved or consumed
+and no provider, retrieval, or media work occurs. An open or unavailable
+circuit returns a free bounded `provider_unavailable` error (HTTP 503 for REST,
+the corresponding structured tool error for MCP) with no challenge, signing,
+provider work, or settlement.
+
+After payment verification and immediately before provider work, the real
+provider circuit permit is acquired and consumed exactly once by the adapter.
+No permit is held while an unpaid caller considers a challenge. A circuit may
+become unavailable between the free preflight and the paid retry; that race is
+accepted. The paid retry then returns `provider_unavailable`, performs no
+provider work, does not settle, and is never retried automatically or allowed
+to reuse a permit. Concurrent requests own independent request budgets and
+cannot share or replay permits.
+
+On deployment:
+
+1. keep `SMARTFETCH_V111_ENABLED` absent or `false` while existing V1.10.6
+   routes boot;
 2. validate free discovery and the unchanged four tools;
-3. enable configured variants only after model routing and prices pass the
-   benchmark gate;
+3. set the flag to exact lowercase `true` only after complete provider
+   configuration, model routing, and provisional prices pass the benchmark
+   gate, then restart the application;
 4. verify free challenges only before any separately authorized paid smoke.
 
-Rollback disables the new capability flag or redeploys the V1.10.6 commit.
-Existing `/fetch` and four MCP tools do not depend on provider keys, media
-packages, or new wrappers and remain operational. A provider circuit opening
-removes execution availability for only affected new variants; it does not make
-them free and does not alter existing resources.
+Rollback disables `SMARTFETCH_V111_ENABLED` and restarts, or redeploys the
+V1.10.6 commit. Existing `/fetch` and four MCP tools do not depend on provider
+keys, media packages, or new wrappers and remain operational. A provider
+circuit opening removes execution availability for only affected new variants;
+it does not make them free and does not alter existing resources.
 
 ## 18. Expected file changes
 

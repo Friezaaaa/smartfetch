@@ -62,6 +62,26 @@ _DIAGNOSTIC_BOOLEAN_FIELDS = frozenset((
     'browser_attempted',
     'fallback_attempted',
 ))
+_V111_VALUE_ALLOWLISTS = {
+    'capability': frozenset(('search_and_extract', 'extract_structured_data')),
+    'variant': frozenset((
+        'results', 'answer', 'structured', 'webpage', 'image', 'pdf', 'audio',
+        'video',
+    )),
+    'provider': frozenset(('exa', 'gemini')),
+    'model_route': frozenset(('flash', 'flash_lite')),
+}
+_V111_COUNT_FIELDS = frozenset((
+    'result_count',
+    'source_count',
+    'search_query_count',
+    'input_tokens',
+    'output_tokens',
+    'thinking_tokens',
+    'tool_use_tokens',
+))
+_V111_MAX_COUNT = 100_000_000
+_V111_MAX_COST_MICRO_USD = 1_000_000_000
 
 
 def _bounded_string(value, limit: int) -> Optional[str]:
@@ -174,11 +194,37 @@ def emit_activity(event: str, **fields) -> None:
             ):
                 record['upstream_status'] = upstream_status
 
+        if effective_fields.get('_v111_event') is True:
+            for name, allowed in _V111_VALUE_ALLOWLISTS.items():
+                value = effective_fields.get(name)
+                if type(value) is str and value in allowed:
+                    record[name] = value
+            for name in _V111_COUNT_FIELDS:
+                value = effective_fields.get(name)
+                if type(value) is int and 0 <= value <= _V111_MAX_COUNT:
+                    record[name] = value
+            cost = effective_fields.get('provider_cost_micro_usd')
+            if type(cost) is int and 0 <= cost <= _V111_MAX_COST_MICRO_USD:
+                record['provider_cost_micro_usd'] = cost
+
         log = _LOGGER.error if is_error else _LOGGER.info
         log(json.dumps(
             record,
             separators=(",", ":"),
             sort_keys=True,
         ))
+    except Exception:
+        return None
+
+
+def current_request_id() -> Optional[str]:
+    """Return the opaque ID bound to the current request, if any."""
+    return _REQUEST_ID.get()
+
+
+def emit_v111_activity(event: str, **fields) -> None:
+    """Emit only the finite V1.11 activity extension fields."""
+    try:
+        emit_activity(event, _v111_event=True, **fields)
     except Exception:
         return None
