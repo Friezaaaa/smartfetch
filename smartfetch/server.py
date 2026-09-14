@@ -13,7 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from .access_logging import uvicorn_log_config
-from .activity import activity_context, emit_activity
+from .activity import activity_context, emit_activity, emit_v111_activity
 from .config import (
     HOST,
     MAX_CONCURRENT_FETCHES,
@@ -64,6 +64,7 @@ from .v111_service import (
     V111ExecutionError,
     V111RuntimeConfig,
     load_v111_activation,
+    run_v111_deadline,
 )
 
 
@@ -94,6 +95,50 @@ _V111_HTTP_STATUS = {
     'provider_timeout': 504,
     'retrieval_timeout': 504,
 }
+
+
+async def _read_bounded_request_body(
+    request: Request,
+    *,
+    maximum: int,
+) -> bytes:
+    """Read and replay one ASGI body without buffering beyond ``maximum + 1``."""
+    raw_length = request.headers.get('content-length')
+    if raw_length is not None:
+        if not raw_length.isascii() or not raw_length.isdecimal():
+            raise ValueError('invalid_request')
+        if int(raw_length) > maximum:
+            raise ValueError('invalid_request')
+    body = bytearray()
+    empty_chunks = 0
+    while True:
+        try:
+            message = await request.receive()
+        except BaseException as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            raise ValueError('invalid_request') from None
+        if type(message) is not dict or message.get('type') != 'http.request':
+            raise ValueError('invalid_request')
+        chunk = message.get('body', b'')
+        more_body = message.get('more_body', False)
+        if type(chunk) is not bytes or type(more_body) is not bool:
+            raise ValueError('invalid_request')
+        if not chunk and more_body:
+            empty_chunks += 1
+            if empty_chunks > 64:
+                raise ValueError('invalid_request')
+        elif chunk:
+            empty_chunks = 0
+            remaining = maximum + 1 - len(body)
+            body.extend(chunk[:remaining])
+            if len(body) > maximum or len(chunk) > remaining:
+                raise ValueError('invalid_request')
+        if not more_body:
+            break
+    bounded = bytes(body)
+    request._body = bounded
+    return bounded
 
 
 def _rate_allowed(client: str) -> bool:
@@ -193,35 +238,46 @@ def _not_found(request: Request) -> JSONResponse:
 
 async def _mcp_activity_operation(request: Request):
     if request.method != 'POST' or request.url.path != MCP_PATH:
-        return None, None, False
+        return None, None, False, None
     try:
-        length = int(request.headers.get('content-length') or 0)
-    except ValueError:
-        return None, None, False
-    if length <= 0 or length > MAX_REQUEST_BODY_BYTES:
-        return None, None, False
-    try:
-        payload = json.loads(await request.body())
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return None, None, False
+        payload = json.loads(await _read_bounded_request_body(
+            request,
+            maximum=MAX_REQUEST_BODY_BYTES,
+        ))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return None, None, False, None
     if not isinstance(payload, dict):
-        return None, None, False
+        return None, None, False, None
     method = payload.get('method')
     if not isinstance(method, str):
-        return None, None, False
+        return None, None, False, None
     tool = None
     payment_present = False
+    variant = None
     if method == 'tools/call':
         params = payload.get('params')
         if isinstance(params, dict):
             if params.get('name') in (*MCP_TOOLS, *V111_MCP_TOOLS):
                 tool = params['name']
+            arguments = params.get('arguments')
+            if type(arguments) is dict:
+                candidate = (
+                    arguments.get('mode')
+                    if tool == 'search_and_extract'
+                    else arguments.get('source_type')
+                    if tool == 'extract_structured_data'
+                    else None
+                )
+                if type(candidate) is str:
+                    variant = candidate
             metadata = params.get('_meta')
             payment_present = (
                 isinstance(metadata, dict)
                 and 'x402/payment' in metadata
             )
-    return method, tool, payment_present
+    return method, tool, payment_present, variant
 
 
 async def _run_fetch(url: str, force_browser: bool, max_chars):
@@ -633,70 +689,102 @@ def create_app(
         async def v111_handler(request: Request):
             model = request.state.v111_request
             definition = definitions_by_path[request.url.path]
-            if getattr(request.state, 'payment_payload', None) is not None:
-                emit_activity(
+            payment_payload = getattr(request.state, 'payment_payload', None)
+            if payment_payload is not None:
+                if not v111_service.claim_payment_attempt(payment_payload):
+                    return v111_failure(request, 'invalid_request')
+                emit_v111_activity(
                     'payment_verified',
                     transport='http',
                     tool=definition.capability,
                     stage='verification',
                     outcome='verified',
+                    capability=definition.capability,
+                    variant=definition.variant,
                     **_payment_activity_fields(
                         settings, True, 'verification',
                         price=definition.price,
                     ),
                 )
             started = time.perf_counter()
-            emit_activity(
+            emit_v111_activity(
                 'tool_started',
                 transport='http',
                 tool=definition.capability,
                 stage='execution',
                 outcome='started',
+                capability=definition.capability,
+                variant=definition.variant,
             )
             try:
-                if type(model) is SearchAndExtractRequest:
-                    result = await v111_service.execute_search(
-                        model, request_id=_request_id(request)
-                    )
-                else:
-                    result = await v111_service.execute_extraction(
-                        model, request_id=_request_id(request)
-                    )
+                async def execute_and_serialize():
+                    def activity_sink(event, **fields):
+                        emit_v111_activity(
+                            event,
+                            transport='http',
+                            tool=definition.capability,
+                            capability=definition.capability,
+                            variant=definition.variant,
+                            **fields,
+                        )
+
+                    if type(model) is SearchAndExtractRequest:
+                        result = await v111_service.execute_search(
+                            model,
+                            request_id=_request_id(request),
+                            activity_sink=activity_sink,
+                        )
+                    else:
+                        result = await v111_service.execute_extraction(
+                            model,
+                            request_id=_request_id(request),
+                            activity_sink=activity_sink,
+                        )
+                    return result.model_dump(mode='json')
+
+                payload = await run_v111_deadline(
+                    definition.variant,
+                    execute_and_serialize(),
+                )
             except V111ExecutionError as exc:
-                emit_activity(
+                emit_v111_activity(
                     'tool_failed',
                     transport='http',
                     tool=definition.capability,
                     stage='execution',
                     outcome='failed',
                     duration_ms=(time.perf_counter() - started) * 1000,
+                    capability=definition.capability,
+                    variant=definition.variant,
                 )
                 return v111_failure(request, exc.code, exc.public_message)
             except Exception:
-                emit_activity(
+                emit_v111_activity(
                     'tool_failed',
                     transport='http',
                     tool=definition.capability,
                     stage='execution',
                     outcome='failed',
                     duration_ms=(time.perf_counter() - started) * 1000,
+                    capability=definition.capability,
+                    variant=definition.variant,
                 )
                 return v111_failure(
                     request,
                     'invalid_provider_output',
                     'Invalid provider output',
                 )
-            emit_activity(
+            emit_v111_activity(
                 'tool_completed',
                 transport='http',
                 tool=definition.capability,
                 stage='execution',
                 outcome='completed',
                 duration_ms=(time.perf_counter() - started) * 1000,
+                capability=definition.capability,
+                variant=definition.variant,
             )
-            return _json_response(
-                request, 200, result.model_dump(mode='json')
-            )
+            return _json_response(request, 200, payload)
 
         for definition in V111_VARIANTS:
             application.add_api_route(
@@ -736,13 +824,13 @@ def create_app(
             if request.method != 'POST' or definition is None:
                 return await call_next(request)
             try:
-                length = int(request.headers.get('content-length') or 0)
-            except ValueError:
-                return v111_failure(request, 'invalid_request')
-            if length <= 0 or length > MAX_REQUEST_BODY_BYTES:
-                return v111_failure(request, 'invalid_request')
-            body_bytes = await request.body()
-            if len(body_bytes) > MAX_REQUEST_BODY_BYTES:
+                body_bytes = await _read_bounded_request_body(
+                    request,
+                    maximum=MAX_REQUEST_BODY_BYTES,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
                 return v111_failure(request, 'invalid_request')
             try:
                 body = json.loads(body_bytes)
@@ -771,7 +859,7 @@ def create_app(
     @application.middleware('http')
     async def response_headers(request: Request, call_next):
         request_id = _request_id(request)
-        method, tool, mcp_payment_present = await _mcp_activity_operation(
+        method, tool, mcp_payment_present, mcp_variant = await _mcp_activity_operation(
             request
         )
         is_http_fetch = (
@@ -794,22 +882,41 @@ def create_app(
             client_category=_client_category(request),
         ):
             if is_paid_http:
-                emit_activity(
+                emitter = emit_v111_activity if v111_definition else emit_activity
+                v111_fields = (
+                    {
+                        'capability': v111_definition.capability,
+                        'variant': v111_definition.variant,
+                    }
+                    if v111_definition else {}
+                )
+                emitter(
                     'tool_call_attempted',
                     transport='http',
                     tool=http_tool,
                     stage='request',
                     outcome='received',
                     payment_present=_http_payment_present(request),
+                    **v111_fields,
                 )
             if method == 'tools/call':
-                emit_activity(
+                emitter = (
+                    emit_v111_activity
+                    if tool in V111_MCP_TOOLS and mcp_variant is not None
+                    else emit_activity
+                )
+                v111_fields = (
+                    {'capability': tool, 'variant': mcp_variant}
+                    if emitter is emit_v111_activity else {}
+                )
+                emitter(
                     'tool_call_attempted',
                     transport='mcp',
                     tool=tool,
                     stage='request',
                     outcome='received',
                     payment_present=mcp_payment_present,
+                    **v111_fields,
                 )
             response = await call_next(request)
             if method == 'initialize':
@@ -837,7 +944,7 @@ def create_app(
                     response.status_code == 402
                     and getattr(request.state, 'payment_payload', None) is None
                 ):
-                    emit_activity(
+                    emitter(
                         'payment_challenged',
                         transport='http',
                         tool=http_tool,
@@ -858,12 +965,13 @@ def create_app(
                                 if v111_definition else None
                             ),
                         ),
+                        **v111_fields,
                     )
                 elif (
                     response.status_code < 400
                     and 'payment-response' in response.headers
                 ):
-                    emit_activity(
+                    emitter(
                         'payment_settled',
                         transport='http',
                         tool=http_tool,
@@ -879,6 +987,7 @@ def create_app(
                                 if v111_definition else None
                             ),
                         ),
+                        **v111_fields,
                     )
         if (
             response.status_code == 402

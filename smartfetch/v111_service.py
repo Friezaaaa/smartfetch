@@ -6,15 +6,19 @@ runtime and the exact ``SMARTFETCH_V111_ENABLED=true`` gate.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import json
 import logging
 from pathlib import Path
+import threading
+import time
+from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
 from .config import SERVICE_VERSION
-from .costs import MAX_PROVIDER_COST_MICRO_USD
+from .costs import MAX_PROVIDER_COST_MICRO_USD, ProviderUsage
 from .media import MediaFailure, choose_delivery, ingest_remote_media, retrieve_webpage
 from .model_routing import BenchmarkModelRouter, ModelRoutingError
 from .provider_controls import RequestCostBudget
@@ -45,6 +49,16 @@ from .v111_contracts import (
 
 
 _CONFIG_LOGGER = logging.getLogger("smartfetch.configuration")
+V111_DEADLINES_SECONDS = MappingProxyType({
+    "results": 15.0,
+    "answer": 40.0,
+    "structured": 60.0,
+    "webpage": 60.0,
+    "image": 60.0,
+    "pdf": 60.0,
+    "audio": 90.0,
+    "video": 120.0,
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +155,32 @@ class V111ExecutionError(RuntimeError):
         super().__init__(code)
 
 
+def _deadline_for_variant(variant: str) -> float:
+    value = V111_DEADLINES_SECONDS.get(variant)
+    if value is None:
+        raise V111ExecutionError("invalid_request")
+    return value
+
+
+async def run_v111_deadline(variant: str, operation):
+    """Apply one wall deadline to the complete post-verification operation."""
+    timeout_code = (
+        "provider_timeout"
+        if variant in {"results", "answer", "structured"}
+        else "retrieval_timeout"
+    )
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _deadline_for_variant(variant)
+    try:
+        async with asyncio.timeout_at(deadline):
+            result = await operation
+            if loop.time() > deadline:
+                raise TimeoutError
+            return result
+    except TimeoutError:
+        raise V111ExecutionError(timeout_code) from None
+
+
 def _variant(name: str):
     return next((item for item in V111_VARIANTS if item.variant == name), None)
 
@@ -150,6 +190,38 @@ def _freshness_after(value: str | None, now: datetime) -> datetime | None:
         return None
     days = {"day": 1, "week": 7, "month": 31, "year": 365}[value]
     return now - timedelta(days=days)
+
+
+def _emit_provider_activity(
+    sink,
+    usage: ProviderUsage,
+    *,
+    model_route: str | None = None,
+    result_count: int | None = None,
+    source_count: int | None = None,
+) -> None:
+    """Report only validated usage; telemetry failures never affect delivery."""
+    if sink is None or type(usage) is not ProviderUsage:
+        return
+    fields = {"provider": usage.provider}
+    if model_route is not None:
+        fields["model_route"] = model_route
+    for name, value in (
+        ("result_count", result_count),
+        ("source_count", source_count),
+        ("search_query_count", usage.search_queries),
+        ("input_tokens", usage.input_tokens),
+        ("output_tokens", usage.output_tokens),
+        ("thinking_tokens", usage.thinking_tokens),
+        ("tool_use_tokens", usage.tool_use_tokens),
+        ("provider_cost_micro_usd", usage.cost_micro_usd),
+    ):
+        if type(value) is int and value > 0:
+            fields[name] = value
+    try:
+        sink("provider_completed", **fields)
+    except Exception:
+        return
 
 
 class _StaticMediaResolver:
@@ -167,6 +239,55 @@ class V111Service:
 
     def __init__(self, runtime: V111RuntimeConfig) -> None:
         self.runtime = runtime
+        self._payment_attempts: dict[tuple[str, str], int] = {}
+        self._payment_attempts_lock = threading.Lock()
+
+    @staticmethod
+    def _authorization_identity(payment_payload) -> tuple[tuple[str, str], int] | None:
+        try:
+            payload = payment_payload.payload
+            if type(payload) is not dict:
+                return None
+            authorization = payload.get("authorization")
+            if type(authorization) is not dict:
+                return None
+            payer = authorization.get("from")
+            nonce = authorization.get("nonce")
+            valid_before = authorization.get("validBefore")
+            if (
+                type(payer) is not str
+                or len(payer) != 42
+                or type(nonce) is not str
+                or len(nonce) != 66
+            ):
+                return None
+            if type(valid_before) is str and valid_before.isascii() and valid_before.isdecimal():
+                expires = int(valid_before)
+            elif type(valid_before) is int and not isinstance(valid_before, bool):
+                expires = valid_before
+            else:
+                return None
+            if expires <= 0:
+                return None
+            return (payer.lower(), nonce.lower()), expires
+        except Exception:
+            return None
+
+    def claim_payment_attempt(self, payment_payload) -> bool:
+        """Claim one process-local execution attempt for an EIP-3009 nonce."""
+        identity = self._authorization_identity(payment_payload)
+        if identity is None:
+            return False
+        key, expires = identity
+        now = int(time.time())
+        with self._payment_attempts_lock:
+            expired = [item for item, deadline in self._payment_attempts.items() if deadline <= now]
+            for item in expired:
+                self._payment_attempts.pop(item, None)
+            if key in self._payment_attempts or len(self._payment_attempts) >= 100_000:
+                return False
+            self._payment_attempts[key] = expires
+            return True
 
     def require_ready(self, variant: str) -> None:
         definition = _variant(variant)
@@ -189,6 +310,7 @@ class V111Service:
         request: SearchAndExtractRequest,
         *,
         request_id: str,
+        activity_sink=None,
     ) -> SearchResultsResponse | SearchAnswerResponse | StructuredResponse:
         if type(request) is not SearchAndExtractRequest:
             raise V111ExecutionError("invalid_request")
@@ -206,6 +328,11 @@ class V111Service:
                 ),
             ))
             candidates = search_result.candidates[:request.max_results]
+            _emit_provider_activity(
+                activity_sink,
+                search_result.usage,
+                result_count=len(candidates),
+            )
             if not candidates:
                 raise V111ExecutionError("search_failed")
             if request.mode == "results":
@@ -226,13 +353,21 @@ class V111Service:
                 )
             maximum = min(len(candidates), 3 if request.mode == "answer" else request.max_sources or 3)
             records, source_pairs = await self._retrieve(candidates[:maximum])
+            workload = "answer" if request.mode == "answer" else "structured_search"
+            model_route = self.runtime.router.select(workload).route_label
             model = self.runtime.new_model_provider(
-                "answer" if request.mode == "answer" else "structured_search",
+                workload,
                 budget,
                 None,
             )
             if request.mode == "answer":
                 answer = await model.synthesize_answer(AnswerRequest(request.query, source_pairs))
+                _emit_provider_activity(
+                    activity_sink,
+                    answer.usage,
+                    model_route=model_route,
+                    source_count=len(records),
+                )
                 by_source = {item.source_id: item for item in candidates[:maximum]}
                 citations = tuple(Citation(
                     citation_id=item.citation_id,
@@ -255,6 +390,12 @@ class V111Service:
                 request.instructions,
                 source_pairs,
             ))
+            _emit_provider_activity(
+                activity_sink,
+                structured.usage,
+                model_route=model_route,
+                source_count=len(records),
+            )
             return self._structured_response(
                 structured, request_id=request_id, now=now, sources=records, mode="structured"
             )
@@ -292,6 +433,7 @@ class V111Service:
         request: DirectExtractionRequest,
         *,
         request_id: str,
+        activity_sink=None,
     ) -> StructuredResponse:
         if type(request) is not DirectExtractionRequest:
             raise V111ExecutionError("invalid_request")
@@ -313,10 +455,17 @@ class V111Service:
                     url=request.source_url, retrieval_method=method,
                     retrieved_at=now,
                 )
+                model_route = self.runtime.router.select("webpage").route_label
                 model = self.runtime.new_model_provider("webpage", budget, None)
                 output = await model.extract_text(StructuredTextRequest(
                     request.json_schema, request.instructions, (("s1", content),)
                 ))
+                _emit_provider_activity(
+                    activity_sink,
+                    output.usage,
+                    model_route=model_route,
+                    source_count=1,
+                )
                 return self._structured_response(
                     output, request_id=request_id, now=now, sources=(source,),
                     source_type="webpage", retrieval_method=method,
@@ -341,6 +490,7 @@ class V111Service:
                     duration_seconds=getattr(metadata, "duration_seconds", None),
                     page_count=getattr(metadata, "page_count", None),
                 )
+                model_route = self.runtime.router.select(request.source_type).route_label
                 model = self.runtime.new_model_provider(
                     request.source_type, budget, _StaticMediaResolver(prepared)
                 )
@@ -350,6 +500,12 @@ class V111Service:
                     request.source_type,
                     "request-local-media",
                 ))
+                _emit_provider_activity(
+                    activity_sink,
+                    output.usage,
+                    model_route=model_route,
+                    source_count=1,
+                )
             source = SourceRecord(
                 source_id="s1", title="", url=request.source_url,
                 retrieval_method=request.source_type, retrieved_at=now,
@@ -428,5 +584,7 @@ __all__ = [
     "V111ExecutionError",
     "V111RuntimeConfig",
     "V111Service",
+    "V111_DEADLINES_SECONDS",
     "load_v111_activation",
+    "run_v111_deadline",
 ]

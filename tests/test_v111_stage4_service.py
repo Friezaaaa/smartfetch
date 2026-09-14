@@ -1,4 +1,5 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import tempfile
 import unittest
 from contextlib import asynccontextmanager
@@ -155,6 +156,35 @@ class V111ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item.source_id for item in result.results], ["s1", "s2"])
         self.assertEqual(self.calls, [("exa", 2)])
 
+    async def test_provider_activity_reports_only_validated_nonzero_usage(self):
+        events = []
+        await self.service.execute_search(
+            SearchAndExtractRequest(query="query", mode="answer", max_results=2),
+            request_id="abc",
+            activity_sink=lambda event, **fields: events.append((event, fields)),
+        )
+        self.assertEqual(events, [
+            ("provider_completed", {
+                "provider": "exa", "result_count": 2,
+                "search_query_count": 1, "provider_cost_micro_usd": 7000,
+            }),
+            ("provider_completed", {
+                "provider": "gemini", "model_route": "flash_lite",
+                "source_count": 2, "input_tokens": 10, "output_tokens": 5,
+                "provider_cost_micro_usd": 20,
+            }),
+        ])
+
+    async def test_activity_sink_failure_cannot_replace_success(self):
+        result = await self.service.execute_search(
+            SearchAndExtractRequest(query="query", mode="results", max_results=2),
+            request_id="abc",
+            activity_sink=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("activity-canary")
+            ),
+        )
+        self.assertTrue(result.success)
+
     async def test_answer_searches_retrieves_three_at_most_and_maps_citations(self):
         result = await self.service.execute_search(SearchAndExtractRequest(
             query="query", mode="answer", max_results=2,
@@ -276,6 +306,22 @@ class V111ServiceTests(unittest.IsolatedAsyncioTestCase):
         gemini_permit = gemini.begin_call()
         exa.record_success(exa_permit)
         gemini.record_success(gemini_permit)
+
+    def test_payment_attempt_claim_is_atomic_for_one_payer_nonce(self):
+        payment = type("Payment", (), {"payload": {
+            "authorization": {
+                "from": "0x1111111111111111111111111111111111111111",
+                "nonce": "0x" + "ab" * 32,
+                "validBefore": "9999999999",
+            }
+        }})()
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            outcomes = list(pool.map(
+                lambda _index: self.service.claim_payment_attempt(payment),
+                range(64),
+            ))
+        self.assertEqual(outcomes.count(True), 1)
+        self.assertEqual(outcomes.count(False), 63)
 
 
 if __name__ == "__main__":

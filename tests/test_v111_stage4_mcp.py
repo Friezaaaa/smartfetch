@@ -71,11 +71,21 @@ def arguments_for(definition):
     return args
 
 
-def payment_for(requirement):
+def payment_for(requirement, marker="10"):
     return {
         "x402Version": 2,
         "accepted": requirement.model_dump(by_alias=True, exclude_none=True),
-        "payload": {"authorization": "opaque-test-value"},
+        "payload": {
+            "authorization": {
+                "from": PAYEE,
+                "to": PAYEE,
+                "value": requirement.amount,
+                "validAfter": "0",
+                "validBefore": "9999999999",
+                "nonce": "0x" + marker * 32,
+            },
+            "signature": "0x" + "11" * 65,
+        },
     }
 
 
@@ -278,6 +288,106 @@ class V111MCPIntegrationTests(unittest.TestCase):
             "provider_unavailable",
         )
         payment_server.verify_payment.assert_awaited_once()
+        payment_server.settle_payment.assert_not_awaited()
+
+    def test_replayed_authorization_never_executes_or_settles_twice(self):
+        app = self.app()
+        payment_server = app.state.smartfetch_mcp.resource_server
+        definition = V111_VARIANTS[0]
+        requirement = app.state.smartfetch_mcp.v111_accepts[definition.mcp_resource][0]
+        payment_server.find_matching_requirements = Mock(return_value=requirement)
+        payment_server.verify_payment = AsyncMock(return_value=VerifyResponse(
+            isValid=True, payer=PAYEE
+        ))
+        payment_server.settle_payment = AsyncMock(return_value=SettleResponse(
+            success=True, payer=PAYEE, transaction="0xonce", network=BASE_SEPOLIA
+        ))
+        service = app.state.v111_activation.service
+        result = type("Result", (), {"model_dump": lambda self, **_kwargs: {
+            "success": True, "mode": "results", "request_id": "mcp-replay",
+            "service_version": "1.10.6", "retrieved_at": "2026-09-13T00:00:00Z",
+            "query": "current public facts", "results": [],
+        }})()
+        payment = payment_for(requirement, "20")
+        with (
+            patch.object(service, "execute_search", new_callable=AsyncMock,
+                         return_value=result) as execute,
+            TestClient(app) as client,
+        ):
+            initialize(client)
+            first = paid_call(client, definition, payment, 70)
+            second = paid_call(client, definition, payment, 71)
+        self.assertFalse(first["result"]["isError"])
+        self.assertTrue(second["result"]["isError"])
+        execute.assert_awaited_once()
+        payment_server.settle_payment.assert_awaited_once()
+
+    def test_same_price_authorization_selects_only_paid_retry_mcp_variant(self):
+        app = self.app()
+        payment_server = app.state.smartfetch_mcp.resource_server
+        results = V111_VARIANTS[0]
+        image = next(item for item in V111_VARIANTS if item.variant == "image")
+        results_requirement = app.state.smartfetch_mcp.v111_accepts[
+            results.mcp_resource
+        ][0]
+        payment_server.verify_payment = AsyncMock(return_value=VerifyResponse(
+            isValid=True, payer=PAYEE
+        ))
+        payment_server.settle_payment = AsyncMock(return_value=SettleResponse(
+            success=True, payer=PAYEE, transaction="0xsame", network=BASE_SEPOLIA
+        ))
+        service = app.state.v111_activation.service
+        result = type("Result", (), {"model_dump": lambda self, **_kwargs: {
+            "success": True, "request_id": "mcp-same", "service_version": "1.10.6",
+            "retrieved_at": "2026-09-13T00:00:00Z", "source_type": "image",
+            "retrieval_method": "image", "data": {"name": "ok"}, "sources": [],
+            "evidence": [], "missing_fields": [], "uncertainties": [],
+        }})()
+        with (
+            patch.object(service, "execute_search", new_callable=AsyncMock) as search,
+            patch.object(service, "execute_extraction", new_callable=AsyncMock,
+                         return_value=result) as extraction,
+            TestClient(app) as client,
+        ):
+            initialize(client)
+            response = paid_call(
+                client,
+                image,
+                payment_for(results_requirement, "30"),
+                80,
+            )
+        self.assertFalse(response["result"]["isError"])
+        search.assert_not_awaited()
+        extraction.assert_awaited_once()
+
+    def test_post_verification_deadline_returns_finite_error_without_settlement(self):
+        app = self.app()
+        payment_server = app.state.smartfetch_mcp.resource_server
+        definition = V111_VARIANTS[0]
+        requirement = app.state.smartfetch_mcp.v111_accepts[definition.mcp_resource][0]
+        payment_server.find_matching_requirements = Mock(return_value=requirement)
+        payment_server.verify_payment = AsyncMock(return_value=VerifyResponse(
+            isValid=True, payer=PAYEE
+        ))
+        payment_server.settle_payment = AsyncMock()
+        service = app.state.v111_activation.service
+
+        async def hang(*_args, **_kwargs):
+            await __import__("asyncio").Event().wait()
+
+        with (
+            patch.object(service, "execute_search", new_callable=AsyncMock,
+                         side_effect=hang),
+            patch("smartfetch.v111_service._deadline_for_variant", return_value=0.01),
+            TestClient(app) as client,
+        ):
+            initialize(client)
+            response = paid_call(client, definition, payment_for(requirement, "31"), 81)
+        self.assertTrue(response["result"]["isError"])
+        self.assertEqual(
+            response["result"]["structuredContent"]["error_code"],
+            "provider_timeout",
+        )
         payment_server.settle_payment.assert_not_awaited()
 
 

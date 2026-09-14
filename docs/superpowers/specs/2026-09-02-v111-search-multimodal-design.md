@@ -107,6 +107,26 @@ For structured extraction, settlement eligibility includes the missing-value
 rules in section 6.3. Properly disclosed schema-permitted nulls can be part of
 a contract-valid success; an all-missing/null extraction cannot settle.
 
+For Base USDC's official `exact` EIP-3009 mechanism, the token-transfer
+authorization signs the payer, payee, amount, validity window, and nonce. It
+does not cryptographically sign SmartFetch's route, variant, challenge
+`resource`, or HTTP/MCP request body. Requirements with the same scheme,
+network, asset, payee, and amount are therefore payment-equivalent even when
+their informational `resource` values differ. The fully validated route and
+body on the paid retry determine the operation SmartFetch executes, and the
+body is validated again before verified execution. SmartFetch must not claim
+stronger route or body binding than the official protocol provides.
+
+SmartFetch uses a bounded process-local claim on the verified payer/nonce to
+prevent a replay from starting a second V1.11 execution or settlement attempt
+in the same running process, including after an ambiguous settlement result.
+It never retries settlement automatically. Across processes or restarts, the
+EIP-3009 on-chain nonce is the authoritative guarantee that one authorization
+cannot settle successfully twice; a mocked facilitator cannot prove that
+on-chain property. TLS protects the payment header in transit. V1.11 adds no
+custom cryptography, proprietary payment extension, extra wallet/payee, or
+artificial price discrimination.
+
 ### 2.3 Dynamic-pricing feasibility
 
 The installed x402 Python 2.20.0 HTTP API permits `DynamicPrice`, but its
@@ -204,9 +224,10 @@ The internal MCP resources are:
 - `mcp://tool/extract_structured_data/audio`
 - `mcp://tool/extract_structured_data/video`
 
-The distinct identities make payment and Bazaar records variant-specific. The
-MCP `toolName` remains exactly `search_and_extract` or
-`extract_structured_data`.
+The distinct identities keep challenges and Bazaar records informative and
+variant-specific. They do not add cryptographic route or body binding to the
+underlying EIP-3009 authorization. The MCP `toolName` remains exactly
+`search_and_extract` or `extract_structured_data`.
 
 Every requirement is built from the existing x402 resource server with:
 
@@ -759,8 +780,12 @@ All types permit at most five redirects. Connect timeout is 5 seconds, read
 timeout 15 seconds, and download wall time 25 seconds. Variant wall times are
 bounded independently: results 15 seconds, answer 40 seconds, structured
 search 60 seconds, webpage/image/PDF 60 seconds, audio 90 seconds, and video
-120 seconds. These limits apply only to new capabilities and do not modify
-V1.10.6 timeouts.
+120 seconds. Each variant deadline covers the complete post-verification
+operation: real circuit-permit acquisition, provider/retrieval/media work,
+schema/citation/evidence validation, response construction, and required local
+cleanup. Timeout cancels the operation, waits for cleanup, returns only the
+finite timeout contract, never retries, and never settles. These limits apply
+only to new capabilities and do not modify V1.10.6 timeouts.
 
 MIME validation requires agreement among the allowlisted `Content-Type`, magic
 bytes/container probe, and path-independent local inspector. A generic or
@@ -821,9 +846,12 @@ wrapper. All external work lives inside the wrapped handler. Wrapper maps are
 immutable after startup and keyed by enum values, preventing shared mutable
 state or request-to-request leakage.
 
-A payment created for `$0.05` results mode cannot satisfy the `$0.10` answer or
-`$0.15` structured requirement: each dispatch path verifies against its own
-exact amount and resource. The same isolation applies to source types.
+An authorization with an insufficient amount, or the wrong scheme, network,
+asset, or payee, cannot satisfy a variant's requirement. A `$0.05`
+authorization may satisfy another `$0.05` variant because those requirements
+are payment-equivalent under official EIP-3009 semantics. The paid retry's
+independently validated route/body chooses the only operation executed; the
+challenge `resource` remains accurate informational metadata.
 
 ## 11. Privacy-safe activity logging
 

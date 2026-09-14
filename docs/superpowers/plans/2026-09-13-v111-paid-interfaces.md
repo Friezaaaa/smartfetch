@@ -14,7 +14,10 @@
 
 - `SMARTFETCH_V111_ENABLED` enables only for exact lowercase `true`; all other values fail closed without logging the value.
 - Activation is all-or-nothing and restart-only: zero or eight REST routes, and exactly four or six MCP tools.
-- Static variants are the eight `V111_VARIANTS` definitions and prices `$0.05`, `$0.10`, and `$0.15`; no body-derived or shared cheaper requirement.
+- Static variants are the eight `V111_VARIANTS` definitions and prices `$0.05`, `$0.10`, and `$0.15`; no body-derived price is used. Same-price requirements are payment-equivalent under official EIP-3009 semantics, while each challenge resource remains accurate metadata.
+- The EIP-3009 signature binds payer, payee, amount, validity, and nonce—not a SmartFetch route, variant, resource string, or request body. The paid retry's route and freshly validated body determine execution.
+- A bounded process-local payer/nonce claim prevents a second execution or settlement attempt in one running process. The on-chain nonce, not a facilitator mock, guarantees that two settlements cannot both succeed across processes or restarts. Settlement is attempted at most once and never retried after ambiguity.
+- The complete post-verification operation uses the exact per-variant wall deadlines from the design, including permit acquisition, external work, validation, response construction, and cleanup.
 - Bounded input and non-consuming circuit readiness precede x402; real single-use permits are acquired only inside merged provider adapters after verification.
 - Existing `/fetch`, four MCP tools, payment settings, retrieval, SSRF, media, provider adapters, version `1.10.6`, and discovery output remain unchanged.
 - Automated tests use injected fakes and mocked payment/provider boundaries; no credential reads, provider calls, wallet operations, or payments.
@@ -186,7 +189,14 @@ async def test_invalid_discriminator_returns_free_input_error(self):
 
 - [ ] **Step 3: Prebuild eight official `create_payment_wrapper()` instances with exact resources and prices, then dispatch only after local validation/readiness**
 
-- [ ] **Step 4: Add RED/GREEN tests for cheaper authorization rejection, race-to-open circuit, one permit per provider call, no settlement on error, and concurrent permit isolation**
+- [ ] **Step 4: Add RED/GREEN tests for insufficient/wrong requirements, same-price equivalence, paid-retry route/body validation, replay and ambiguous-settlement blocking, race-to-open circuit, one permit per provider call, no settlement on error, and concurrent permit isolation**
+
+### Task 4A: Review corrections for bounded bodies and wall deadlines
+
+- [ ] Replace eager request buffering with incremental ASGI receive capped at `MAX_REQUEST_BODY_BYTES + 1`, then replay accepted bytes downstream.
+- [ ] Cover missing, false, oversized and malformed framing, empty chunks, disconnects, and understated `Content-Length` with real ASGI streaming tests.
+- [ ] Apply the exact 15/40/60/90/120-second deadlines to the entire post-verification operation for both REST and MCP.
+- [ ] Prove cancellation cleanup, cumulative multi-step timing, no retry, and no settlement on timeout using no-network tests.
 
 ### Task 5: Privacy, compatibility, and scope regression
 
@@ -198,6 +208,7 @@ async def test_invalid_discriminator_returns_free_input_error(self):
 - Protects: existing `/fetch`, four MCP contracts, payment settings, discovery output, version, providers, retrieval, media, SSRF, and buyer examples
 
 - [ ] **Step 1: Add RED/GREEN integration tests proving no query/schema/source/provider payload/payment data reaches logs**
+- [ ] **Step 1A: Add finite V1.11-only capability, variant, provider, model-route, count, token, and integer micro-USD activity fields without altering legacy events**
 
 - [ ] **Step 2: Prove no provider network can occur before verified handler entry by using transports that raise on invocation**
 

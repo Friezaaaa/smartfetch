@@ -31,7 +31,7 @@ from .bazaar import (
     TEXT_OUTPUT_SCHEMA,
     mcp_discovery_extension,
 )
-from .activity import current_request_id, emit_activity
+from .activity import current_request_id, emit_activity, emit_v111_activity
 from .config import (
     HOST,
     MAX_REQUEST_BODY_BYTES,
@@ -43,7 +43,7 @@ from .v111_contracts import (
     SearchAndExtractRequest,
     V111_VARIANTS,
 )
-from .v111_service import V111ExecutionError, V111Service
+from .v111_service import V111ExecutionError, V111Service, run_v111_deadline
 
 
 MCP_PATH = "/mcp"
@@ -188,6 +188,7 @@ def _observe_payment_result(
     settings: X402Settings,
     *,
     price: str | None = None,
+    v111_definition=None,
 ):
     @wraps(handler)
     async def observed(**kwargs):
@@ -203,8 +204,16 @@ def _observe_payment_result(
             "payment_amount": price or settings.price,
             "failure_reason": failure_reason,
         }
+        emitter = emit_v111_activity if v111_definition is not None else emit_activity
+        v111_fields = (
+            {
+                "capability": v111_definition.capability,
+                "variant": v111_definition.variant,
+            }
+            if v111_definition is not None else {}
+        )
         if failure_reason == "settlement_failed":
-            emit_activity(
+            emitter(
                 "payment_settled",
                 transport="mcp",
                 tool=name,
@@ -212,9 +221,10 @@ def _observe_payment_result(
                 outcome="failed",
                 payment_stage="settlement",
                 **payment_fields,
+                **v111_fields,
             )
         else:
-            emit_activity(
+            emitter(
                 "payment_challenged",
                 transport="mcp",
                 tool=name,
@@ -222,6 +232,7 @@ def _observe_payment_result(
                 outcome="payment_required",
                 payment_stage="challenge",
                 **payment_fields,
+                **v111_fields,
             )
         return result
 
@@ -432,53 +443,80 @@ def create_smartfetch_mcp(
         def make_runner(definition):
             async def run_v111(*, request):
                 started = time.perf_counter()
-                emit_activity(
+                emit_v111_activity(
                     "tool_started",
                     transport="mcp",
                     tool=definition.capability,
                     stage="execution",
                     outcome="started",
+                    capability=definition.capability,
+                    variant=definition.variant,
                 )
                 try:
-                    if definition.capability == "search_and_extract":
-                        result = await v111_service.execute_search(
-                            request,
-                            request_id=current_request_id() or "mcp-request",
-                        )
-                    else:
-                        result = await v111_service.execute_extraction(
-                            request,
-                            request_id=current_request_id() or "mcp-request",
-                        )
+                    async def execute_and_serialize():
+                        def activity_sink(event, **fields):
+                            emit_v111_activity(
+                                event,
+                                transport="mcp",
+                                tool=definition.capability,
+                                capability=definition.capability,
+                                variant=definition.variant,
+                                **fields,
+                            )
+
+                        if definition.capability == "search_and_extract":
+                            result = await v111_service.execute_search(
+                                request,
+                                request_id=current_request_id() or "mcp-request",
+                                activity_sink=activity_sink,
+                            )
+                        else:
+                            result = await v111_service.execute_extraction(
+                                request,
+                                request_id=current_request_id() or "mcp-request",
+                                activity_sink=activity_sink,
+                            )
+                        return result.model_dump(mode="json")
+
+                    payload = await run_v111_deadline(
+                        definition.variant,
+                        execute_and_serialize(),
+                    )
                 except V111ExecutionError as exc:
-                    emit_activity(
+                    emit_v111_activity(
                         "tool_failed",
                         transport="mcp",
                         tool=definition.capability,
                         stage="execution",
                         outcome="failed",
                         duration_ms=(time.perf_counter() - started) * 1000,
+                        capability=definition.capability,
+                        variant=definition.variant,
                     )
                     return error_result(exc.code)
                 except Exception:
-                    emit_activity(
+                    emit_v111_activity(
                         "tool_failed",
                         transport="mcp",
                         tool=definition.capability,
                         stage="execution",
                         outcome="failed",
                         duration_ms=(time.perf_counter() - started) * 1000,
+                        capability=definition.capability,
+                        variant=definition.variant,
                     )
                     return error_result("invalid_provider_output")
-                emit_activity(
+                emit_v111_activity(
                     "tool_completed",
                     transport="mcp",
                     tool=definition.capability,
                     stage="execution",
                     outcome="completed",
                     duration_ms=(time.perf_counter() - started) * 1000,
+                    capability=definition.capability,
+                    variant=definition.variant,
                 )
-                return result.model_dump(mode="json")
+                return payload
 
             return run_v111
 
@@ -493,8 +531,10 @@ def create_smartfetch_mcp(
             )
             v111_accepts[definition.mcp_resource] = variant_accepts
 
-            def verified(_context):
-                emit_activity(
+            def verified(context):
+                if not v111_service.claim_payment_attempt(context.payment_payload):
+                    return False
+                emit_v111_activity(
                     "payment_verified",
                     transport="mcp",
                     tool=definition.capability,
@@ -505,11 +545,13 @@ def create_smartfetch_mcp(
                     payment_network=settings.network,
                     payment_asset="USDC",
                     payment_amount=definition.price,
+                    capability=definition.capability,
+                    variant=definition.variant,
                 )
                 return True
 
             def settled(_context):
-                emit_activity(
+                emit_v111_activity(
                     "payment_settled",
                     transport="mcp",
                     tool=definition.capability,
@@ -520,6 +562,8 @@ def create_smartfetch_mcp(
                     payment_network=settings.network,
                     payment_asset="USDC",
                     payment_amount=definition.price,
+                    capability=definition.capability,
+                    variant=definition.variant,
                 )
 
             wrapper = create_payment_wrapper(
@@ -544,6 +588,7 @@ def create_smartfetch_mcp(
                 wrapper,
                 settings,
                 price=definition.price,
+                v111_definition=definition,
             )
 
         wrappers = {

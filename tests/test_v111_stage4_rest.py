@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -16,6 +17,7 @@ from x402.schemas import (
 )
 
 from smartfetch import payments, server
+from smartfetch.config import MAX_REQUEST_BODY_BYTES
 from smartfetch.payments import BASE_SEPOLIA, X402Settings
 from smartfetch.v111_contracts import V111_VARIANTS
 from smartfetch.v111_service import V111ExecutionError
@@ -40,6 +42,20 @@ EXPECTED_ATOMIC = {
     "audio": "100000",
     "video": "150000",
 }
+
+
+def _authorization_payload(marker: str, value: str) -> dict:
+    return {
+        "authorization": {
+            "from": PAYEE,
+            "to": PAYEE,
+            "value": value,
+            "validAfter": "0",
+            "validBefore": "9999999999",
+            "nonce": "0x" + marker * 32,
+        },
+        "signature": "0x" + "11" * 65,
+    }
 
 
 def valid_body(variant):
@@ -78,6 +94,54 @@ class V111RestIntegrationTests(unittest.TestCase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_understated_content_length_stops_real_asgi_stream_before_challenge(self):
+        runtime = complete_runtime()
+        app, resource = self._captured_http_app(runtime)
+        resource.verify_payment = AsyncMock()
+        chunks = [b"x" * 4096 for _ in range(64)]
+        consumed = 0
+        sent = []
+
+        async def receive():
+            nonlocal consumed
+            chunk = chunks[consumed]
+            consumed += 1
+            return {
+                "type": "http.request",
+                "body": chunk,
+                "more_body": consumed < len(chunks),
+            }
+
+        async def send(message):
+            sent.append(message)
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "https",
+            "path": "/search-and-extract/results",
+            "raw_path": b"/search-and-extract/results",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"agent.example"),
+                (b"content-type", b"application/json"),
+                (b"content-length", b"1"),
+            ],
+            "client": ("127.0.0.1", 1234),
+            "server": ("agent.example", 443),
+            "root_path": "",
+        }
+        asyncio.run(app(scope, receive, send))
+        start = next(item for item in sent if item["type"] == "http.response.start")
+        headers = dict(start["headers"])
+        self.assertEqual(start["status"], 400)
+        self.assertNotIn(b"payment-required", headers)
+        self.assertLess(consumed, len(chunks))
+        self.assertLessEqual(consumed * 4096, MAX_REQUEST_BODY_BYTES + 4096)
+        resource.verify_payment.assert_not_awaited()
 
     def active_app(self):
         return server.create_app(
@@ -238,7 +302,7 @@ class V111RestIntegrationTests(unittest.TestCase):
             ) as execute:
                 payment = PaymentPayload(
                     accepted=requirement,
-                    payload={"authorization": "opaque-test-value"},
+                    payload=_authorization_payload("01", "50000"),
                 )
                 paid = client.post(
                     "/search-and-extract/results",
@@ -275,7 +339,7 @@ class V111RestIntegrationTests(unittest.TestCase):
             resource.settle_payment = AsyncMock()
             payment = PaymentPayload(
                 accepted=requirement,
-                payload={"authorization": "opaque-test-value"},
+                payload=_authorization_payload("02", "50000"),
             )
             paid = client.post(
                 "/search-and-extract/results",
@@ -314,7 +378,7 @@ class V111RestIntegrationTests(unittest.TestCase):
                         "PAYMENT-SIGNATURE": encode_payment_signature_header(
                             PaymentPayload(
                                 accepted=requirement,
-                                payload={"authorization": "opaque-test-value"},
+                                payload=_authorization_payload("03", "50000"),
                             )
                         )
                     },
@@ -340,7 +404,7 @@ class V111RestIntegrationTests(unittest.TestCase):
                     "PAYMENT-SIGNATURE": encode_payment_signature_header(
                         PaymentPayload(
                             accepted=cheap,
-                            payload={"authorization": "opaque-test-value"},
+                            payload=_authorization_payload("04", "50000"),
                         )
                     )
                 },
@@ -352,6 +416,240 @@ class V111RestIntegrationTests(unittest.TestCase):
         ).accepts[0]
         self.assertEqual(accepted.amount, "100000")
         resource.verify_payment.assert_not_awaited()
+        resource.settle_payment.assert_not_awaited()
+
+    def test_same_price_authorization_executes_only_paid_retry_route_and_body(self):
+        runtime = complete_runtime()
+        app, resource = self._captured_http_app(runtime)
+        service = app.state.v111_activation.service
+        result = type("Result", (), {"model_dump": lambda self, **_kwargs: {
+            "success": True, "request_id": "same-price", "service_version": "1.10.6",
+            "retrieved_at": "2026-09-13T00:00:00Z", "source_type": "image",
+            "retrieval_method": "image", "data": {"name": "ok"}, "sources": [],
+            "evidence": [], "missing_fields": [], "uncertainties": [],
+        }})()
+        with TestClient(app) as client:
+            results_requirement = decode_payment_required_header(client.post(
+                "/search-and-extract/results", json={"query": "valid query"}
+            ).headers["payment-required"]).accepts[0]
+            resource.verify_payment = AsyncMock(return_value=ResourceVerifyResponse(
+                verify=VerifyResponse(isValid=True, payer=PAYEE)
+            ))
+            resource.settle_payment = AsyncMock(return_value=SettleResponse(
+                success=True, payer=PAYEE, transaction="0xsame", network=BASE_SEPOLIA,
+            ))
+            with (
+                patch.object(service, "execute_search", new_callable=AsyncMock) as search,
+                patch.object(service, "execute_extraction", new_callable=AsyncMock,
+                             return_value=result) as extraction,
+            ):
+                response = client.post(
+                    "/extract-structured-data/image",
+                    headers={"PAYMENT-SIGNATURE": encode_payment_signature_header(
+                        PaymentPayload(
+                            accepted=results_requirement,
+                            payload=_authorization_payload("05", "50000"),
+                        )
+                    )},
+                    json={
+                        "source_url": "https://example.com/image.png",
+                        "json_schema": {
+                            "type": "object", "properties": {"name": {"type": "string"}},
+                            "required": ["name"], "additionalProperties": False,
+                        },
+                    },
+                )
+        self.assertEqual(response.status_code, 200)
+        search.assert_not_awaited()
+        extraction.assert_awaited_once()
+
+    def test_replayed_authorization_never_executes_or_settles_twice(self):
+        runtime = complete_runtime()
+        app, resource = self._captured_http_app(runtime)
+        service = app.state.v111_activation.service
+        result = type("Result", (), {"model_dump": lambda self, **_kwargs: {
+            "success": True, "mode": "results", "request_id": "replay",
+            "service_version": "1.10.6", "retrieved_at": "2026-09-13T00:00:00Z",
+            "query": "valid query", "results": [],
+        }})()
+        with TestClient(app) as client:
+            requirement = decode_payment_required_header(client.post(
+                "/search-and-extract/results", json={"query": "valid query"}
+            ).headers["payment-required"]).accepts[0]
+            resource.verify_payment = AsyncMock(return_value=ResourceVerifyResponse(
+                verify=VerifyResponse(isValid=True, payer=PAYEE)
+            ))
+            resource.settle_payment = AsyncMock(return_value=SettleResponse(
+                success=True, payer=PAYEE, transaction="0xonce", network=BASE_SEPOLIA,
+            ))
+            header = {"PAYMENT-SIGNATURE": encode_payment_signature_header(
+                PaymentPayload(
+                    accepted=requirement,
+                    payload=_authorization_payload("06", "50000"),
+                )
+            )}
+            with patch.object(service, "execute_search", new_callable=AsyncMock,
+                              return_value=result) as execute:
+                first = client.post("/search-and-extract/results", headers=header,
+                                    json={"query": "valid query"})
+                second = client.post("/search-and-extract/results", headers=header,
+                                     json={"query": "valid query"})
+        self.assertEqual(first.status_code, 200)
+        self.assertGreaterEqual(second.status_code, 400)
+        execute.assert_awaited_once()
+        resource.settle_payment.assert_awaited_once()
+
+    def test_facilitator_already_settled_rejection_never_executes_or_settles(self):
+        runtime = complete_runtime()
+        app, resource = self._captured_http_app(runtime)
+        service = app.state.v111_activation.service
+        with TestClient(app) as client:
+            requirement = decode_payment_required_header(client.post(
+                "/search-and-extract/results", json={"query": "valid query"}
+            ).headers["payment-required"]).accepts[0]
+            resource.verify_payment = AsyncMock(return_value=ResourceVerifyResponse(
+                verify=VerifyResponse(
+                    isValid=False,
+                    invalidReason="invalid_nonce",
+                )
+            ))
+            resource.settle_payment = AsyncMock()
+            payment = PaymentPayload(
+                accepted=requirement,
+                payload=_authorization_payload("08", "50000"),
+            )
+            with patch.object(
+                service,
+                "execute_search",
+                new_callable=AsyncMock,
+            ) as execute:
+                response = client.post(
+                    "/search-and-extract/results",
+                    headers={
+                        "PAYMENT-SIGNATURE": encode_payment_signature_header(payment)
+                    },
+                    json={"query": "valid query"},
+                )
+        self.assertEqual(response.status_code, 402)
+        execute.assert_not_awaited()
+        resource.verify_payment.assert_awaited_once()
+        resource.settle_payment.assert_not_awaited()
+
+    def test_ambiguous_settlement_is_not_retried_on_authorization_replay(self):
+        runtime = complete_runtime()
+        app, resource = self._captured_http_app(runtime)
+        service = app.state.v111_activation.service
+        result = type("Result", (), {"model_dump": lambda self, **_kwargs: {
+            "success": True, "mode": "results", "request_id": "ambiguous",
+            "service_version": "1.10.6", "retrieved_at": "2026-09-13T00:00:00Z",
+            "query": "valid query", "results": [],
+        }})()
+        with TestClient(app) as client:
+            requirement = decode_payment_required_header(client.post(
+                "/search-and-extract/results", json={"query": "valid query"}
+            ).headers["payment-required"]).accepts[0]
+            resource.verify_payment = AsyncMock(return_value=ResourceVerifyResponse(
+                verify=VerifyResponse(isValid=True, payer=PAYEE)
+            ))
+            resource.settle_payment = AsyncMock(side_effect=TimeoutError())
+            header = {"PAYMENT-SIGNATURE": encode_payment_signature_header(
+                PaymentPayload(
+                    accepted=requirement,
+                    payload=_authorization_payload("07", "50000"),
+                )
+            )}
+            with patch.object(service, "execute_search", new_callable=AsyncMock,
+                              return_value=result) as execute:
+                first = client.post("/search-and-extract/results", headers=header,
+                                    json={"query": "valid query"})
+                second = client.post("/search-and-extract/results", headers=header,
+                                     json={"query": "valid query"})
+        self.assertEqual(first.status_code, 402)
+        self.assertGreaterEqual(second.status_code, 400)
+        execute.assert_awaited_once()
+        resource.settle_payment.assert_awaited_once()
+
+    def test_wrong_payment_fields_and_paid_retry_body_fail_before_execution(self):
+        runtime = complete_runtime()
+        app, resource = self._captured_http_app(runtime)
+        service = app.state.v111_activation.service
+        with TestClient(app) as client:
+            requirement = decode_payment_required_header(client.post(
+                "/search-and-extract/results", json={"query": "valid query"}
+            ).headers["payment-required"]).accepts[0]
+            resource.verify_payment = AsyncMock()
+            resource.settle_payment = AsyncMock()
+            wrong_values = (
+                {"scheme": "upto"},
+                {"network": "eip155:1"},
+                {"asset": "0x2222222222222222222222222222222222222222"},
+                {"payTo": "0x2222222222222222222222222222222222222222"},
+                {"amount": "49999"},
+            )
+            for index, update in enumerate(wrong_values, 30):
+                raw = requirement.model_dump(by_alias=True, exclude_none=True)
+                raw.update(update)
+                payment = PaymentPayload(
+                    accepted=type(requirement).model_validate(raw),
+                    payload=_authorization_payload(f"{index:02x}"[-2:], "50000"),
+                )
+                response = client.post(
+                    "/search-and-extract/results",
+                    headers={"PAYMENT-SIGNATURE": encode_payment_signature_header(payment)},
+                    json={"query": "valid query"},
+                )
+                self.assertEqual(response.status_code, 402)
+            valid_payment = PaymentPayload(
+                accepted=requirement,
+                payload=_authorization_payload("40", "50000"),
+            )
+            invalid_body = client.post(
+                "/search-and-extract/results",
+                headers={"PAYMENT-SIGNATURE": encode_payment_signature_header(valid_payment)},
+                json={"query": ""},
+            )
+        self.assertEqual(invalid_body.status_code, 400)
+        resource.verify_payment.assert_not_awaited()
+        resource.settle_payment.assert_not_awaited()
+
+    def test_complete_post_verification_deadline_cancels_and_never_settles(self):
+        runtime = complete_runtime()
+        app, resource = self._captured_http_app(runtime)
+        service = app.state.v111_activation.service
+        cancelled = asyncio.Event()
+
+        async def hang(*_args, **_kwargs):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        with TestClient(app) as client:
+            requirement = decode_payment_required_header(client.post(
+                "/search-and-extract/results", json={"query": "valid query"}
+            ).headers["payment-required"]).accepts[0]
+            resource.verify_payment = AsyncMock(return_value=ResourceVerifyResponse(
+                verify=VerifyResponse(isValid=True, payer=PAYEE)
+            ))
+            resource.settle_payment = AsyncMock()
+            with (
+                patch.object(service, "execute_search", new_callable=AsyncMock,
+                             side_effect=hang),
+                patch("smartfetch.v111_service._deadline_for_variant", return_value=0.01),
+            ):
+                response = client.post(
+                    "/search-and-extract/results",
+                    headers={"PAYMENT-SIGNATURE": encode_payment_signature_header(
+                        PaymentPayload(
+                            accepted=requirement,
+                            payload=_authorization_payload("41", "50000"),
+                        )
+                    )},
+                    json={"query": "valid query"},
+                )
+        self.assertEqual(response.status_code, 504)
+        self.assertEqual(response.json()["error_code"], "provider_timeout")
+        self.assertTrue(cancelled.is_set())
         resource.settle_payment.assert_not_awaited()
 
 
