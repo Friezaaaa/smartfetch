@@ -1088,7 +1088,7 @@ async def run_ffprobe(path: Path) -> dict[str, Any]:
             raise MediaFailure("provider_unavailable")
         process = await asyncio.wait_for(
             asyncio.create_subprocess_exec(
-                executable, "-nostdin", "-v", "error",
+                executable, "-v", "error",
                 "-protocol_whitelist", "pipe",
                 "-i", "pipe:0",
                 "-show_entries", "format=format_name,duration:stream=codec_type,codec_name,duration",
