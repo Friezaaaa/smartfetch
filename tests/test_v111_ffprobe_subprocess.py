@@ -9,12 +9,12 @@ import wave
 from smartfetch.media import MediaFailure, inspect_timed_media, run_ffprobe
 
 
-def _write_wav(path: Path) -> None:
+def _write_wav(path: Path, *, frame_count: int = 800) -> None:
     with wave.open(str(path), "wb") as output:
         output.setnchannels(1)
         output.setsampwidth(2)
         output.setframerate(8_000)
-        output.writeframes(b"\0\0" * 800)
+        output.writeframes(b"\0\0" * frame_count)
 
 
 @unittest.skipUnless(shutil.which("ffprobe"), "ffprobe is required for subprocess integration tests")
@@ -28,6 +28,19 @@ class FfprobeSubprocessTests(unittest.TestCase):
 
         self.assertEqual(result["format"]["format_name"], "wav")
         self.assertEqual(result["streams"], [{"codec_name": "pcm_s16le", "codec_type": "audio"}])
+
+    def test_default_runner_tolerates_successful_early_pipe_close(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "large-audio.wav"
+            _write_wav(path, frame_count=150_000)
+
+            result = asyncio.run(run_ffprobe(path))
+
+        self.assertEqual(result["format"]["format_name"], "wav")
+        self.assertEqual(
+            result["streams"],
+            [{"codec_name": "pcm_s16le", "codec_type": "audio"}],
+        )
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is required to create the WebM fixture")
     def test_default_runner_accepts_approved_webm(self):

@@ -1059,8 +1059,11 @@ async def _feed_bounded_stdin(writer: Any, path: Path) -> None:
                 total += len(chunk)
                 if total > MEDIA_LIMITS["video"].max_bytes:
                     raise MediaFailure("source_too_large")
-                writer.write(chunk)
-                await writer.drain()
+                try:
+                    writer.write(chunk)
+                    await writer.drain()
+                except (BrokenPipeError, ConnectionResetError):
+                    break
     finally:
         try:
             writer.close()
