@@ -29,6 +29,16 @@ class FfprobeSubprocessTests(unittest.TestCase):
         self.assertEqual(result["format"]["format_name"], "wav")
         self.assertEqual(result["streams"], [{"codec_name": "pcm_s16le", "codec_type": "audio"}])
 
+    def test_default_runner_validates_pipe_only_pcm_wav_duration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "audio.wav"
+            _write_wav(path)
+
+            result = asyncio.run(inspect_timed_media(path, "audio", "audio/wav"))
+
+        self.assertEqual(result.format_name, "wav")
+        self.assertAlmostEqual(result.duration_seconds, 0.1)
+
     def test_default_runner_tolerates_successful_early_pipe_close(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "large-audio.wav"

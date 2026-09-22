@@ -21,6 +21,7 @@ import shutil
 import signal
 import socket
 import stat
+import struct
 import subprocess
 import tempfile
 import threading
@@ -1005,6 +1006,89 @@ _VIDEO_CODECS = {
 _VIDEO_AUDIO_CODECS = frozenset({"aac", "mp3", "opus", "vorbis", "pcm_s16le"})
 
 
+def _wav_duration_from_header(path: Path, codec_name: str) -> Decimal:
+    """Derive fixed-rate WAV duration when pipe-only ffprobe omits it."""
+    if type(codec_name) is not str or codec_name not in _AUDIO_CODECS["audio/wav"]:
+        raise MediaFailure("unsupported_media_type")
+    try:
+        with _open_local_file(path) as source:
+            file_size = os.fstat(source.fileno()).st_size
+            header = source.read(12)
+            if (
+                len(header) != 12
+                or header[:4] != b"RIFF"
+                or header[8:] != b"WAVE"
+                or int.from_bytes(header[4:8], "little") + 8 != file_size
+            ):
+                raise MediaFailure("unsupported_media_type")
+
+            fmt_data: bytes | None = None
+            data_size = 0
+            while source.tell() < file_size:
+                remaining = file_size - source.tell()
+                if remaining < 8:
+                    raise MediaFailure("unsupported_media_type")
+                chunk_header = source.read(8)
+                chunk_id = chunk_header[:4]
+                chunk_size = int.from_bytes(chunk_header[4:], "little")
+                padded_size = chunk_size + (chunk_size & 1)
+                if padded_size > file_size - source.tell():
+                    raise MediaFailure("unsupported_media_type")
+                if chunk_id == b"fmt ":
+                    if fmt_data is not None or chunk_size < 16:
+                        raise MediaFailure("unsupported_media_type")
+                    fmt_data = source.read(min(chunk_size, 40))
+                    source.seek(chunk_size - len(fmt_data), os.SEEK_CUR)
+                else:
+                    if chunk_id == b"data":
+                        data_size += chunk_size
+                    source.seek(chunk_size, os.SEEK_CUR)
+                if chunk_size & 1:
+                    if source.read(1) == b"":
+                        raise MediaFailure("unsupported_media_type")
+
+            if fmt_data is None:
+                raise MediaFailure("unsupported_media_type")
+            format_tag, channels, sample_rate, byte_rate, block_align, bits = struct.unpack(
+                "<HHIIHH", fmt_data[:16]
+            )
+            if format_tag == 0xFFFE:
+                if (
+                    len(fmt_data) < 40
+                    or int.from_bytes(fmt_data[16:18], "little") < 22
+                    or fmt_data[28:40] != b"\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71"
+                ):
+                    raise MediaFailure("unsupported_media_type")
+                format_tag = int.from_bytes(fmt_data[24:28], "little")
+
+            expected_codec = {
+                (1, 8): "pcm_u8",
+                (1, 16): "pcm_s16le",
+                (1, 24): "pcm_s24le",
+                (1, 32): "pcm_s32le",
+                (3, 32): "pcm_f32le",
+                (3, 64): "pcm_f64le",
+                (6, 8): "pcm_alaw",
+                (7, 8): "pcm_mulaw",
+            }.get((format_tag, bits))
+            if (
+                expected_codec != codec_name
+                or channels < 1
+                or sample_rate < 1
+                or bits % 8 != 0
+                or block_align != channels * (bits // 8)
+                or byte_rate != sample_rate * block_align
+                or block_align < 1
+                or data_size % block_align != 0
+            ):
+                raise MediaFailure("unsupported_media_type")
+            return Decimal(data_size // block_align) / Decimal(sample_rate)
+    except MediaFailure:
+        raise
+    except (OSError, ValueError, TypeError, OverflowError, struct.error):
+        raise MediaFailure("unsupported_media_type") from None
+
+
 def _reported_duration(value: Any) -> Decimal:
     if type(value) not in {str, int, float}:
         raise MediaFailure("unsupported_media_type")
@@ -1191,6 +1275,8 @@ async def inspect_timed_media(
         for stream in streams:
             if "duration" in stream:
                 durations.append(_reported_duration(stream["duration"]))
+        if not durations and source_type == "audio" and container == "wav":
+            durations.append(_wav_duration_from_header(path, audio_streams[0]["codec_name"]))
         if not durations:
             raise MediaFailure("unsupported_media_type")
         duration = max(durations)
