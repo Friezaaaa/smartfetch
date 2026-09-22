@@ -1004,6 +1004,7 @@ _VIDEO_CODECS = {
     "video/webm": frozenset({"vp8", "vp9", "av1"}),
 }
 _VIDEO_AUDIO_CODECS = frozenset({"aac", "mp3", "opus", "vorbis", "pcm_s16le"})
+_WAV_CHUNK_MAX = 4_096
 
 
 def _wav_duration_from_header(path: Path, codec_name: str) -> Decimal:
@@ -1024,7 +1025,12 @@ def _wav_duration_from_header(path: Path, codec_name: str) -> Decimal:
 
             fmt_data: bytes | None = None
             data_size = 0
+            data_seen = False
+            chunk_count = 0
             while source.tell() < file_size:
+                chunk_count += 1
+                if chunk_count > _WAV_CHUNK_MAX:
+                    raise MediaFailure("unsupported_media_type")
                 remaining = file_size - source.tell()
                 if remaining < 8:
                     raise MediaFailure("unsupported_media_type")
@@ -1041,7 +1047,10 @@ def _wav_duration_from_header(path: Path, codec_name: str) -> Decimal:
                     source.seek(chunk_size - len(fmt_data), os.SEEK_CUR)
                 else:
                     if chunk_id == b"data":
-                        data_size += chunk_size
+                        if data_seen:
+                            raise MediaFailure("unsupported_media_type")
+                        data_seen = True
+                        data_size = chunk_size
                     source.seek(chunk_size, os.SEEK_CUR)
                 if chunk_size & 1:
                     if source.read(1) == b"":
