@@ -180,12 +180,12 @@ class CurrentVersionAndRegistryTests(unittest.TestCase):
             (REPO_ROOT / 'server.json').read_text(encoding='utf-8')
         )
 
-        self.assertEqual(SERVICE_VERSION, '1.10.6')
-        self.assertEqual(manifest['version'], '1.10.6')
+        self.assertEqual(SERVICE_VERSION, '1.11.0')
+        self.assertEqual(manifest['version'], '1.11.0')
         self.assertEqual(
             manifest['description'],
-            'Paid fallback for public webpages: clean text, Markdown, links, '
-            'metadata, and JavaScript rendering.',
+            'Paid public-web search, cited answers, and structured extraction '
+            'for webpages and multimodal media.',
         )
         self.assertEqual(MCP_TOOLS, (
             'fetch_webpage',

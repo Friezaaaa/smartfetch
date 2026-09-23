@@ -991,6 +991,154 @@ Known preliminary economics:
 These observations are blockers to deployment, not reasons to alter the
 approved design prices silently.
 
+### 13.1 Approved 32-case corpus and execution contract
+
+The benchmark contains exactly 32 logical expected-success cases: four cases
+for each of the eight finite variants. Every manifest entry has
+`"expected_failure_code": null`. A trial failure retains its existing finite
+failure code and is never reclassified as success.
+
+Search-results cases use Exa only. The other 28 logical cases run separately
+against `gemini-3.8-flash` and `gemini-3.5-flash-lite`, producing 56 Gemini
+trials. The 12 search-family cases perform exactly 12 Exa searches. Answer and
+structured-search cases perform Exa discovery and SmartFetch retrieval once
+per logical case and reuse the identical immutable source package for both
+model candidates. Webpage cases retrieve once per logical case and reuse the
+identical normalized material. Media cases ingest once per logical case and
+reuse the identical immutable inline payload. No provider call is retried.
+Gemini candidate order alternates by a fixed case-ID schedule. Temporary or
+free credits never reduce reported standard cost.
+
+The four results cases set only `max_results: 5`. The four answer cases also
+set only `max_results: 5`. The four structured-search cases set
+`max_results: 5` and `max_sources: 3`. `max_sources` remains valid only
+for structured mode and capped at 3.
+
+#### Search-results cases
+
+| ID | Query | Required relevance anchors |
+|---|---|---|
+| `RES-01` | `site:docs.python.org asyncio TaskGroup` | `asyncio`; `TaskGroup` |
+| `RES-02` | `Model Context Protocol Streamable HTTP transport specification` | `Model Context Protocol`; `Streamable HTTP` |
+| `RES-03` | `x402 HTTP 402 PAYMENT-REQUIRED header` | `402`; `PAYMENT-REQUIRED` |
+| `RES-04` | `Base mainnet chain ID 8453 official documentation` | `Base`; `8453` |
+
+The oracle requires one through five normalized results, unique source IDs,
+canonical HTTPS URLs, no provider-only fields or raw provider objects, and at
+least one normalized title or excerpt containing every anchor
+case-insensitively. These cases require neither evidence nor a Gemini trial.
+
+#### Cited-answer cases
+
+| ID | Question | Required facts |
+|---|---|---|
+| `ANS-01` | `Which PEP introduced Python's tomllib module, and in which Python version was it added?` | `PEP 680`; `Python 3.11` |
+| `ANS-02` | `What are the two standard transports in the current Model Context Protocol specification?` | `stdio`; `Streamable HTTP` |
+| `ANS-03` | `Which HTTP status and response header communicate an x402 v2 payment challenge?` | `402`; `PAYMENT-REQUIRED` |
+| `ANS-04` | `What is the Base mainnet chain ID and CAIP-2 network identifier?` | `8453`; `eip155:8453` |
+
+The normalized answer contains all required facts. Every factual claim has at
+least one valid citation, every cited source ID belongs to the immutable
+Exa-derived source set, every quotation is an exact substring of normalized
+retrieved source material, and no model-provided URL is accepted.
+
+#### Structured-search cases
+
+Every case uses a strict object schema with all named fields required and
+`additionalProperties: false`:
+
+| ID | Question | Required fields and expected values |
+|---|---|---|
+| `SRS-01` | `Which PEP introduced tomllib, and in which Python version?` | `pep` integer `680`; `module` string `tomllib`; `python_version` string `3.11` |
+| `SRS-02` | `What are MCP's standard transports?` | `transports` array of strings with expected set `stdio`, `Streamable HTTP` |
+| `SRS-03` | `What are the canonical x402 v2 HTTP status and headers?` | `status_code` integer `402`; strings `challenge_header=PAYMENT-REQUIRED`, `signature_header=PAYMENT-SIGNATURE`, `settlement_header=PAYMENT-RESPONSE` |
+| `SRS-04` | `Identify the Base mainnet network.` | `network` string `Base mainnet`; `chain_id` integer `8453`; `caip2` string `eip155:8453` |
+
+The oracle requires exact expected values after documented case normalization;
+array order is ignored only for `SRS-02`. Every non-null required leaf has
+valid evidence, and citations and quotations satisfy the cited-answer rules.
+
+#### Webpage structured-extraction cases
+
+Each uses the existing webpage input contract. Every named field is required
+and every non-null leaf has evidence from normalized webpage material:
+
+| ID | Public fixture | Required fields and expected values |
+|---|---|---|
+| `WEB-01` | `https://example.com/` | `title=Example Domain`; `domain=example.com` |
+| `WEB-02` | `https://www.rfc-editor.org/rfc/rfc9110.html` | `rfc_number=9110`; `title=HTTP Semantics` |
+| `WEB-03` | `https://docs.python.org/3/library/tomllib.html` | `module=tomllib`; `purpose` contains `TOML` |
+| `WEB-04` | `https://www.rfc-editor.org/rfc/rfc6901.html` | `rfc_number=6901`; `title=JavaScript Object Notation (JSON) Pointer` |
+
+#### Local media cases
+
+Small non-sensitive fixtures live under `benchmarks/v111/fixtures/`. The
+manifest records every relative path, byte size, and SHA-256 digest; all are
+verified before provider work. The committed corpus stays below 8 MiB and is
+generated offline without third-party downloads or provider-generated assets.
+
+| ID | Fixture | Required fields and expected values |
+|---|---|---|
+| `IMG-01` | order card | `order_id=SF-1042`; `total_usd=42.75` |
+| `IMG-02` | product label | `model=ORBIT-7`; `batch=B-204`; `mass_g=350` |
+| `IMG-03` | event poster | `event=Aurora Demo`; `date=2026-10-14`; `venue=Harbor Hall` |
+| `IMG-04` | regional table | `north=18`; `south=27`; `west=31` |
+| `PDF-01` | one-page invoice | `invoice_id=INV-7301`; `customer=Northwind Lab`; `total_usd=128.40` |
+| `PDF-02` | two-page project report | `project=Cedar`; `milestone=Beta`; `completion_percent=72` |
+| `PDF-03` | two-page policy | `policy_id=POL-88`; `effective_date=2026-11-01`; `limit_usd=5000` |
+| `PDF-04` | one-page image-only shipment document | `shipment_id=SHIP-204`; `crates=6`; `destination=Baltimore` |
+| `AUD-01` | spoken `Order SF-550 ships on October 12, 2026.` | `order_id=SF-550`; `ship_date=2026-10-12` |
+| `AUD-02` | spoken red/blue score sentence | `red_score=17`; `blue_score=23` |
+| `AUD-03` | spoken Alpha meeting sentence | `meeting=Alpha`; `time=2:30 PM`; `room=Cedar` |
+| `AUD-04` | spoken ticket sentence with no assignee | `ticket_id=TK-90`; `assignee=null` |
+| `VID-01` | visible title card and narration | `launch_code=LANTERN-4`; `launch_date=2026-12-03` |
+| `VID-02` | visible inventory sequence | `bolts=14`; `gears=9`; `springs=22` |
+| `VID-03` | three visibly numbered and narrated steps | ordered array `calibrate`, `lock`, `transmit` |
+| `VID-04` | visible product demonstration with no warranty | `model=NOVA-2`; `serial=SN-8841`; `warranty=null` |
+
+Media schemas are strict objects containing only listed properties. Every
+listed property is required; nullable fields use the approved nullable type.
+Expected values remain in the oracle, not caller schemas. Every non-null leaf
+needs valid evidence. Required nulls use the approved missing-field disclosure
+without fabricated evidence. PDF evidence identifies a valid page,
+audio/video evidence uses valid bounded timestamps, and image evidence refers
+to normalized visible text. If offline speech/video fixture generation is
+unavailable, implementation stops rather than downloading or substituting
+provider-generated assets.
+
+#### Real-mode budget authorization
+
+Real execution requires simultaneously: `--execute-real-providers`;
+`--max-total-cost-microusd N`;
+`SMARTFETCH_BENCHMARK_APPROVED_BUDGET_MICROUSD=N`;
+`SMARTFETCH_BENCHMARK_APPROVAL=V111_32_CASE_REAL`; complete
+`EXA_API_KEY` and `GEMINI_API_KEY`; and the exact approved manifest,
+fixture hashes, case count, variants, and model IDs.
+
+`N` is an ASCII base-10 integer from 1 through 10,000,000 inclusive. CLI and
+environment values match exactly; 10,000,000 micro-USD (`$10.00`) is the
+absolute harness ceiling. A later operator authorization chooses `N`; this
+approval authorizes no spending. The complete run is validated and its
+calculated maximum reserved before the first provider call. Sufficient budget
+is then reserved before each billable operation. If the run maximum or next
+operation exceeds authorization, no provider call occurs. Provider calls are
+never retried. Provider-reported usage is mandatory; missing or malformed
+usage fails closed. Actual cumulative January 2027 standard cost never exceeds
+`N`, and credits do not reduce reported standard cost.
+
+Offline mode never reads credentials. Real-mode credential values are never
+printed, logged, serialized, or persisted.
+
+#### Benchmark reports
+
+Bounded JSON and Markdown reports contain only manifest version and hash;
+case/variant identifier; provider and model identifier; success or finite
+failure code; schema/evidence/citation validity; source count; token usage;
+provider and total cost in integer micro-USD; latency; and aggregate success
+and cost totals. They never persist raw source content, full provider
+responses, media payloads, API keys, or private inputs, and never label a
+32-case statistic as P95.
+
 ## 14. Dependencies and infrastructure
 
 No dependency changes occur in this design commit. Expected implementation

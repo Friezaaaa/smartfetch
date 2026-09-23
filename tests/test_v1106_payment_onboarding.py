@@ -310,8 +310,8 @@ class PaymentOnboardingDocumentationTests(unittest.TestCase):
             (REPO_ROOT / 'server.json').read_text(encoding='utf-8')
         )
 
-        self.assertEqual(SERVICE_VERSION, '1.10.6')
-        self.assertEqual(manifest['version'], '1.10.6')
+        self.assertEqual(SERVICE_VERSION, '1.11.0')
+        self.assertEqual(manifest['version'], '1.11.0')
         self.assertEqual(MCP_TOOLS, (
             'fetch_webpage',
             'webpage_to_markdown',

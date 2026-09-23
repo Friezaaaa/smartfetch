@@ -186,7 +186,7 @@ class V111MCPIntegrationTests(unittest.TestCase):
         result = type("Result", (), {
             "model_dump": lambda self, **_kwargs: {
                 "success": True, "mode": "results", "request_id": "mcp-test",
-                "service_version": "1.10.6",
+                "service_version": "1.11.0",
                 "retrieved_at": "2026-09-13T00:00:00Z", "query": "current public facts",
                 "results": [{
                     "source_id": "s1", "rank": 1, "title": "Example",
@@ -305,7 +305,7 @@ class V111MCPIntegrationTests(unittest.TestCase):
         service = app.state.v111_activation.service
         result = type("Result", (), {"model_dump": lambda self, **_kwargs: {
             "success": True, "mode": "results", "request_id": "mcp-replay",
-            "service_version": "1.10.6", "retrieved_at": "2026-09-13T00:00:00Z",
+            "service_version": "1.11.0", "retrieved_at": "2026-09-13T00:00:00Z",
             "query": "current public facts", "results": [],
         }})()
         payment = payment_for(requirement, "20")
@@ -338,7 +338,7 @@ class V111MCPIntegrationTests(unittest.TestCase):
         ))
         service = app.state.v111_activation.service
         result = type("Result", (), {"model_dump": lambda self, **_kwargs: {
-            "success": True, "request_id": "mcp-same", "service_version": "1.10.6",
+            "success": True, "request_id": "mcp-same", "service_version": "1.11.0",
             "retrieved_at": "2026-09-13T00:00:00Z", "source_type": "image",
             "retrieval_method": "image", "data": {"name": "ok"}, "sources": [],
             "evidence": [], "missing_fields": [], "uncertainties": [],

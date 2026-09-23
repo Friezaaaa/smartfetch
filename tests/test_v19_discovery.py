@@ -426,7 +426,7 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
 
         OpenAPI.model_validate(document)
         self.assertEqual(document['openapi'], '3.1.0')
-        self.assertEqual(document['info']['version'], '1.10.6')
+        self.assertEqual(document['info']['version'], '1.11.0')
         self.assertEqual(document['servers'], [{
             'url': 'https://agent.example:9443',
         }])
@@ -711,10 +711,10 @@ class V19RegistryManifestTests(unittest.TestCase):
             'name': 'io.github.Friezaaaa/smartfetch',
             'title': 'SmartFetch',
             'description': (
-                'Paid fallback for public webpages: clean text, Markdown, '
-                'links, metadata, and JavaScript rendering.'
+                'Paid public-web search, cited answers, and structured '
+                'extraction for webpages and multimodal media.'
             ),
-            'version': '1.10.6',
+            'version': '1.11.0',
             'repository': {
                 'url': 'https://github.com/Friezaaaa/smartfetch',
                 'source': 'github',
