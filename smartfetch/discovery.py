@@ -209,8 +209,11 @@ def _agentcash_usd_amount(price):
 
 
 def _usd_price_from_atomic(amount):
-    value = format(Decimal(amount) / 1_000_000, "f")
-    return f"${value.rstrip('0').rstrip('.')}"
+    value = Decimal(amount) / 1_000_000
+    if value >= Decimal("0.01"):
+        return f"${value:.2f}"
+    exact = format(value, "f")
+    return f"${exact.rstrip('0').rstrip('.')}"
 
 
 def _payment_details(settings=None, payment_requirement=None):
@@ -720,6 +723,11 @@ def docs_html(
         urls,
         _v111_requirements(v111_accepts),
     )
+    v111_price_note = (
+        " Enabled V1.11 variants use their individually listed $0.05, $0.10, "
+        "$0.15 prices."
+        if v111_accepts else ""
+    )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -732,7 +740,7 @@ def docs_html(
   <main>
     <h1>SmartFetch</h1>
     <p>SmartFetch is a webpage reader and fetch service for AI agents. It can scrape a public URL, extract clean text, convert a website to Markdown, preserve links and metadata, and use automatic browser rendering for JavaScript-heavy pages.</p>
-    <p>Each paid HTTP or MCP execution uses x402 <code>{payment['scheme']}</code> payments at <strong>{payment['price']}</strong> on <code>{payment['network']}</code> with asset <code>{payment['asset']}</code>. Discovery, health, metadata, MCP initialize, and MCP tools/list remain free.</p>
+    <p>Legacy <code>POST /fetch</code> and the four existing MCP tools use x402 <code>{payment['scheme']}</code> payments at <strong>{payment['price']}</strong> on <code>{payment['network']}</code> with asset <code>{payment['asset']}</code>.{v111_price_note} Discovery, health, metadata, MCP initialize, and MCP tools/list remain free.</p>
     <h2>Public endpoints</h2>
     <ul>
       <li><a href="{safe['meta']}">GET /meta</a> — machine-readable metadata</li>
@@ -819,11 +827,16 @@ def llms_text(
     """Return a compact llms.txt service summary."""
     payment = _payment_details(settings, payment_requirement)
     v111_section = _v111_llms_text(_v111_requirements(v111_accepts))
+    v111_price_note = (
+        " V1.11 variants use their individually listed $0.05, $0.10, and "
+        "$0.15 prices."
+        if v111_accepts else ""
+    )
     return f"""# SmartFetch
 
 SmartFetch reads, fetches, scrapes, and extracts public webpages for AI agents. It returns clean text, Markdown, links, and metadata, with browser rendering for JavaScript-heavy websites.
 
-Payment: {payment['price']} per paid HTTP or MCP tool execution using x402 {payment['scheme']} on {payment['network']} with asset {payment['asset']}.
+Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['price']} per execution with x402 {payment['scheme']} on {payment['network']} and asset {payment['asset']}.{v111_price_note}
 
 ## Endpoints
 - [Community x402 manifest]({urls['x402']})

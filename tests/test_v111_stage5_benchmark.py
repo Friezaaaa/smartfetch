@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 import json
 import tempfile
 import shutil
@@ -129,6 +130,142 @@ class Stage5BenchmarkTests(unittest.TestCase):
             authorize_real_run(self.manifest, execute_real_providers=True, max_total_cost_microusd="1000000",
                                environment=GOOD_ENV, operation_caps={**CAPS, "gemini-3.8-flash": 100000})
 
+    def test_execution_boundary_rederives_authorization_before_executor(self) -> None:
+        authorization = authorize_real_run(
+            self.manifest,
+            execute_real_providers=True,
+            max_total_cost_microusd="1000000",
+            environment=GOOD_ENV,
+            operation_caps=CAPS,
+        )
+        calls = []
+
+        def executor(trial):
+            calls.append(trial.case_id)
+            return TrialOutcome(
+                success=True,
+                failure_code=None,
+                usage=ProviderUsage(provider=trial.provider, cost_micro_usd=1),
+                latency_ms=1,
+                contract_valid=True,
+                evidence_valid=True,
+                citation_valid=True,
+                source_count=1,
+            )
+
+        invalid_attempts = (
+            (authorization, {}, "1000000", CAPS, "empty environment"),
+            (authorization, {key: value for key, value in GOOD_ENV.items()
+                             if key != "SMARTFETCH_BENCHMARK_APPROVAL"}, "1000000", CAPS, "missing approval"),
+            (authorization, {key: value for key, value in GOOD_ENV.items()
+                             if key != "EXA_API_KEY"}, "1000000", CAPS, "missing Exa credential"),
+            (authorization, {key: value for key, value in GOOD_ENV.items()
+                             if key != "GEMINI_API_KEY"}, "1000000", CAPS, "missing Gemini credential"),
+            (replace(authorization, manifest_hash="0" * 64), GOOD_ENV, "1000000", CAPS, "manifest hash"),
+            (replace(
+                authorization,
+                operation_caps=tuple(sorted({**CAPS, "exa": 999}.items())),
+                maximum_reserved_micro_usd=123988,
+            ), GOOD_ENV, "1000000", CAPS, "operation caps"),
+            (replace(authorization, budget_micro_usd=999999), GOOD_ENV, "1000000", CAPS, "authorization budget"),
+            (authorization, GOOD_ENV, "999999", CAPS, "CLI/environment budget"),
+        )
+        for supplied, environment, budget, caps, label in invalid_attempts:
+            with self.subTest(label=label), self.assertRaisesRegex(
+                BenchmarkFailure, "benchmark_not_authorized"
+            ):
+                run_injected_trials(
+                    self.manifest,
+                    execute_real_providers=True,
+                    authorization=supplied,
+                    environment=environment,
+                    max_total_cost_microusd=budget,
+                    operation_caps=caps,
+                    executor=executor,
+                )
+            self.assertEqual(calls, [])
+
+        for budget in ("0", "-1", "bad", "123999"):
+            environment = {
+                **GOOD_ENV,
+                "SMARTFETCH_BENCHMARK_APPROVED_BUDGET_MICROUSD": budget,
+            }
+            expected = (
+                "benchmark_budget_exceeded" if budget == "123999"
+                else "benchmark_not_authorized"
+            )
+            with self.subTest(budget=budget), self.assertRaisesRegex(BenchmarkFailure, expected):
+                run_injected_trials(
+                    self.manifest,
+                    execute_real_providers=True,
+                    authorization=authorization,
+                    environment=environment,
+                    max_total_cost_microusd=budget,
+                    operation_caps=CAPS,
+                    executor=executor,
+                )
+            self.assertEqual(calls, [])
+
+    def test_authorized_execution_and_end_to_end_candidate_costs(self) -> None:
+        authorization = authorize_real_run(
+            self.manifest,
+            execute_real_providers=True,
+            max_total_cost_microusd="1000000",
+            environment=GOOD_ENV,
+            operation_caps=CAPS,
+        )
+
+        def executor(trial):
+            return TrialOutcome(
+                success=True,
+                failure_code=None,
+                usage=ProviderUsage(
+                    provider=trial.provider,
+                    cost_micro_usd=100 if trial.provider == "exa" else 200,
+                ),
+                latency_ms=1,
+                contract_valid=True,
+                evidence_valid=True,
+                citation_valid=True,
+                source_count=1,
+            )
+
+        records = run_injected_trials(
+            self.manifest,
+            execute_real_providers=True,
+            authorization=authorization,
+            environment=GOOD_ENV,
+            max_total_cost_microusd="1000000",
+            operation_caps=CAPS,
+            executor=executor,
+        )
+        answer = [record for record in records if record.case_id == "ANS-01"]
+        structured = [record for record in records if record.case_id == "SRS-01"]
+        for candidates in (answer, structured):
+            self.assertEqual(
+                [(record.provider, record.provider_cost_micro_usd, record.total_cost_micro_usd)
+                 for record in candidates],
+                [("exa", 100, 100), ("gemini", 200, 300), ("gemini", 200, 300)],
+            )
+        results = [record for record in records if record.case_id == "RES-01"]
+        image = [record for record in records if record.case_id == "IMG-01"]
+        self.assertEqual([(record.provider_cost_micro_usd, record.total_cost_micro_usd)
+                          for record in results], [(100, 100)])
+        self.assertEqual([(record.provider_cost_micro_usd, record.total_cost_micro_usd)
+                          for record in image], [(200, 200), (200, 200)])
+
+        report = json.loads(render_reports(self.manifest, records)[0])
+        self.assertEqual(report["summary"]["total_cost_micro_usd"], 12 * 100 + 56 * 200)
+        for variant in ("answer", "structured"):
+            summary = report["summary"]["variants"][variant]
+            self.assertEqual(summary["trial_count"], 8)
+            self.assertEqual(summary["provider_cost_micro_usd"], 4 * 100 + 8 * 200)
+            self.assertEqual(summary["candidate_total_cost_micro_usd"], 8 * 300)
+            self.assertEqual(summary["median_cost_micro_usd"], 300)
+            self.assertEqual(summary["maximum_cost_micro_usd"], 300)
+        self.assertEqual(report["summary"]["variants"]["results"]["median_cost_micro_usd"], 100)
+        self.assertEqual(report["summary"]["variants"]["image"]["median_cost_micro_usd"], 200)
+
     def test_budget_reservations_are_exact_and_single_use(self) -> None:
         ledger = BenchmarkLedger(3000)
         token = ledger.reserve(2000)
@@ -162,14 +299,18 @@ class Stage5BenchmarkTests(unittest.TestCase):
                                            max_total_cost_microusd="1000000", environment=GOOD_ENV,
                                            operation_caps=CAPS)
         records = run_injected_trials(self.manifest, execute_real_providers=True,
-                                      authorization=authorization, executor=fake)
+                                      authorization=authorization, environment=GOOD_ENV,
+                                      max_total_cost_microusd="1000000", operation_caps=CAPS,
+                                      executor=fake)
         self.assertEqual(len(records), 68)
         self.assertEqual(len(seen), 68)
         self.assertEqual(records[0].failure_code, "invalid_provider_output")
         self.assertFalse(records[0].success)
         with self.assertRaisesRegex(BenchmarkFailure, "invalid_benchmark_usage"):
             run_injected_trials(self.manifest, execute_real_providers=True,
-                                authorization=authorization, executor=lambda trial: TrialOutcome(
+                                authorization=authorization, environment=GOOD_ENV,
+                                max_total_cost_microusd="1000000", operation_caps=CAPS,
+                                executor=lambda trial: TrialOutcome(
                                     success=True, failure_code=None, usage=None, latency_ms=1,
                                     contract_valid=True, evidence_valid=True, citation_valid=True, source_count=1))
 
@@ -189,7 +330,9 @@ class Stage5BenchmarkTests(unittest.TestCase):
 
         with self.assertRaisesRegex(BenchmarkFailure, "invalid_benchmark_result") as failure:
             run_injected_trials(self.manifest, execute_real_providers=True,
-                                authorization=authorization, executor=hostile)
+                                authorization=authorization, environment=GOOD_ENV,
+                                max_total_cost_microusd="1000000", operation_caps=CAPS,
+                                executor=hostile)
         self.assertEqual(len(calls), 1)
         self.assertNotIn("CANARY", str(failure.exception))
 
@@ -198,7 +341,9 @@ class Stage5BenchmarkTests(unittest.TestCase):
                                            max_total_cost_microusd="1000000", environment=GOOD_ENV,
                                            operation_caps=CAPS)
         records = run_injected_trials(self.manifest, execute_real_providers=True,
-                                      authorization=authorization, executor=lambda trial: TrialOutcome(
+                                      authorization=authorization, environment=GOOD_ENV,
+                                      max_total_cost_microusd="1000000", operation_caps=CAPS,
+                                      executor=lambda trial: TrialOutcome(
                                           success=False, failure_code="unknown", usage=ProviderUsage(
                                               provider=trial.provider, cost_micro_usd=1), latency_ms=1,
                                           contract_valid=False, evidence_valid=False, citation_valid=False,
@@ -219,7 +364,9 @@ class Stage5BenchmarkTests(unittest.TestCase):
                                            max_total_cost_microusd="1000000", environment=GOOD_ENV,
                                            operation_caps=CAPS)
         records = run_injected_trials(self.manifest, execute_real_providers=True,
-                                      authorization=authorization, executor=lambda trial: outcome if trial.provider == "gemini" else TrialOutcome(
+                                      authorization=authorization, environment=GOOD_ENV,
+                                      max_total_cost_microusd="1000000", operation_caps=CAPS,
+                                      executor=lambda trial: outcome if trial.provider == "gemini" else TrialOutcome(
                                           success=False, failure_code="provider_unavailable", usage=ProviderUsage(
                                               provider="exa", cost_micro_usd=100), latency_ms=1,
                                           contract_valid=False, evidence_valid=False, citation_valid=False,

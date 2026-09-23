@@ -52,6 +52,24 @@ class Stage5DocumentationTests(unittest.TestCase):
         self.assertIn("not enabled", readme)
         self.assertIn("not benchmark-approved", readme)
         self.assertIn("not Registry-published", readme)
+        self.assertIn('"service_version": "1.11.0"', readme)
+        self.assertIn("docker build -t smartfetch:v1.11.0 .", readme)
+        self.assertIn("docker run --rm -p 8787:8787 smartfetch:v1.11.0", readme)
+        self.assertNotIn("docker pull", readme)
+
+    def test_tool_provenance_records_historical_rolling_download(self):
+        provenance = (ROOT / "benchmarks" / "v111" / "TOOL_PROVENANCE.md").read_text("utf-8")
+        self.assertIn("2026-09-15", provenance)
+        self.assertIn("rolling publisher URL", provenance)
+        self.assertIn("may resolve to different bytes", " ".join(provenance.split()))
+        self.assertIn(
+            "fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9",
+            provenance,
+        )
+        self.assertIn(
+            "19202b23c0043f15ad1b7bce2344f406fd52bd6efd8f995ce02e7392a1cec52f",
+            provenance,
+        )
 
     def test_enabled_docs_and_llms_describe_every_runtime_variant(self):
         app = self.app()
@@ -62,7 +80,7 @@ class Stage5DocumentationTests(unittest.TestCase):
             requirement = app.state.smartfetch_mcp.v111_accepts[
                 definition.mcp_resource
             ][0]
-            price = f"${int(requirement.amount) / 1_000_000:g}"
+            price = f"${int(requirement.amount) / 1_000_000:.2f}"
             for rendered in (docs, llms):
                 self.assertIn(definition.rest_path, rendered)
                 self.assertIn(definition.mcp_resource, rendered)
@@ -71,10 +89,14 @@ class Stage5DocumentationTests(unittest.TestCase):
         self.assertLess(len(llms.encode("utf-8")), 16_000)
 
     def test_enabled_documentation_covers_contract_and_payment_boundaries(self):
-        with TestClient(self.app()) as client:
+        app = self.app()
+        with TestClient(app) as client:
+            root = client.get("/").json()
             docs = client.get("/docs").text
             llms = client.get("/llms.txt").text
             openapi = client.get("/openapi.json").json()
+            meta = client.get("/meta").json()
+            x402 = client.get("/.well-known/x402").json()
         combined = f"{docs}\n{llms}".lower()
         for phrase in (
             "cited answer",
@@ -98,6 +120,31 @@ class Stage5DocumentationTests(unittest.TestCase):
         self.assertIn("maxresults", serialized.replace("_", ""))
         self.assertIn("maxsources", serialized.replace("_", ""))
         self.assertIn("additionalproperties", serialized.replace("_", ""))
+        for rendered in (docs, llms):
+            self.assertIn("Legacy", rendered)
+            self.assertIn("four existing MCP tools", rendered)
+            self.assertIn("individually listed", rendered)
+            self.assertIn("$0.005", rendered)
+            for price in ("$0.05", "$0.10", "$0.15"):
+                self.assertIn(price, rendered)
+            self.assertNotIn("per paid HTTP or MCP tool execution", rendered)
+            self.assertNotIn("Each paid HTTP or MCP execution", rendered)
+        self.assertEqual(
+            {key: value for key, value in root.items() if key != "request_id"},
+            {key: value for key, value in meta.items() if key != "request_id"},
+        )
+        self.assertEqual(x402["payment"]["price"], "$0.005")
+        self.assertEqual(len(meta["capabilities"]["variants"]), 8)
+        self.assertEqual(len(x402["v111"]["http"]), 8)
+        self.assertEqual(len(x402["v111"]["mcp"]), 8)
+        for definition in V111_VARIANTS:
+            amount = int(app.state.smartfetch_mcp.v111_accepts[
+                definition.mcp_resource
+            ][0].amount)
+            self.assertEqual(
+                openapi["paths"][definition.rest_path]["post"]["x-x402"]["amount"],
+                str(amount),
+            )
 
     def test_disabled_docs_preserve_legacy_surface(self):
         with TestClient(self.app(enabled=False)) as client:

@@ -173,7 +173,7 @@ Example response fields:
   "truncated": false,
   "elapsed_ms": 350,
   "request_id": "…",
-  "service_version": "1.10.6"
+  "service_version": "1.11.0"
 }
 ```
 
@@ -414,8 +414,8 @@ python tests/api_local_smoke.py
 ## Container
 
 ```bash
-docker build -t smartfetch:v1.10.6 .
-docker run --rm -p 8787:8787 smartfetch:v1.10.6
+docker build -t smartfetch:v1.11.0 .
+docker run --rm -p 8787:8787 smartfetch:v1.11.0
 ```
 
 The container installs Chromium automatically.

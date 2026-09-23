@@ -310,7 +310,12 @@ class BenchmarkLedger:
             self._reserved.pop(token)
 
 
-def _record(trial: BenchmarkTrial, outcome: TrialOutcome) -> TrialRecord:
+def _record(
+    trial: BenchmarkTrial,
+    outcome: TrialOutcome,
+    *,
+    shared_discovery_cost_micro_usd: int = 0,
+) -> TrialRecord:
     if type(outcome) is not TrialOutcome or type(outcome.usage) is not ProviderUsage:
         raise BenchmarkFailure("invalid_benchmark_usage")
     usage = outcome.usage
@@ -326,12 +331,22 @@ def _record(trial: BenchmarkTrial, outcome: TrialOutcome) -> TrialRecord:
     code = outcome.failure_code if not success else None
     if not success and code not in FAILURE_CODES:
         raise BenchmarkFailure("invalid_benchmark_result")
+    if (type(shared_discovery_cost_micro_usd) is not int
+            or not 0 <= shared_discovery_cost_micro_usd <= MAX_BUDGET
+            or (shared_discovery_cost_micro_usd and (
+                trial.provider != "gemini"
+                or trial.variant not in {"answer", "structured"}
+            ))):
+        raise BenchmarkFailure("invalid_benchmark_usage")
+    total_cost = usage.cost_micro_usd + shared_discovery_cost_micro_usd
+    if total_cost > 100_000_000:
+        raise BenchmarkFailure("invalid_benchmark_usage")
     return TrialRecord(
         trial.case_id, trial.variant, trial.provider, trial.model_id, success, code,
         outcome.contract_valid, outcome.evidence_valid, outcome.citation_valid,
         outcome.source_count, usage.search_queries, usage.input_tokens,
         usage.output_tokens, usage.thinking_tokens, usage.tool_use_tokens,
-        usage.modality_tokens, usage.cost_micro_usd, usage.cost_micro_usd, outcome.latency_ms,
+        usage.modality_tokens, usage.cost_micro_usd, total_cost, outcome.latency_ms,
     )
 
 
@@ -339,31 +354,61 @@ def run_injected_trials(
     manifest: BenchmarkManifest, *, execute_real_providers: bool,
     authorization: RealAuthorization | None = None,
     environment: Mapping[str, str] | None = None,
+    max_total_cost_microusd: str | None = None,
+    operation_caps: Mapping[str, int] | None = None,
     executor: Callable[[BenchmarkTrial], TrialOutcome] | None = None,
 ) -> tuple[TrialRecord, ...]:
     """Offline defaults to validation only; live work requires injection and approval."""
     if not execute_real_providers:
         return ()
-    if type(authorization) is not RealAuthorization or authorization.manifest_hash != manifest.sha256 or executor is None:
+    if executor is None or environment is None or operation_caps is None:
         raise BenchmarkFailure("benchmark_not_authorized")
-    caps = dict(authorization.operation_caps)
-    inventory = build_trial_inventory(manifest)
-    if (len(authorization.operation_caps) != 3 or set(caps) != {"exa", *MODEL_IDS}
-            or any(type(cap) is not int or not 1 <= cap <= MAX_BUDGET for cap in caps.values())
+    try:
+        rederived = authorize_real_run(
+            manifest,
+            execute_real_providers=True,
+            max_total_cost_microusd=max_total_cost_microusd,
+            environment=environment,
+            operation_caps=operation_caps,
+        )
+    except BenchmarkFailure:
+        raise
+    except Exception:
+        raise BenchmarkFailure("benchmark_not_authorized") from None
+    if (type(authorization) is not RealAuthorization
+            or type(authorization.manifest_hash) is not str
             or type(authorization.budget_micro_usd) is not int
-            or not 1 <= authorization.budget_micro_usd <= MAX_BUDGET
-            or authorization.maximum_reserved_micro_usd != sum(caps[trial.model_id or "exa"] for trial in inventory)
-            or authorization.maximum_reserved_micro_usd > authorization.budget_micro_usd):
+            or type(authorization.maximum_reserved_micro_usd) is not int
+            or type(authorization.operation_caps) is not tuple
+            or any(type(pair) is not tuple or len(pair) != 2
+                   or type(pair[0]) is not str or type(pair[1]) is not int
+                   for pair in authorization.operation_caps)
+            or authorization != rederived):
         raise BenchmarkFailure("benchmark_not_authorized")
-    ledger = BenchmarkLedger(authorization.budget_micro_usd)
+    caps = dict(rederived.operation_caps)
+    inventory = build_trial_inventory(manifest)
+    ledger = BenchmarkLedger(rederived.budget_micro_usd)
     records: list[TrialRecord] = []
+    shared_discovery_costs: dict[str, int] = {}
     for trial in inventory:
         token = ledger.reserve(caps[trial.model_id or "exa"])
         try:
             outcome = executor(trial)
-            record = _record(trial, outcome)
+            shared_cost = (
+                shared_discovery_costs.get(trial.case_id, 0)
+                if trial.provider == "gemini"
+                and trial.variant in {"answer", "structured"}
+                else 0
+            )
+            record = _record(
+                trial,
+                outcome,
+                shared_discovery_cost_micro_usd=shared_cost,
+            )
             ledger.commit(token, record.provider_cost_micro_usd)
             records.append(record)
+            if trial.provider == "exa" and trial.variant in {"answer", "structured"}:
+                shared_discovery_costs[trial.case_id] = record.provider_cost_micro_usd
         except BenchmarkFailure:
             try:
                 ledger.release(token)
@@ -386,6 +431,7 @@ def render_reports(manifest: BenchmarkManifest, records: tuple[TrialRecord, ...]
     if len(records) != len(inventory):
         raise BenchmarkFailure("invalid_benchmark_result")
     rows: list[dict[str, object]] = []
+    shared_discovery_costs: dict[str, int] = {}
     for record, trial in zip(records, inventory):
         if (record.case_id, record.variant, record.provider, record.model_id) != (
             trial.case_id, trial.variant, trial.provider, trial.model_id
@@ -398,7 +444,6 @@ def render_reports(manifest: BenchmarkManifest, records: tuple[TrialRecord, ...]
                 record.output_tokens, record.thinking_tokens, record.tool_use_tokens,
                 record.provider_cost_micro_usd, record.total_cost_micro_usd, record.latency_ms
             )) or record.failure_code not in (None, *FAILURE_CODES)
-                or record.total_cost_micro_usd != record.provider_cost_micro_usd
                 or (record.success and (record.failure_code is not None or not (
                     record.contract_valid and record.evidence_valid and record.citation_valid
                 ))) or (not record.success and record.failure_code is None)
@@ -408,6 +453,15 @@ def render_reports(manifest: BenchmarkManifest, records: tuple[TrialRecord, ...]
                        or type(pair[1]) is not int or not 0 <= pair[1] <= 100_000_000
                        for pair in record.modality_tokens)):
             raise BenchmarkFailure("invalid_benchmark_result")
+        expected_total = record.provider_cost_micro_usd
+        if trial.provider == "gemini" and trial.variant in {"answer", "structured"}:
+            if trial.case_id not in shared_discovery_costs:
+                raise BenchmarkFailure("invalid_benchmark_result")
+            expected_total += shared_discovery_costs[trial.case_id]
+        if record.total_cost_micro_usd != expected_total:
+            raise BenchmarkFailure("invalid_benchmark_result")
+        if trial.provider == "exa" and trial.variant in {"answer", "structured"}:
+            shared_discovery_costs[trial.case_id] = record.provider_cost_micro_usd
         rows.append({
             "case_id": record.case_id, "variant": record.variant,
             "provider": record.provider, "model_id": record.model_id,
@@ -423,26 +477,35 @@ def render_reports(manifest: BenchmarkManifest, records: tuple[TrialRecord, ...]
         })
     summaries: dict[str, dict[str, int | None]] = {}
     for _, variant in PREFIX_VARIANTS:
-        selected = [record for record in records if record.variant == variant]
-        costs = [record.total_cost_micro_usd for record in selected]
-        latencies = [record.latency_ms for record in selected]
-        successes = sum(record.success for record in selected)
-        total = sum(costs)
+        operations = [record for record in records if record.variant == variant]
+        candidates = [
+            record for record in operations
+            if not (variant in {"answer", "structured"} and record.provider == "exa")
+        ]
+        costs = [record.total_cost_micro_usd for record in candidates]
+        latencies = [record.latency_ms for record in candidates]
+        successes = sum(record.success for record in candidates)
+        actual_provider_cost = sum(record.provider_cost_micro_usd for record in operations)
+        candidate_total = sum(costs)
         summaries[variant] = {
-            "trial_count": len(selected), "success_count": successes,
-            "provider_cost_micro_usd": total, "median_cost_micro_usd": median_low(costs),
+            "trial_count": len(candidates), "success_count": successes,
+            "provider_cost_micro_usd": actual_provider_cost,
+            "candidate_total_cost_micro_usd": candidate_total,
+            "median_cost_micro_usd": median_low(costs),
             "maximum_cost_micro_usd": max(costs), "median_latency_ms": median_low(latencies),
             "maximum_latency_ms": max(latencies),
-            "failure_adjusted_cost_per_success_micro_usd": (total + successes - 1) // successes if successes else None,
+            "failure_adjusted_cost_per_success_micro_usd": (
+                (candidate_total + successes - 1) // successes if successes else None
+            ),
         }
     summary = {"trial_count": len(records), "success_count": sum(record.success for record in records),
-               "total_cost_micro_usd": sum(record.total_cost_micro_usd for record in records),
+               "total_cost_micro_usd": sum(record.provider_cost_micro_usd for record in records),
                "variants": summaries}
     report = {"manifest_version": 1, "manifest_hash": manifest.sha256,
               "trials": rows, "summary": summary}
     json_text = json.dumps(report, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     markdown = "# V1.11 benchmark observations\n\n" + f"Manifest: `{manifest.sha256}`\n\n" + (
-        "| Variant | Trials | Successes | Total provider micro-USD | Observed max micro-USD | Median micro-USD |\n"
+        "| Variant | Candidate trials | Successes | Actual provider micro-USD | Candidate max end-to-end micro-USD | Candidate median end-to-end micro-USD |\n"
         "|---|---:|---:|---:|---:|---:|\n"
     ) + "".join(
         f"| {variant} | {item['trial_count']} | {item['success_count']} | "

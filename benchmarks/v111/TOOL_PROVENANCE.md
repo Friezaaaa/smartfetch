@@ -9,7 +9,12 @@ or generated extraction directory belongs in the repository.
 | eSpeak NG MSI | [official project release asset](https://github.com/espeak-ng/espeak-ng/releases/download/1.52.0/espeak-ng.msi) | Release tag `1.52.0`; MSI `ProductVersion` is `1.51.0` | `7f673c709ea5dd579d3b5ebb98688cc575328a6ab7438d2bc405b88cedaeafb9` |
 | FFmpeg essentials ZIP | [FFmpeg-project-linked Windows build](https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip) | `ffmpeg version 9.0.1-essentials_build-www.gyan.dev` | `fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9` |
 
-The FFmpeg archive hash matched the publisher's HTTPS `.sha256` sidecar.
+The FFmpeg archive was acquired on 2026-09-15. The linked
+`ffmpeg-release-essentials.zip` location is a rolling publisher URL and may
+resolve to different bytes after a new release. At acquisition time, the
+archive hash matched the publisher's HTTPS `.sha256` sidecar. The historical
+FFmpeg 9.0.1 archive and executable hashes below identify the bytes used to
+generate this corpus; no immutable publisher archive reference was verified.
 The extracted FFmpeg executable SHA-256 was
 `72a489eccd008c2ec2c0a5856c5c75bc3d8bbfa90166c4566865c246445e6aa3`;
 the FFprobe executable SHA-256 was
