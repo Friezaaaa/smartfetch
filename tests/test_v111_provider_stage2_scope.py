@@ -60,7 +60,7 @@ class ProviderStage2ScopeTests(unittest.IsolatedAsyncioTestCase):
             client.assert_not_called()
 
     def test_stage2_does_not_change_release_version_or_contain_public_tool_wiring(self) -> None:
-        self.assertEqual(SERVICE_VERSION, "1.10.6")
+        self.assertEqual(SERVICE_VERSION, "1.11.0")
         provider_source = "\n".join(
             (ROOT / "smartfetch" / "providers" / filename).read_text(
                 encoding="utf-8"

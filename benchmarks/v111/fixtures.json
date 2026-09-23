@@ -1,0 +1,194 @@
+{
+  "manifest_version": 1,
+  "fixtures": [
+    {
+      "fixture_id": "IMG-01",
+      "path": "fixtures/IMG-01.png",
+      "byte_size": 18387,
+      "sha256": "56fba51d0cff57c25f3711b336419931704fe2a781f508643ac0dd9d6b1621e0",
+      "mime_type": "image/png",
+      "expected_semantic_content": {
+        "order_id": "SF-1042",
+        "total_usd": "42.75"
+      }
+    },
+    {
+      "fixture_id": "IMG-02",
+      "path": "fixtures/IMG-02.png",
+      "byte_size": 21639,
+      "sha256": "e5f92a20eadcbdd95f700e1d76cd846d490a0bfcdaaef9370022b1923347699e",
+      "mime_type": "image/png",
+      "expected_semantic_content": {
+        "model": "ORBIT-7",
+        "batch": "B-204",
+        "mass_g": 350
+      }
+    },
+    {
+      "fixture_id": "IMG-03",
+      "path": "fixtures/IMG-03.png",
+      "byte_size": 19785,
+      "sha256": "a0c117e323723832c21f298e98b548c3e06e149f6b179d0f12af97431c967a2f",
+      "mime_type": "image/png",
+      "expected_semantic_content": {
+        "event": "Aurora Demo",
+        "date": "2026-10-14",
+        "venue": "Harbor Hall"
+      }
+    },
+    {
+      "fixture_id": "IMG-04",
+      "path": "fixtures/IMG-04.png",
+      "byte_size": 17692,
+      "sha256": "0affe6c87da1da245a7f9b8cdc06fea82f9282bde9b253963010465ec88fd28e",
+      "mime_type": "image/png",
+      "expected_semantic_content": {
+        "north": 18,
+        "south": 27,
+        "west": 31
+      }
+    },
+    {
+      "fixture_id": "PDF-01",
+      "path": "fixtures/PDF-01.pdf",
+      "byte_size": 668,
+      "sha256": "b7c9ba7ad6cabf44deaeb69ac9abf21d02dd2979a5bf1be212e464bb7b9803f5",
+      "mime_type": "application/pdf",
+      "expected_semantic_content": {
+        "invoice_id": "INV-7301",
+        "customer": "Northwind Lab",
+        "total_usd": "128.40"
+      }
+    },
+    {
+      "fixture_id": "PDF-02",
+      "path": "fixtures/PDF-02.pdf",
+      "byte_size": 906,
+      "sha256": "c95bd4b737e30e076d4755711acb38bda830ae0f30cd64a21e9f59df164f74b6",
+      "mime_type": "application/pdf",
+      "expected_semantic_content": {
+        "project": "Cedar",
+        "milestone": "Beta",
+        "completion_percent": 72
+      }
+    },
+    {
+      "fixture_id": "PDF-03",
+      "path": "fixtures/PDF-03.pdf",
+      "byte_size": 903,
+      "sha256": "1666c47f4a4451f84f49e75d1cbc6223523eea7df3690e202abf0b6c9b785c16",
+      "mime_type": "application/pdf",
+      "expected_semantic_content": {
+        "policy_id": "POL-88",
+        "effective_date": "2026-11-01",
+        "limit_usd": 5000
+      }
+    },
+    {
+      "fixture_id": "PDF-04",
+      "path": "fixtures/PDF-04.pdf",
+      "byte_size": 48940,
+      "sha256": "0fcd7ea2605b36b603afb1f2f6e6dba234120d6ff9b140987df0a010a369c5c6",
+      "mime_type": "application/pdf",
+      "expected_semantic_content": {
+        "shipment_id": "SHIP-204",
+        "crates": 6,
+        "destination": "Baltimore"
+      }
+    },
+    {
+      "fixture_id": "AUD-01",
+      "path": "fixtures/AUD-01.wav",
+      "byte_size": 285336,
+      "sha256": "7606f2dacbbc5f80d79bd4d3c4c6296b768ef295b522b03cf5604fcd8560d6e3",
+      "mime_type": "audio/wav",
+      "expected_semantic_content": {
+        "order_id": "SF-550",
+        "ship_date": "2026-10-12"
+      }
+    },
+    {
+      "fixture_id": "AUD-02",
+      "path": "fixtures/AUD-02.wav",
+      "byte_size": 257658,
+      "sha256": "67a65984f944b4174be38542cd366144b81d5218029e4aab2e76a4f2dac696da",
+      "mime_type": "audio/wav",
+      "expected_semantic_content": {
+        "red_score": 17,
+        "blue_score": 23
+      }
+    },
+    {
+      "fixture_id": "AUD-03",
+      "path": "fixtures/AUD-03.wav",
+      "byte_size": 167854,
+      "sha256": "6699ec9222de5c4fca9ef7c78898bae4500dadda63bf2ef9c88a9705631676f7",
+      "mime_type": "audio/wav",
+      "expected_semantic_content": {
+        "meeting": "Alpha",
+        "time": "2:30 PM",
+        "room": "Cedar"
+      }
+    },
+    {
+      "fixture_id": "AUD-04",
+      "path": "fixtures/AUD-04.wav",
+      "byte_size": 206294,
+      "sha256": "b18bab5481a89acd971657b6815ba9b947639c97bbc8baff3cfc174515c00f41",
+      "mime_type": "audio/wav",
+      "expected_semantic_content": {
+        "ticket_id": "TK-90",
+        "assignee": null
+      }
+    },
+    {
+      "fixture_id": "VID-01",
+      "path": "fixtures/VID-01.webm",
+      "byte_size": 36031,
+      "sha256": "8e98a7548be000d1146af3c140e48d07fe5a2e489eec417ff138ba0f6f564bd0",
+      "mime_type": "video/webm",
+      "expected_semantic_content": {
+        "launch_code": "LANTERN-4",
+        "launch_date": "2026-12-03"
+      }
+    },
+    {
+      "fixture_id": "VID-02",
+      "path": "fixtures/VID-02.webm",
+      "byte_size": 35075,
+      "sha256": "5a6fb4b244f1a2a8fca0a93fe3c9e2a83fce4c1271eb1f56476775e374bc1512",
+      "mime_type": "video/webm",
+      "expected_semantic_content": {
+        "bolts": 14,
+        "gears": 9,
+        "springs": 22
+      }
+    },
+    {
+      "fixture_id": "VID-03",
+      "path": "fixtures/VID-03.webm",
+      "byte_size": 30193,
+      "sha256": "e932520f08788688716e7f108bb4637ad89651760b0816ddd05d105a16382fee",
+      "mime_type": "video/webm",
+      "expected_semantic_content": {
+        "steps": [
+          "calibrate",
+          "lock",
+          "transmit"
+        ]
+      }
+    },
+    {
+      "fixture_id": "VID-04",
+      "path": "fixtures/VID-04.webm",
+      "byte_size": 44176,
+      "sha256": "8754c1fb77c4ed4156f08da5561dd722e913c7525f4c40f4a637d966d18069f2",
+      "mime_type": "video/webm",
+      "expected_semantic_content": {
+        "model": "NOVA-2",
+        "serial": "SN-8841",
+        "warranty": null
+      }
+    }
+  ]
+}

@@ -1,10 +1,27 @@
-# SmartFetch V1.10.6 — accurate x402 payment onboarding
+# SmartFetch V1.11.0 — conditional search and structured extraction
 
 SmartFetch takes a public web URL and returns clean agent-ready text, Markdown, links, metadata, and the retrieval method used. It tries cheap HTTP retrieval first and falls back to a real Chromium browser when needed.
 
-SmartFetch V1.10.5 is live in production and is the currently published
-Official MCP Registry version. This branch prepares V1.10.6 for review; it
-does not itself deploy the service or publish a Registry release.
+SmartFetch V1.10.6 is live in production and is the currently published
+Official MCP Registry version. This branch prepares V1.11.0 for review. It is
+not deployed, not enabled, not benchmark-approved, and not Registry-published.
+
+## V1.11.0 conditional capabilities
+
+V1.11 adds two conditional MCP tools—`search_and_extract` and
+`extract_structured_data`—and eight fixed paid REST variants for generic search
+results, cited answers, structured search, and structured extraction from
+webpages, images, PDFs, audio, and video. Each variant has a static server-owned
+payment identity and price. When the restart-only activation gate is disabled
+or provider configuration is incomplete, all eight routes remain ordinary 404
+responses and discovery continues to expose exactly the four existing tools.
+
+The Stage 5 benchmark harness validates a deterministic 32-case corpus offline
+by default. Its real-mode authorization contract requires an exact CLI and
+environment approval tuple, complete credentials, verified fixture hashes,
+and an integer micro-USD ceiling. The CLI has no real provider executor wired
+in this PR, so it cannot run a paid benchmark even with that tuple. This PR
+neither authorizes nor runs a benchmark and does not configure credentials.
 
 ## V1.10.6 payment onboarding
 
@@ -101,8 +118,9 @@ does not itself deploy the service or publish a Registry release.
   and agents.
 - Runtime discovery links use FastAPI/Starlette's proxy-aware request scheme
   and host. The Railway hostname is not embedded in runtime discovery output.
-- SmartFetch V1.10.5 is the currently published Official MCP Registry release;
-  V1.10.6 requires a separate publication after release.
+- SmartFetch V1.10.6 is the currently published Official MCP Registry release;
+  V1.11.0 requires separate deployment, activation, benchmark approval, and
+  Registry publication after review.
 
 All V1.8 HTTP payment, Bazaar, Registry, and native MCP behavior remains
 unchanged:
@@ -155,7 +173,7 @@ Example response fields:
   "truncated": false,
   "elapsed_ms": 350,
   "request_id": "…",
-  "service_version": "1.10.6"
+  "service_version": "1.11.0"
 }
 ```
 
@@ -288,8 +306,8 @@ resource: `mcp://tool/fetch_webpage`, `mcp://tool/webpage_to_markdown`,
 HTTP Bazaar resource for `POST /fetch` is separate and unchanged.
 
 The root `server.json` describes the public remote endpoint registered with the
-Official MCP Registry. V1.10.5 remains the currently published Registry
-version; V1.10.6 requires a separate publication after release.
+Official MCP Registry. V1.10.6 remains the currently published Registry
+version; V1.11.0 requires separate publication after deployment and approval.
 Registry metadata keeps its required fixed remote URL; runtime discovery routes
 derive their URLs from each proxy-aware request. The MCP Bazaar declarations do
 not assert indexing by Coinbase Bazaar or downstream MCP directories.
@@ -396,8 +414,8 @@ python tests/api_local_smoke.py
 ## Container
 
 ```bash
-docker build -t smartfetch:v1.10.6 .
-docker run --rm -p 8787:8787 smartfetch:v1.10.6
+docker build -t smartfetch:v1.11.0 .
+docker run --rm -p 8787:8787 smartfetch:v1.11.0
 ```
 
 The container installs Chromium automatically.
@@ -441,14 +459,15 @@ Our deployment gate remains **18/20 minimum**, including all five forced-browser
 
 ## Production release status
 
-SmartFetch V1.10.5 is live in production. The production MCP server still
+SmartFetch V1.10.6 is live in production. The production MCP server still
 exposes exactly four tools: `fetch_webpage`, `webpage_to_markdown`,
 `extract_webpage_text`, and `render_webpage`. HTTP `POST /fetch` and all four MCP
 tools use x402 `exact` payments on Base mainnet at `$0.005` per execution.
 
 Free `/.well-known/x402` discovery, privacy-safe structured activity logging,
-and the guarded buyer examples are live V1.10 additions. V1.10.5 is the
-currently published Official MCP Registry version; V1.10.6 is not published or
-deployed by this repository change. Base Sepolia remains supported for testnet use, and the
+and the guarded buyer examples are live V1.10 additions. V1.10.6 is the
+currently published Official MCP Registry version; V1.11.0 is not deployed,
+enabled, benchmark-approved, or Registry-published by this repository change.
+Base Sepolia remains supported for testnet use, and the
 active payment network remains controlled by `X402_NETWORK`: `eip155:84532` for
 Base Sepolia or `eip155:8453` for Base mainnet.

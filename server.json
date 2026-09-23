@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Friezaaaa/smartfetch",
   "title": "SmartFetch",
-  "description": "Paid fallback for public webpages: clean text, Markdown, links, metadata, and JavaScript rendering.",
-  "version": "1.10.6",
+  "description": "Paid public-web search, cited answers, and structured extraction for webpages and multimodal media.",
+  "version": "1.11.0",
   "repository": {
     "url": "https://github.com/Friezaaaa/smartfetch",
     "source": "github"

@@ -359,6 +359,11 @@ def create_app(
     )
     application.state.smartfetch_mcp = smartfetch_mcp
     application.state.v111_activation = activation
+    v111_discovery_accepts = (
+        smartfetch_mcp.v111_accepts
+        if activation.enabled
+        else None
+    )
 
     async def framework_not_found(request: Request, _exception):
         return _not_found(request)
@@ -388,7 +393,7 @@ def create_app(
 
     async def metadata(request: Request):
         urls = public_urls(request)
-        return _json_response(request, 200, {
+        payload = {
             'service': SERVICE_NAME,
             'version': SERVICE_VERSION,
             'description': (
@@ -407,7 +412,11 @@ def create_app(
                 'path': MCP_PATH,
                 'transport': MCP_TRANSPORT,
                 'tool': MCP_TOOL,
-                'tools': list(MCP_TOOLS),
+                'tools': list(MCP_TOOLS) + (
+                    list(V111_MCP_TOOLS)
+                    if v111_discovery_accepts
+                    else []
+                ),
                 'url': urls['mcp'],
             },
             'discovery': {
@@ -418,14 +427,24 @@ def create_app(
                 'robots': urls['robots'],
                 'sitemap': urls['sitemap'],
             },
-        })
+        }
+        if v111_discovery_accepts:
+            payload['capabilities'] = {
+                'tools': list(V111_MCP_TOOLS),
+                'variants': [item.variant for item in V111_VARIANTS],
+            }
+        return _json_response(request, 200, payload)
 
     application.add_api_route('/', metadata, methods=['GET'])
     application.add_api_route('/meta', metadata, methods=['GET'])
 
     @application.get('/.well-known/x402')
     async def x402_discovery(request: Request):
-        return JSONResponse(x402_manifest(public_urls(request), settings))
+        return JSONResponse(x402_manifest(
+            public_urls(request),
+            settings,
+            v111_discovery_accepts,
+        ))
 
     @application.get('/docs', response_class=HTMLResponse)
     async def discovery_docs(request: Request):
@@ -438,6 +457,7 @@ def create_app(
             public_urls(request),
             settings,
             payment_requirement,
+            v111_discovery_accepts,
         ))
 
     @application.get('/openapi.json')
@@ -451,6 +471,7 @@ def create_app(
             public_urls(request),
             settings,
             payment_requirement,
+            v111_discovery_accepts,
         ))
 
     @application.get('/llms.txt', response_class=PlainTextResponse)
@@ -464,6 +485,7 @@ def create_app(
             public_urls(request),
             settings,
             payment_requirement,
+            v111_discovery_accepts,
         ))
 
     @application.get('/robots.txt', response_class=PlainTextResponse)

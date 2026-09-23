@@ -1,0 +1,1178 @@
+{
+  "manifest_version": 1,
+  "models": [
+    "gemini-3.8-flash",
+    "gemini-3.5-flash-lite"
+  ],
+  "cases": [
+    {
+      "case_id": "RES-01",
+      "variant": "results",
+      "providers": [
+        "exa"
+      ],
+      "models": [],
+      "request": {
+        "query": "site:docs.python.org asyncio TaskGroup",
+        "max_results": 5
+      },
+      "oracle": {
+        "relevance_anchors": [
+          "asyncio",
+          "TaskGroup"
+        ]
+      },
+      "expected_failure_code": null
+    },
+    {
+      "case_id": "RES-02",
+      "variant": "results",
+      "providers": [
+        "exa"
+      ],
+      "models": [],
+      "request": {
+        "query": "Model Context Protocol Streamable HTTP transport specification",
+        "max_results": 5
+      },
+      "oracle": {
+        "relevance_anchors": [
+          "Model Context Protocol",
+          "Streamable HTTP"
+        ]
+      },
+      "expected_failure_code": null
+    },
+    {
+      "case_id": "RES-03",
+      "variant": "results",
+      "providers": [
+        "exa"
+      ],
+      "models": [],
+      "request": {
+        "query": "x402 HTTP 402 PAYMENT-REQUIRED header",
+        "max_results": 5
+      },
+      "oracle": {
+        "relevance_anchors": [
+          "402",
+          "PAYMENT-REQUIRED"
+        ]
+      },
+      "expected_failure_code": null
+    },
+    {
+      "case_id": "RES-04",
+      "variant": "results",
+      "providers": [
+        "exa"
+      ],
+      "models": [],
+      "request": {
+        "query": "Base mainnet chain ID 8453 official documentation",
+        "max_results": 5
+      },
+      "oracle": {
+        "relevance_anchors": [
+          "Base",
+          "8453"
+        ]
+      },
+      "expected_failure_code": null
+    },
+    {
+      "case_id": "ANS-01",
+      "variant": "answer",
+      "providers": [
+        "exa",
+        "smartfetch",
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "query": "Which PEP introduced Python's tomllib module, and in which Python version was it added?",
+        "max_results": 5
+      },
+      "oracle": {
+        "required_facts": [
+          "PEP 680",
+          "Python 3.11"
+        ]
+      },
+      "expected_failure_code": null
+    },
+    {
+      "case_id": "ANS-02",
+      "variant": "answer",
+      "providers": [
+        "exa",
+        "smartfetch",
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "query": "What are the two standard transports in the current Model Context Protocol specification?",
+        "max_results": 5
+      },
+      "oracle": {
+        "required_facts": [
+          "stdio",
+          "Streamable HTTP"
+        ]
+      },
+      "expected_failure_code": null
+    },
+    {
+      "case_id": "ANS-03",
+      "variant": "answer",
+      "providers": [
+        "exa",
+        "smartfetch",
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "query": "Which HTTP status and response header communicate an x402 v2 payment challenge?",
+        "max_results": 5
+      },
+      "oracle": {
+        "required_facts": [
+          "402",
+          "PAYMENT-REQUIRED"
+        ]
+      },
+      "expected_failure_code": null
+    },
+    {
+      "case_id": "ANS-04",
+      "variant": "answer",
+      "providers": [
+        "exa",
+        "smartfetch",
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "query": "What is the Base mainnet chain ID and CAIP-2 network identifier?",
+        "max_results": 5
+      },
+      "oracle": {
+        "required_facts": [
+          "8453",
+          "eip155:8453"
+        ]
+      },
+      "expected_failure_code": null
+    },
+    {
+      "case_id": "SRS-01",
+      "variant": "structured",
+      "providers": [
+        "exa",
+        "smartfetch",
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "query": "Which PEP introduced tomllib, and in which Python version?",
+        "max_results": 5,
+        "max_sources": 3,
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "pep": {
+              "type": "integer"
+            },
+            "module": {
+              "type": "string"
+            },
+            "python_version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pep",
+            "module",
+            "python_version"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "pep": 680,
+          "module": "tomllib",
+          "python_version": "3.11"
+        },
+        "array_order_ignored": false
+      },
+      "expected_failure_code": null
+    },
+    {
+      "case_id": "SRS-02",
+      "variant": "structured",
+      "providers": [
+        "exa",
+        "smartfetch",
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "query": "What are MCP's standard transports?",
+        "max_results": 5,
+        "max_sources": 3,
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "transports": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10
+            }
+          },
+          "required": [
+            "transports"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "transports": [
+            "stdio",
+            "Streamable HTTP"
+          ]
+        },
+        "array_order_ignored": true
+      },
+      "expected_failure_code": null
+    },
+    {
+      "case_id": "SRS-03",
+      "variant": "structured",
+      "providers": [
+        "exa",
+        "smartfetch",
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "query": "What are the canonical x402 v2 HTTP status and headers?",
+        "max_results": 5,
+        "max_sources": 3,
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "status_code": {
+              "type": "integer"
+            },
+            "challenge_header": {
+              "type": "string"
+            },
+            "signature_header": {
+              "type": "string"
+            },
+            "settlement_header": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status_code",
+            "challenge_header",
+            "signature_header",
+            "settlement_header"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "status_code": 402,
+          "challenge_header": "PAYMENT-REQUIRED",
+          "signature_header": "PAYMENT-SIGNATURE",
+          "settlement_header": "PAYMENT-RESPONSE"
+        },
+        "array_order_ignored": false
+      },
+      "expected_failure_code": null
+    },
+    {
+      "case_id": "SRS-04",
+      "variant": "structured",
+      "providers": [
+        "exa",
+        "smartfetch",
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "query": "Identify the Base mainnet network.",
+        "max_results": 5,
+        "max_sources": 3,
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "network": {
+              "type": "string"
+            },
+            "chain_id": {
+              "type": "integer"
+            },
+            "caip2": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "network",
+            "chain_id",
+            "caip2"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "network": "Base mainnet",
+          "chain_id": 8453,
+          "caip2": "eip155:8453"
+        },
+        "array_order_ignored": false
+      },
+      "expected_failure_code": null
+    },
+    {
+      "case_id": "WEB-01",
+      "variant": "webpage",
+      "providers": [
+        "smartfetch",
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "source_url": "https://example.com/",
+        "render_mode": "auto",
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "domain": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "domain"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "title": "Example Domain",
+          "domain": "example.com"
+        }
+      },
+      "expected_failure_code": null
+    },
+    {
+      "case_id": "WEB-02",
+      "variant": "webpage",
+      "providers": [
+        "smartfetch",
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "source_url": "https://www.rfc-editor.org/rfc/rfc9110.html",
+        "render_mode": "auto",
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "rfc_number": {
+              "type": "integer"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "rfc_number",
+            "title"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "rfc_number": 9110,
+          "title": "HTTP Semantics"
+        }
+      },
+      "expected_failure_code": null
+    },
+    {
+      "case_id": "WEB-03",
+      "variant": "webpage",
+      "providers": [
+        "smartfetch",
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "source_url": "https://docs.python.org/3/library/tomllib.html",
+        "render_mode": "auto",
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "module": {
+              "type": "string"
+            },
+            "purpose": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "module",
+            "purpose"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "module": "tomllib",
+          "purpose_contains": "TOML"
+        }
+      },
+      "expected_failure_code": null
+    },
+    {
+      "case_id": "WEB-04",
+      "variant": "webpage",
+      "providers": [
+        "smartfetch",
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "source_url": "https://www.rfc-editor.org/rfc/rfc6901.html",
+        "render_mode": "auto",
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "rfc_number": {
+              "type": "integer"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "rfc_number",
+            "title"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "rfc_number": 6901,
+          "title": "JavaScript Object Notation (JSON) Pointer"
+        }
+      },
+      "expected_failure_code": null
+    },
+    {
+      "case_id": "IMG-01",
+      "variant": "image",
+      "providers": [
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "order_id": {
+              "type": "string"
+            },
+            "total_usd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "order_id",
+            "total_usd"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "order_id": "SF-1042",
+          "total_usd": "42.75"
+        }
+      },
+      "expected_failure_code": null,
+      "fixture": "fixtures/IMG-01.png"
+    },
+    {
+      "case_id": "IMG-02",
+      "variant": "image",
+      "providers": [
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "model": {
+              "type": "string"
+            },
+            "batch": {
+              "type": "string"
+            },
+            "mass_g": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "model",
+            "batch",
+            "mass_g"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "model": "ORBIT-7",
+          "batch": "B-204",
+          "mass_g": 350
+        }
+      },
+      "expected_failure_code": null,
+      "fixture": "fixtures/IMG-02.png"
+    },
+    {
+      "case_id": "IMG-03",
+      "variant": "image",
+      "providers": [
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "event": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "venue": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "date",
+            "venue"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "event": "Aurora Demo",
+          "date": "2026-10-14",
+          "venue": "Harbor Hall"
+        }
+      },
+      "expected_failure_code": null,
+      "fixture": "fixtures/IMG-03.png"
+    },
+    {
+      "case_id": "IMG-04",
+      "variant": "image",
+      "providers": [
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "north": {
+              "type": "integer"
+            },
+            "south": {
+              "type": "integer"
+            },
+            "west": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "north",
+            "south",
+            "west"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "north": 18,
+          "south": 27,
+          "west": 31
+        }
+      },
+      "expected_failure_code": null,
+      "fixture": "fixtures/IMG-04.png"
+    },
+    {
+      "case_id": "PDF-01",
+      "variant": "pdf",
+      "providers": [
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "invoice_id": {
+              "type": "string"
+            },
+            "customer": {
+              "type": "string"
+            },
+            "total_usd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "invoice_id",
+            "customer",
+            "total_usd"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "invoice_id": "INV-7301",
+          "customer": "Northwind Lab",
+          "total_usd": "128.40"
+        }
+      },
+      "expected_failure_code": null,
+      "fixture": "fixtures/PDF-01.pdf"
+    },
+    {
+      "case_id": "PDF-02",
+      "variant": "pdf",
+      "providers": [
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string"
+            },
+            "milestone": {
+              "type": "string"
+            },
+            "completion_percent": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "project",
+            "milestone",
+            "completion_percent"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "project": "Cedar",
+          "milestone": "Beta",
+          "completion_percent": 72
+        }
+      },
+      "expected_failure_code": null,
+      "fixture": "fixtures/PDF-02.pdf"
+    },
+    {
+      "case_id": "PDF-03",
+      "variant": "pdf",
+      "providers": [
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "policy_id": {
+              "type": "string"
+            },
+            "effective_date": {
+              "type": "string"
+            },
+            "limit_usd": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "policy_id",
+            "effective_date",
+            "limit_usd"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "policy_id": "POL-88",
+          "effective_date": "2026-11-01",
+          "limit_usd": 5000
+        }
+      },
+      "expected_failure_code": null,
+      "fixture": "fixtures/PDF-03.pdf"
+    },
+    {
+      "case_id": "PDF-04",
+      "variant": "pdf",
+      "providers": [
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "shipment_id": {
+              "type": "string"
+            },
+            "crates": {
+              "type": "integer"
+            },
+            "destination": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "shipment_id",
+            "crates",
+            "destination"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "shipment_id": "SHIP-204",
+          "crates": 6,
+          "destination": "Baltimore"
+        }
+      },
+      "expected_failure_code": null,
+      "fixture": "fixtures/PDF-04.pdf"
+    },
+    {
+      "case_id": "AUD-01",
+      "variant": "audio",
+      "providers": [
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "order_id": {
+              "type": "string"
+            },
+            "ship_date": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "order_id",
+            "ship_date"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "order_id": "SF-550",
+          "ship_date": "2026-10-12"
+        }
+      },
+      "expected_failure_code": null,
+      "fixture": "fixtures/AUD-01.wav"
+    },
+    {
+      "case_id": "AUD-02",
+      "variant": "audio",
+      "providers": [
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "red_score": {
+              "type": "integer"
+            },
+            "blue_score": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "red_score",
+            "blue_score"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "red_score": 17,
+          "blue_score": 23
+        }
+      },
+      "expected_failure_code": null,
+      "fixture": "fixtures/AUD-02.wav"
+    },
+    {
+      "case_id": "AUD-03",
+      "variant": "audio",
+      "providers": [
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "meeting": {
+              "type": "string"
+            },
+            "time": {
+              "type": "string"
+            },
+            "room": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "meeting",
+            "time",
+            "room"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "meeting": "Alpha",
+          "time": "2:30 PM",
+          "room": "Cedar"
+        }
+      },
+      "expected_failure_code": null,
+      "fixture": "fixtures/AUD-03.wav"
+    },
+    {
+      "case_id": "AUD-04",
+      "variant": "audio",
+      "providers": [
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "ticket_id": {
+              "type": "string"
+            },
+            "assignee": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "ticket_id",
+            "assignee"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "ticket_id": "TK-90",
+          "assignee": null
+        }
+      },
+      "expected_failure_code": null,
+      "fixture": "fixtures/AUD-04.wav"
+    },
+    {
+      "case_id": "VID-01",
+      "variant": "video",
+      "providers": [
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "launch_code": {
+              "type": "string"
+            },
+            "launch_date": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_code",
+            "launch_date"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "launch_code": "LANTERN-4",
+          "launch_date": "2026-12-03"
+        }
+      },
+      "expected_failure_code": null,
+      "fixture": "fixtures/VID-01.webm"
+    },
+    {
+      "case_id": "VID-02",
+      "variant": "video",
+      "providers": [
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "bolts": {
+              "type": "integer"
+            },
+            "gears": {
+              "type": "integer"
+            },
+            "springs": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "bolts",
+            "gears",
+            "springs"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "bolts": 14,
+          "gears": 9,
+          "springs": 22
+        }
+      },
+      "expected_failure_code": null,
+      "fixture": "fixtures/VID-02.webm"
+    },
+    {
+      "case_id": "VID-03",
+      "variant": "video",
+      "providers": [
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "steps": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10
+            }
+          },
+          "required": [
+            "steps"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "steps": [
+            "calibrate",
+            "lock",
+            "transmit"
+          ]
+        }
+      },
+      "expected_failure_code": null,
+      "fixture": "fixtures/VID-03.webm"
+    },
+    {
+      "case_id": "VID-04",
+      "variant": "video",
+      "providers": [
+        "gemini"
+      ],
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ],
+      "request": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "model": {
+              "type": "string"
+            },
+            "serial": {
+              "type": "string"
+            },
+            "warranty": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "model",
+            "serial",
+            "warranty"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "oracle": {
+        "expected": {
+          "model": "NOVA-2",
+          "serial": "SN-8841",
+          "warranty": null
+        }
+      },
+      "expected_failure_code": null,
+      "fixture": "fixtures/VID-04.webm"
+    }
+  ]
+}
