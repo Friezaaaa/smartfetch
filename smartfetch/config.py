@@ -1,7 +1,7 @@
 import os
 
 SERVICE_NAME = os.getenv('SERVICE_NAME', 'SmartFetch')
-SERVICE_VERSION = '1.11.0'
+SERVICE_VERSION = '1.11.1'
 HOST = os.getenv('HOST', '0.0.0.0')
 PORT = int(os.getenv('PORT', '8787'))
 
@@ -19,7 +19,6 @@ TOTAL_REQUEST_TIMEOUT_SECONDS = float(os.getenv('TOTAL_REQUEST_TIMEOUT_SECONDS',
 MAX_CONCURRENT_FETCHES = int(os.getenv('MAX_CONCURRENT_FETCHES', '4'))
 MAX_CONCURRENT_BROWSERS = int(os.getenv('MAX_CONCURRENT_BROWSERS', '1'))
 
-# Simple unauthenticated pre-payment protection. This is deliberately conservative
-# until x402 sits in front of /fetch.
+# Retained legacy configuration values are inert in emergency fail-closed mode.
 RATE_LIMIT_PER_MINUTE = int(os.getenv('RATE_LIMIT_PER_MINUTE', '30'))
 RATE_LIMIT_BURST = int(os.getenv('RATE_LIMIT_BURST', '10'))

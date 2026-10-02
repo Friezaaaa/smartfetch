@@ -987,8 +987,10 @@ def emergency_docs_html(urls: dict) -> str:
     return (
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<title>SmartFetch emergency availability</title></head><body>"
-        "<h1>SmartFetch</h1><p>Retrieval and browser rendering are temporarily unavailable. "
+        f"<h1>SmartFetch {SERVICE_VERSION}</h1><p>Retrieval and browser rendering are temporarily unavailable. "
         "Do not submit a payment for these operations.</p>"
+        "<p>Future successful retrieved results may identify external content with "
+        "<code>content_trust: untrusted_external</code>; no retrieval executes in this mode.</p>"
         f'<script id="smartfetch-availability" type="application/json">{metadata}</script>'
         "</body></html>"
     )
@@ -996,7 +998,7 @@ def emergency_docs_html(urls: dict) -> str:
 
 def emergency_llms_text(urls: dict) -> str:
     lines = [
-        "# SmartFetch emergency availability",
+        f"# SmartFetch {SERVICE_VERSION} emergency availability",
         "Retrieval and browser rendering are temporarily unavailable; no payment challenge is active.",
         "BEGIN SMARTFETCH AVAILABILITY",
         "mode: emergency_fail_closed",

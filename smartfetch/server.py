@@ -27,7 +27,6 @@ from .mcp_server import create_emergency_mcp
 from .request_bounds import BoundedRequestMiddleware
 
 
-_EMERGENCY_VERSION = "1.11.1"
 _UNHEALTHY_BODY = b'{"success":false,"error_code":"service_unhealthy","error":"Service temporarily unavailable"}'
 
 
@@ -60,7 +59,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         return {
             "ok": True,
             "service": SERVICE_NAME,
-            "version": _EMERGENCY_VERSION,
+            "version": SERVICE_VERSION,
             "retrieval_available": False,
             "browser_available": False,
             "mode": "emergency_fail_closed",
