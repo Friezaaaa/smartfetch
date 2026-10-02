@@ -9,12 +9,6 @@ from mcp.types import CallToolResult, TextContent
 from pydantic import Field
 from starlette.routing import Route
 
-from .bazaar import (
-    FETCH_DESCRIPTION,
-    MARKDOWN_DESCRIPTION,
-    RENDER_DESCRIPTION,
-    TEXT_DESCRIPTION,
-)
 from .config import HOST, MAX_REQUEST_BODY_BYTES
 from .mcp_logging import configure_mcp_sdk_logging
 
@@ -100,10 +94,10 @@ def create_emergency_mcp() -> SmartFetchMCP:
         return _unavailable(True)
 
     for name, description, handler in (
-        (MCP_TOOL, FETCH_DESCRIPTION, fetch_webpage),
-        ("webpage_to_markdown", MARKDOWN_DESCRIPTION, webpage_to_markdown),
-        ("extract_webpage_text", TEXT_DESCRIPTION, extract_webpage_text),
-        ("render_webpage", RENDER_DESCRIPTION, render_webpage),
+        (MCP_TOOL, "Temporarily unavailable in emergency fail-closed mode; webpage retrieval cannot execute.", fetch_webpage),
+        ("webpage_to_markdown", "Temporarily unavailable in emergency fail-closed mode; Markdown retrieval cannot execute.", webpage_to_markdown),
+        ("extract_webpage_text", "Temporarily unavailable in emergency fail-closed mode; text extraction cannot execute.", extract_webpage_text),
+        ("render_webpage", "Browser rendering is temporarily unavailable in emergency fail-closed mode.", render_webpage),
     ):
         mcp.tool(
             name=name,

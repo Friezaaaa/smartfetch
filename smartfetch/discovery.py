@@ -3,6 +3,7 @@
 from copy import deepcopy
 from html import escape
 from decimal import Decimal
+import json
 from xml.etree import ElementTree
 
 from x402.http.utils import encode_payment_required_header
@@ -898,3 +899,114 @@ def sitemap_xml(urls):
         encoding="unicode",
         xml_declaration=True,
     )
+
+
+def _emergency_identities():
+    """The stable identities are informational, never payable resources."""
+    return [
+        {"name": name, "availability": "unavailable", "payment_challenge_enabled": False}
+        for name in TOOL_NAMES
+    ]
+
+
+def emergency_meta(urls: dict) -> dict:
+    return {
+        "service": SERVICE_NAME,
+        "version": SERVICE_VERSION,
+        "mode": "emergency_fail_closed",
+        "retrieval_available": False,
+        "browser_available": False,
+        "fetch": {
+            "url": urls["fetch"],
+            "availability": "unavailable",
+            "payment_challenge_enabled": False,
+        },
+        "tools": _emergency_identities(),
+    }
+
+
+def emergency_x402_manifest(urls: dict) -> dict:
+    """An empty payment-resource collection with explicit unavailability."""
+    return {
+        "service": SERVICE_NAME,
+        "version": SERVICE_VERSION,
+        "mode": "emergency_fail_closed",
+        "retrieval_available": False,
+        "browser_available": False,
+        "resources": [],
+        "fetch": {
+            "url": urls["fetch"],
+            "availability": "unavailable",
+            "payment_challenge_enabled": False,
+        },
+        "tools": _emergency_identities(),
+    }
+
+
+def emergency_openapi_document(urls: dict) -> dict:
+    """Document only finite unavailable execution, never a 402 or success."""
+    unavailable = {"description": "Retrieval is temporarily unavailable"}
+    return {
+        "openapi": "3.1.0",
+        "info": {"title": SERVICE_NAME, "version": SERVICE_VERSION,
+                 "description": "Emergency fail-closed mode; retrieval and browser rendering are unavailable."},
+        "x-smartfetch-mode": "emergency_fail_closed",
+        "x-smartfetch-tools": _emergency_identities(),
+        "paths": {
+            "/fetch": {
+                "post": {
+                    "summary": "Unavailable retrieval identity",
+                    "x-smartfetch-availability": "unavailable",
+                    "payment_challenge_enabled": False,
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": FETCH_INPUT_SCHEMA}},
+                    },
+                    "responses": {
+                        "503": unavailable,
+                        "400": {"description": "Invalid request"},
+                        "415": {"description": "Unsupported media type"},
+                        "422": {"description": "Invalid retrieval arguments"},
+                    },
+                }
+            }
+        },
+    }
+
+
+def emergency_docs_html(urls: dict) -> str:
+    """Human documentation plus inert machine-readable availability JSON."""
+    status = {
+        "mode": "emergency_fail_closed",
+        "retrieval_available": False,
+        "browser_available": False,
+        "fetch": {"availability": "unavailable", "payment_challenge_enabled": False},
+        "tools": _emergency_identities(),
+    }
+    metadata = json.dumps(status, separators=(",", ":"), ensure_ascii=True)
+    return (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<title>SmartFetch emergency availability</title></head><body>"
+        "<h1>SmartFetch</h1><p>Retrieval and browser rendering are temporarily unavailable. "
+        "Do not submit a payment for these operations.</p>"
+        f'<script id="smartfetch-availability" type="application/json">{metadata}</script>'
+        "</body></html>"
+    )
+
+
+def emergency_llms_text(urls: dict) -> str:
+    lines = [
+        "# SmartFetch emergency availability",
+        "Retrieval and browser rendering are temporarily unavailable; no payment challenge is active.",
+        "BEGIN SMARTFETCH AVAILABILITY",
+        "mode: emergency_fail_closed",
+        "fetch.availability: unavailable",
+        "fetch.payment_challenge_enabled: false",
+    ]
+    for name in TOOL_NAMES:
+        lines.extend((
+            f"{name}.availability: unavailable",
+            f"{name}.payment_challenge_enabled: false",
+        ))
+    lines.extend(("availability: unavailable", "payment_challenge_enabled: false", "END SMARTFETCH AVAILABILITY"))
+    return "\n".join(lines) + "\n"

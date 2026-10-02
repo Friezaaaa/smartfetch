@@ -7,10 +7,21 @@ executor. Retrieval requests are intercepted by the outer ASGI boundary.
 import os
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from .access_logging import uvicorn_log_config
 from .config import HOST, PORT, SERVICE_NAME, SERVICE_VERSION
+from .discovery import (
+    emergency_docs_html,
+    emergency_llms_text,
+    emergency_meta,
+    emergency_openapi_document,
+    emergency_x402_manifest,
+    public_urls,
+    robots_text,
+    sitemap_xml,
+)
 from .emergency_dispatch import EmergencyDispatch
 from .mcp_server import create_emergency_mcp
 from .request_bounds import BoundedRequestMiddleware
@@ -32,6 +43,38 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
     @application.get("/health")
     async def health():
         return {"ok": True, "service": SERVICE_NAME, "version": SERVICE_VERSION}
+
+    @application.get("/", response_class=HTMLResponse)
+    async def root(request: Request):
+        return emergency_docs_html(public_urls(request))
+
+    @application.get("/meta")
+    async def meta(request: Request):
+        return emergency_meta(public_urls(request))
+
+    @application.get("/.well-known/x402")
+    async def x402_manifest(request: Request):
+        return emergency_x402_manifest(public_urls(request))
+
+    @application.get("/openapi.json")
+    async def openapi(request: Request):
+        return emergency_openapi_document(public_urls(request))
+
+    @application.get("/docs", response_class=HTMLResponse)
+    async def docs(request: Request):
+        return emergency_docs_html(public_urls(request))
+
+    @application.get("/llms.txt", response_class=PlainTextResponse)
+    async def llms(request: Request):
+        return emergency_llms_text(public_urls(request))
+
+    @application.get("/robots.txt", response_class=PlainTextResponse)
+    async def robots(request: Request):
+        return robots_text(public_urls(request))
+
+    @application.get("/sitemap.xml", response_class=PlainTextResponse)
+    async def sitemap(request: Request):
+        return sitemap_xml(public_urls(request))
 
     return BoundedRequestMiddleware(EmergencyDispatch(application))
 
