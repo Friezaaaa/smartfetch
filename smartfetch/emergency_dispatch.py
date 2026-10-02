@@ -1,7 +1,9 @@
 """Outer fail-closed ASGI dispatch, before payment or retrieval machinery."""
 
 import json
+import secrets
 
+from .activity import emit_unavailable_attempt
 from .emergency_request import EmergencyRequestError, FreeMCPMethod, classify_fetch, classify_mcp
 from .request_bounds import BoundedRequest
 
@@ -63,6 +65,13 @@ class EmergencyDispatch:
         self.app = app
 
     async def __call__(self, scope, receive, send):
+        if (
+            scope.get("type") == "http"
+            and scope.get("path") != "/health"
+            and getattr(self.app.state, "terminal_unhealthy", False)
+        ):
+            await _send_json(send, 503, _UNAVAILABLE["service_unhealthy"], unavailable=True)
+            return
         if scope.get("type") != "http" or scope.get("path") not in ("/fetch", "/mcp"):
             await self.app(scope, receive, send)
             return
@@ -92,6 +101,16 @@ class EmergencyDispatch:
                 await self.app(scope, receive, send)
                 return
             await _send_json(send, 200, _mcp_unavailable(call.jsonrpc_id, call.browser))
+            try:
+                emit_unavailable_attempt(
+                    request_id=secrets.token_hex(8),
+                    surface="mcp",
+                    tool=call.tool,
+                    code="browser_unavailable" if call.browser else "retrieval_unavailable",
+                    status=200,
+                )
+            except Exception:
+                pass
             return
         try:
             call = classify_fetch(bounded.body, bounded.headers)
@@ -100,3 +119,13 @@ class EmergencyDispatch:
             return
         code = "browser_unavailable" if call.browser else "retrieval_unavailable"
         await _send_json(send, 503, _UNAVAILABLE[code], unavailable=True)
+        try:
+            emit_unavailable_attempt(
+                request_id=secrets.token_hex(8),
+                surface="fetch",
+                tool=None,
+                code=code,
+                status=503,
+            )
+        except Exception:
+            pass

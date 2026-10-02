@@ -8,7 +8,7 @@ import os
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
 from .access_logging import uvicorn_log_config
 from .config import HOST, PORT, SERVICE_NAME, SERVICE_VERSION
@@ -27,6 +27,10 @@ from .mcp_server import create_emergency_mcp
 from .request_bounds import BoundedRequestMiddleware
 
 
+_EMERGENCY_VERSION = "1.11.1"
+_UNHEALTHY_BODY = b'{"success":false,"error_code":"service_unhealthy","error":"Service temporarily unavailable"}'
+
+
 def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
     """Retain caller compatibility without permitting an activation override."""
     mcp = create_emergency_mcp()
@@ -39,10 +43,28 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
     )
     application.router.routes.append(mcp.route)
     application.state.smartfetch_mcp = mcp
+    application.state.terminal_unhealthy = False
 
     @application.get("/health")
     async def health():
-        return {"ok": True, "service": SERVICE_NAME, "version": SERVICE_VERSION}
+        if application.state.terminal_unhealthy:
+            return Response(
+                content=_UNHEALTHY_BODY,
+                status_code=503,
+                headers={
+                    "content-type": "application/json; charset=utf-8",
+                    "retry-after": "3600",
+                    "cache-control": "no-store",
+                },
+            )
+        return {
+            "ok": True,
+            "service": SERVICE_NAME,
+            "version": _EMERGENCY_VERSION,
+            "retrieval_available": False,
+            "browser_available": False,
+            "mode": "emergency_fail_closed",
+        }
 
     @application.get("/", response_class=HTMLResponse)
     async def root(request: Request):
