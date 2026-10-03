@@ -176,135 +176,65 @@ class ActivityOutputTests(unittest.TestCase):
 
 
 class PaymentFailureActivityTests(unittest.TestCase):
-    def setUp(self):
-        patcher = patch(
-            'x402.http.HTTPFacilitatorClient.get_supported',
-            return_value=SUPPORTED,
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
     @staticmethod
-    def _payment(app):
-        requirement = app.state.smartfetch_mcp.accepts[0]
-        return requirement, {
-            'x402Version': 2,
-            'accepted': requirement.model_dump(
-                by_alias=True,
-                exclude_none=True,
-            ),
-            'payload': {'authorization': 'never-log-payment-secret'},
-        }
-
-    @staticmethod
-    def _events(captured):
-        return [json.loads(record.getMessage()) for record in captured.records]
+    def _call_and_events(client, payment=None):
+        output = io.StringIO()
+        previous_stream = activity._HANDLER.setStream(output)
+        try:
+            result = call_tool(client, payment)
+        finally:
+            activity._HANDLER.setStream(previous_stream)
+        return result, [json.loads(line) for line in output.getvalue().splitlines()]
 
     def test_invalid_mcp_payment_logs_safe_reason_and_never_fetches(self):
-        app = server.create_app(PAID_SETTINGS)
-        requirement, payment = self._payment(app)
-        resource_server = app.state.smartfetch_mcp.resource_server
-        resource_server.find_matching_requirements = Mock(
-            return_value=requirement,
-        )
-        resource_server.verify_payment = AsyncMock(return_value=VerifyResponse(
-            isValid=False,
-            invalidReason='facilitator leaked never-log-invalid-detail',
-        ))
-        resource_server.settle_payment = AsyncMock()
-
         with (
-            patch('smartfetch.server._run_fetch', new_callable=AsyncMock) as fetch,
-            TestClient(app) as client,
+            patch('x402.server.x402ResourceServer.verify_payment',
+                  side_effect=AssertionError('verification entered')) as verify,
+            patch('x402.server.x402ResourceServer.settle_payment',
+                  side_effect=AssertionError('settlement entered')) as settle,
+            TestClient(server.create_app(PAID_SETTINGS)) as client,
         ):
             initialize(client)
-            with self.assertLogs('smartfetch.activity', level='INFO') as captured:
-                result = call_tool(client, payment)
+            result, events = self._call_and_events(
+                client, {'authorization': 'never-log-payment-secret'})
 
         self.assertTrue(result['result']['isError'])
-        fetch.assert_not_awaited()
-        resource_server.settle_payment.assert_not_awaited()
-        events = self._events(captured)
-        self.assertTrue(events[0]['payment_present'])
-        challenged = events[-1]
-        self.assertEqual(challenged['event'], 'payment_challenged')
-        self.assertEqual(challenged['failure_reason'], 'verification_failed')
-        self.assertEqual(challenged['route'], '/mcp')
-        self.assertTrue(challenged['payment_present'])
-        self.assertEqual(challenged['payment_network'], BASE_SEPOLIA)
-        self.assertEqual(challenged['payment_asset'], 'USDC')
-        self.assertEqual(challenged['payment_amount'], '$0.005')
-        self.assertEqual(challenged['level'], 'INFO')
+        self.assertEqual(result['result']['structuredContent']['error_code'],
+                         'retrieval_unavailable')
+        verify.assert_not_called()
+        settle.assert_not_called()
+        self.assertEqual([item['event'] for item in events], ['unavailable_attempt'])
+        self.assertEqual(events[0]['error_code'], 'retrieval_unavailable')
         serialized = json.dumps(events)
-        self.assertNotIn('never-log-invalid-detail', serialized)
         self.assertNotIn('never-log-payment-secret', serialized)
+        self.assertNotIn('private-customer.example', serialized)
 
-    def test_unpaid_mcp_challenge_marks_payment_absent(self):
-        app = server.create_app(PAID_SETTINGS)
-        with (
-            patch('smartfetch.server._run_fetch', new_callable=AsyncMock) as fetch,
-            TestClient(app) as client,
-        ):
+    def test_unpaid_mcp_call_logs_unavailable_not_payment_challenge(self):
+        with TestClient(server.create_app(PAID_SETTINGS)) as client:
             initialize(client)
-            with self.assertLogs('smartfetch.activity', level='INFO') as captured:
-                result = call_tool(client)
+            result, events = self._call_and_events(client)
 
         self.assertTrue(result['result']['isError'])
-        fetch.assert_not_awaited()
-        challenged = self._events(captured)[-1]
-        self.assertEqual(challenged['failure_reason'], 'payment_required')
-        self.assertFalse(challenged['payment_present'])
+        self.assertEqual([item['event'] for item in events], ['unavailable_attempt'])
+        self.assertEqual(events[0]['error_code'], 'retrieval_unavailable')
+        self.assertNotIn('payment', json.dumps(events))
 
-    def test_failed_mcp_settlement_logs_error_after_one_fetch(self):
-        app = server.create_app(PAID_SETTINGS)
-        requirement, payment = self._payment(app)
-        resource_server = app.state.smartfetch_mcp.resource_server
-        resource_server.find_matching_requirements = Mock(
-            return_value=requirement,
-        )
-        resource_server.verify_payment = AsyncMock(return_value=VerifyResponse(
-            isValid=True,
-            payer=VALID_ADDRESS,
-        ))
-        resource_server.settle_payment = AsyncMock(return_value=SettleResponse(
-            success=False,
-            errorReason='never-log-settlement-detail',
-            transaction='',
-            network=BASE_SEPOLIA,
-        ))
-        fetch_result = {
-            'success': True,
-            'requested_url': 'https://private-customer.example/account',
-            'final_url': 'https://private-customer.example/account',
-            'status_code': 200,
-            'content': 'private content',
-            'markdown': 'private content',
-        }
-
+    def test_payment_canary_never_causes_settlement_or_success_activity(self):
         with (
-            patch(
-                'smartfetch.server._run_fetch',
-                new_callable=AsyncMock,
-                return_value=fetch_result,
-            ) as fetch,
-            TestClient(app) as client,
+            patch('x402.server.x402ResourceServer.settle_payment',
+                  side_effect=AssertionError('settlement entered')) as settle,
+            TestClient(server.create_app(PAID_SETTINGS)) as client,
         ):
             initialize(client)
-            with self.assertLogs('smartfetch.activity', level='INFO') as captured:
-                result = call_tool(client, payment)
+            result, events = self._call_and_events(
+                client, {'authorization': 'never-log-payment-secret'})
 
         self.assertTrue(result['result']['isError'])
-        fetch.assert_awaited_once()
-        resource_server.settle_payment.assert_awaited_once()
-        events = self._events(captured)
-        settled = events[-1]
-        self.assertEqual(settled['event'], 'payment_settled')
-        self.assertEqual(settled['outcome'], 'failed')
-        self.assertEqual(settled['failure_reason'], 'settlement_failed')
-        self.assertEqual(settled['level'], 'ERROR')
+        settle.assert_not_called()
+        self.assertEqual([item['event'] for item in events], ['unavailable_attempt'])
         serialized = json.dumps(events)
-        self.assertNotIn('never-log-settlement-detail', serialized)
         self.assertNotIn('never-log-payment-secret', serialized)
+        self.assertNotIn('private-customer.example', serialized)
 
 
 class DiscoveryCompatibilityTests(unittest.TestCase):
@@ -343,60 +273,23 @@ class DiscoveryCompatibilityTests(unittest.TestCase):
         for tool in discovery.TOOL_NAMES:
             self.assertNotIn(f'https://agent.example/{tool}', serialized)
 
-    def test_openapi_describes_active_x402_contract_and_existing_fetch_schema(self):
-        payment_requirement = Mock(
-            scheme='exact',
-            network=BASE_MAINNET,
-            asset=BASE_MAINNET_USDC,
-            amount='5000',
-        )
-        document = discovery.openapi_document(
-            self.urls,
-            self.settings,
-            payment_requirement,
-        )
+    def test_openapi_preserves_fetch_input_schema_without_active_x402(self):
+        document = discovery.emergency_openapi_document(self.urls)
 
-        self.assertEqual(document['info']['version'], '1.11.0')
+        self.assertEqual(document['info']['version'], '1.11.1')
         self.assertEqual(list(document['paths']), ['/fetch'])
         operation = document['paths']['/fetch']['post']
-        self.assertEqual(operation['x-x402'], {
-            'x402Version': 2,
-            'scheme': 'exact',
-            'network': BASE_MAINNET,
-            'asset': BASE_MAINNET_USDC,
-            'assetSymbol': 'USDC',
-            'price': '$0.005',
-            'amount': '5000',
-        })
+        self.assertEqual(operation['x-smartfetch-availability'], 'unavailable')
+        self.assertNotIn('x-x402', operation)
         body = operation['requestBody']
         self.assertTrue(body['required'])
         self.assertEqual(
             body['content']['application/json']['schema'],
             bazaar.FETCH_INPUT_SCHEMA,
         )
-        self.assertEqual(
-            body['content']['application/json']['example'],
-            bazaar.FETCH_INPUT_EXAMPLE,
-        )
-        success = operation['responses']['200']['content']['application/json']
-        self.assertEqual(success['schema'], bazaar.FETCH_OUTPUT_SCHEMA)
-        self.assertEqual(success['example'], bazaar.FETCH_OUTPUT_EXAMPLE)
-        payment_response = operation['responses']['402']
-        self.assertEqual(
-            payment_response['content']['application/json']['schema'],
-            {
-                'type': 'object',
-                'properties': {'request_id': {'type': 'string'}},
-                'required': ['request_id'],
-                'additionalProperties': False,
-            },
-        )
-        self.assertEqual(
-            payment_response['headers']['PAYMENT-REQUIRED']['schema'],
-            {'type': 'string'},
-        )
+        self.assertEqual(set(operation['responses']), {'503', '400', '415', '422'})
 
-    def test_openapi_asset_matches_generated_mainnet_payment_requirement(self):
+    def test_public_openapi_exposes_no_actionable_mainnet_payment_requirement(self):
         facilitator = Mock()
         facilitator.get_supported.return_value = SUPPORTED_MAINNET
         settings = X402Settings(
@@ -414,29 +307,17 @@ class DiscoveryCompatibilityTests(unittest.TestCase):
         ):
             app = server.create_app(settings)
 
-        generated = app.state.smartfetch_mcp.accepts[0]
-        self.assertEqual(generated.asset, BASE_MAINNET_USDC)
         with TestClient(app) as client:
             document = client.get('/openapi.json').json()
 
         operation = document['paths']['/fetch']['post']
-        self.assertEqual(operation['x-x402']['asset'], generated.asset)
-        self.assertEqual(operation['x-x402']['assetSymbol'], 'USDC')
-        encoded = operation['responses']['402']['headers'][
-            'PAYMENT-REQUIRED'
-        ]['example']
-        documented = decode_payment_required_header(encoded).accepts[0]
-        self.assertEqual(
-            documented.asset,
-            generated.asset,
-        )
-        self.assertNotEqual(
-            documented.asset,
-            'USDC',
-        )
+        self.assertEqual(operation['x-smartfetch-availability'], 'unavailable')
+        self.assertNotIn('x-x402', operation)
+        self.assertNotIn('402', operation['responses'])
+        facilitator.get_supported.assert_not_called()
 
-    def test_service_version_is_v1106(self):
-        self.assertEqual(SERVICE_VERSION, '1.11.0')
+    def test_service_version_is_emergency_v1111(self):
+        self.assertEqual(SERVICE_VERSION, '1.11.1')
 
 
 if __name__ == '__main__':

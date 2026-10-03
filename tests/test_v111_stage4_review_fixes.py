@@ -3,14 +3,12 @@ import json
 import unittest
 from unittest.mock import patch
 
-from starlette.requests import Request
-
 from smartfetch import activity
 
 
 class BoundedASGIBodyTests(unittest.IsolatedAsyncioTestCase):
     async def test_declared_oversize_is_rejected_without_reading(self):
-        from smartfetch.server import _read_bounded_request_body
+        from smartfetch.request_bounds import RequestBoundsError, validate_asgi_headers
 
         calls = 0
 
@@ -19,19 +17,13 @@ class BoundedASGIBodyTests(unittest.IsolatedAsyncioTestCase):
             calls += 1
             return {"type": "http.request", "body": b"x", "more_body": False}
 
-        request = Request(
-            {
-                "type": "http", "method": "POST", "path": "/",
-                "headers": [(b"content-length", b"65")],
-            },
-            receive,
-        )
-        with self.assertRaisesRegex(ValueError, "invalid_request"):
-            await _read_bounded_request_body(request, maximum=64)
+        with self.assertRaises(RequestBoundsError) as caught:
+            validate_asgi_headers({"headers": [(b"content-length", b"20001")]})
+        self.assertEqual(caught.exception.code, "invalid_body_size")
         self.assertEqual(calls, 0)
 
     async def test_false_content_length_does_not_control_accepted_body(self):
-        from smartfetch.server import _read_bounded_request_body
+        from smartfetch.request_bounds import read_bounded_asgi_body
 
         messages = iter((
             {"type": "http.request", "body": b"abc", "more_body": True},
@@ -41,23 +33,13 @@ class BoundedASGIBodyTests(unittest.IsolatedAsyncioTestCase):
         async def receive():
             return next(messages)
 
-        request = Request(
-            {
-                "type": "http", "method": "POST", "path": "/",
-                "headers": [(b"content-length", b"1")],
-            },
-            receive,
-        )
-        self.assertEqual(
-            await _read_bounded_request_body(request, maximum=6),
-            b"abcdef",
-        )
+        self.assertEqual(await read_bounded_asgi_body(receive), b"abcdef")
 
     async def test_understated_length_stops_at_cap_plus_one(self):
-        from smartfetch.server import _read_bounded_request_body
+        from smartfetch.request_bounds import RequestBoundsError, read_bounded_asgi_body
 
         consumed = 0
-        chunks = [b"a" * 4 for _ in range(20)]
+        chunks = [b"a" * 5000 for _ in range(20)]
 
         async def receive():
             nonlocal consumed
@@ -69,21 +51,13 @@ class BoundedASGIBodyTests(unittest.IsolatedAsyncioTestCase):
                 "more_body": consumed < len(chunks),
             }
 
-        request = Request(
-            {
-                "type": "http",
-                "method": "POST",
-                "path": "/search-and-extract/results",
-                "headers": [(b"content-length", b"1")],
-            },
-            receive,
-        )
-        with self.assertRaisesRegex(ValueError, "invalid_request"):
-            await _read_bounded_request_body(request, maximum=16)
+        with self.assertRaises(RequestBoundsError) as caught:
+            await read_bounded_asgi_body(receive)
+        self.assertEqual(caught.exception.code, "invalid_body_size")
         self.assertEqual(consumed, 5)
 
     async def test_missing_length_chunked_body_is_bounded_and_replayed(self):
-        from smartfetch.server import _read_bounded_request_body
+        from smartfetch.request_bounds import BoundedRequestMiddleware
 
         messages = iter((
             {"type": "http.request", "body": b"", "more_body": True},
@@ -94,16 +68,23 @@ class BoundedASGIBodyTests(unittest.IsolatedAsyncioTestCase):
         async def receive():
             return next(messages)
 
-        request = Request(
-            {"type": "http", "method": "POST", "path": "/", "headers": []},
-            receive,
-        )
-        body = await _read_bounded_request_body(request, maximum=64)
-        self.assertEqual(body, b'{"query":"valid"}')
-        self.assertEqual(await request.body(), body)
+        observed = []
+
+        async def downstream(scope, replay, send):
+            observed.append(scope["smartfetch.bounded_request"].body)
+            observed.append((await replay())["body"])
+
+        middleware = BoundedRequestMiddleware(downstream)
+
+        async def send(_message):
+            raise AssertionError("valid body was rejected")
+
+        await middleware({"type": "http", "method": "POST", "path": "/fetch",
+                          "headers": []}, receive, send)
+        self.assertEqual(observed, [b'{"query":"valid"}'] * 2)
 
     async def test_disconnect_and_malformed_messages_fail_finitely(self):
-        from smartfetch.server import _read_bounded_request_body
+        from smartfetch.request_bounds import RequestBoundsError, read_bounded_asgi_body
 
         for message in (
             {"type": "http.disconnect"},
@@ -114,13 +95,10 @@ class BoundedASGIBodyTests(unittest.IsolatedAsyncioTestCase):
             async def receive(current=message):
                 return current
 
-            request = Request(
-                {"type": "http", "method": "POST", "path": "/", "headers": []},
-                receive,
-            )
             with self.subTest(message=message["type"]):
-                with self.assertRaisesRegex(ValueError, "invalid_request"):
-                    await _read_bounded_request_body(request, maximum=64)
+                with self.assertRaises(RequestBoundsError) as caught:
+                    await read_bounded_asgi_body(receive)
+                self.assertEqual(caught.exception.code, "invalid_request")
 
 
 class VariantDeadlineTests(unittest.IsolatedAsyncioTestCase):

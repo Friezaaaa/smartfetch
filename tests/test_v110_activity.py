@@ -1,3 +1,4 @@
+import io
 import json
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -10,7 +11,7 @@ from x402.schemas import (
     VerifyResponse,
 )
 
-from smartfetch import server
+from smartfetch import activity, server
 from smartfetch.payments import BASE_SEPOLIA, X402Settings
 
 
@@ -179,8 +180,8 @@ class ActivityEmitterTests(unittest.TestCase):
 
 
 class MCPActivityIntegrationTests(unittest.TestCase):
-    def _events(self, captured):
-        return [json.loads(record.getMessage()) for record in captured.records]
+    def _events(self, stream):
+        return [json.loads(line) for line in stream.getvalue().splitlines()]
 
     def setUp(self):
         patcher = patch(
@@ -191,224 +192,103 @@ class MCPActivityIntegrationTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_real_mcp_requests_emit_discovery_attempt_and_execution_events(self):
-        fetch_result = {
-            'success': True,
-            'requested_url': 'https://customer-secret.example/account',
-            'final_url': 'https://customer-secret.example/account',
-            'status_code': 200,
-            'content': 'private customer content',
-            'markdown': 'private customer content',
-        }
+        stream = io.StringIO()
         with (
-            patch(
-                'smartfetch.server._run_fetch',
-                new_callable=AsyncMock,
-                return_value=fetch_result,
-            ),
+            patch.object(activity._HANDLER, 'stream', stream),
             TestClient(server.create_app(FREE_SETTINGS)) as client,
-            self.assertLogs('smartfetch.activity', level='INFO') as captured,
         ):
-            initialize(client)
-            rpc(client, 'tools/list', {}, request_id=2)
-            call_tool(client)
+            self.assertIn('result', initialize(client))
+            self.assertEqual(len(rpc(client, 'tools/list', {}, request_id=2)['result']['tools']), 4)
+            result = call_tool(client)
 
-        events = self._events(captured)
-        self.assertEqual([event['event'] for event in events], [
-            'mcp_initialized',
-            'tools_listed',
-            'tool_call_attempted',
-            'tool_started',
-            'tool_completed',
-        ])
-        call_events = events[2:]
-        self.assertEqual(
-            {event['request_id'] for event in call_events},
-            {call_events[0]['request_id']},
-        )
-        self.assertTrue(all(
-            event['transport'] == 'mcp' for event in events
-        ))
-        self.assertTrue(all(
-            event.get('tool') == 'fetch_webpage' for event in call_events
-        ))
-        serialized = json.dumps(events)
+        self.assertTrue(result['result']['isError'])
+        events = self._events(stream)
+        self.assertEqual([event['event'] for event in events], ['unavailable_attempt'])
+        self.assertEqual(events[0]['surface'], 'mcp')
+        self.assertEqual(events[0]['tool'], 'fetch_webpage')
+        self.assertEqual(events[0]['error_code'], 'retrieval_unavailable')
+        serialized = stream.getvalue()
         self.assertNotIn('customer-secret.example', serialized)
         self.assertNotIn('private customer content', serialized)
 
     def test_unpaid_mcp_call_logs_challenge_without_starting_tool(self):
         app = server.create_app(PAID_SETTINGS)
+        stream = io.StringIO()
         with (
-            patch(
-                'smartfetch.server._run_fetch',
-                new_callable=AsyncMock,
-            ) as fetch,
+            patch.object(activity._HANDLER, 'stream', stream),
             TestClient(app) as client,
         ):
             initialize(client)
-            with self.assertLogs(
-                'smartfetch.activity',
-                level='INFO',
-            ) as captured:
-                response = call_tool(client)
+            response = call_tool(client)
 
-        fetch.assert_not_awaited()
         self.assertTrue(response['result']['isError'])
-        events = self._events(captured)
-        self.assertEqual([event['event'] for event in events], [
-            'tool_call_attempted',
-            'payment_challenged',
-        ])
-        self.assertTrue(all(
-            event['tool'] == 'fetch_webpage' for event in events
-        ))
+        events = self._events(stream)
+        self.assertEqual([event['event'] for event in events], ['unavailable_attempt'])
+        self.assertEqual(events[0]['tool'], 'fetch_webpage')
+        self.assertNotIn('payment', stream.getvalue())
 
     def test_unknown_mcp_tool_name_cannot_smuggle_request_data_into_logs(self):
+        stream = io.StringIO()
         with TestClient(server.create_app(FREE_SETTINGS)) as client:
             initialize(client)
-            with self.assertLogs(
-                'smartfetch.activity',
-                level='INFO',
-            ) as captured:
-                rpc(client, 'tools/call', {
+            with patch.object(activity._HANDLER, 'stream', stream):
+                response = rpc(client, 'tools/call', {
                     'name': 'https://customer-secret.example/account',
                     'arguments': {},
                 })
-
-        events = self._events(captured)
-        attempted = next(
-            event for event in events
-            if event['event'] == 'tool_call_attempted'
-        )
-        self.assertNotIn('tool', attempted)
-        self.assertNotIn('customer-secret.example', json.dumps(events))
+        self.assertEqual(response['error']['message'], 'Unknown tool')
+        self.assertEqual(self._events(stream), [])
+        self.assertNotIn('customer-secret.example', stream.getvalue())
 
     def test_paid_mcp_call_logs_verified_execution_and_settlement_once(self):
         app = server.create_app(PAID_SETTINGS)
-        payment_requirement = app.state.smartfetch_mcp.accepts[0]
-        resource_server = app.state.smartfetch_mcp.resource_server
-        resource_server.find_matching_requirements = Mock(
-            return_value=payment_requirement,
-        )
-        resource_server.verify_payment = AsyncMock(return_value=VerifyResponse(
-            isValid=True,
-            payer=VALID_ADDRESS,
-        ))
-        resource_server.settle_payment = AsyncMock(return_value=SettleResponse(
-            success=True,
-            payer=VALID_ADDRESS,
-            transaction='0xabc123',
-            network=BASE_SEPOLIA,
-        ))
-        payment = {
-            'x402Version': 2,
-            'accepted': payment_requirement.model_dump(
-                by_alias=True,
-                exclude_none=True,
-            ),
-            'payload': {'secretAuthorization': 'never-log-this-payment'},
-        }
-        fetch_result = {
-            'success': True,
-            'requested_url': 'https://customer-secret.example/account',
-            'final_url': 'https://customer-secret.example/account',
-            'status_code': 200,
-            'content': 'private customer content',
-            'markdown': 'private customer content',
-        }
-
+        stream = io.StringIO()
         with (
-            patch(
-                'smartfetch.server._run_fetch',
-                new_callable=AsyncMock,
-                return_value=fetch_result,
-            ),
+            patch('x402.mcp.create_payment_wrapper', side_effect=AssertionError('paid wrapper entered')) as wrapper,
+            patch.object(activity._HANDLER, 'stream', stream),
             TestClient(app) as client,
         ):
             initialize(client)
-            with self.assertLogs(
-                'smartfetch.activity',
-                level='INFO',
-            ) as captured:
-                response = call_tool(client, payment=payment)
+            response = call_tool(client, payment={'secretAuthorization': 'never-log-this-payment'})
 
-        self.assertFalse(response['result']['isError'])
-        events = self._events(captured)
-        self.assertEqual([event['event'] for event in events], [
-            'tool_call_attempted',
-            'payment_verified',
-            'tool_started',
-            'tool_completed',
-            'payment_settled',
-        ])
-        self.assertEqual(
-            {event['request_id'] for event in events},
-            {events[0]['request_id']},
-        )
-        serialized = json.dumps(events)
+        self.assertTrue(response['result']['isError'])
+        wrapper.assert_not_called()
+        events = self._events(stream)
+        self.assertEqual([event['event'] for event in events], ['unavailable_attempt'])
+        serialized = stream.getvalue()
         for forbidden in (
             'customer-secret.example',
             'private customer content',
             'never-log-this-payment',
             VALID_ADDRESS,
             '0xabc123',
+            'payment_verified',
+            'payment_settled',
         ):
             self.assertNotIn(forbidden, serialized)
 
     def test_paid_mcp_tool_failure_is_logged_without_exception_data(self):
         app = server.create_app(PAID_SETTINGS)
-        payment_requirement = app.state.smartfetch_mcp.accepts[0]
-        resource_server = app.state.smartfetch_mcp.resource_server
-        resource_server.find_matching_requirements = Mock(
-            return_value=payment_requirement,
-        )
-        resource_server.verify_payment = AsyncMock(return_value=VerifyResponse(
-            isValid=True,
-            payer=VALID_ADDRESS,
-        ))
-        resource_server.settle_payment = AsyncMock()
-        payment = {
-            'x402Version': 2,
-            'accepted': payment_requirement.model_dump(
-                by_alias=True,
-                exclude_none=True,
-            ),
-            'payload': {'secretAuthorization': 'never-log-this-payment'},
-        }
-
+        stream = io.StringIO()
         with (
-            patch(
-                'smartfetch.server._run_fetch',
-                new_callable=AsyncMock,
-                side_effect=RuntimeError(
-                    'failure at https://customer-secret.example/account'
-                ),
-            ),
+            patch.object(activity._HANDLER, 'stream', stream),
             TestClient(app) as client,
         ):
             initialize(client)
-            with self.assertLogs(
-                'smartfetch.activity',
-                level='INFO',
-            ) as captured:
-                response = call_tool(client, payment=payment)
+            response = call_tool(client, payment={'secretAuthorization': 'never-log-this-payment'})
 
         self.assertTrue(response['result']['isError'])
-        resource_server.settle_payment.assert_not_awaited()
-        events = self._events(captured)
-        self.assertEqual([event['event'] for event in events], [
-            'tool_call_attempted',
-            'payment_verified',
-            'tool_started',
-            'tool_failed',
-        ])
-        serialized = json.dumps(events)
+        events = self._events(stream)
+        self.assertEqual([event['event'] for event in events], ['unavailable_attempt'])
+        serialized = stream.getvalue() + json.dumps(response)
         self.assertNotIn('customer-secret.example', serialized)
         self.assertNotIn('never-log-this-payment', serialized)
+        self.assertNotIn('tool_failed', serialized)
 
 
 class HTTPActivityIntegrationTests(unittest.TestCase):
-    def _events(self, captured):
-        return [json.loads(record.getMessage()) for record in captured.records]
+    def _events(self, stream):
+        return [json.loads(line) for line in stream.getvalue().splitlines()]
 
     def setUp(self):
         patcher = patch(
@@ -437,122 +317,73 @@ class HTTPActivityIntegrationTests(unittest.TestCase):
 
     def test_unpaid_http_fetch_logs_challenge_without_execution(self):
         app = server.create_app(PAID_SETTINGS)
-
+        stream = io.StringIO()
         with (
-            patch(
-                'smartfetch.server._run_fetch',
-                new_callable=AsyncMock,
-            ) as fetch,
+            patch.object(activity._HANDLER, 'stream', stream),
             TestClient(app) as client,
-            self.assertLogs('smartfetch.activity', level='INFO') as captured,
         ):
             response = client.post('/fetch', json={
                 'url': 'https://customer-secret.example/account',
             })
 
-        fetch.assert_not_awaited()
-        self.assertEqual(response.status_code, 402)
-        events = self._events(captured)
-        self.assertEqual([event['event'] for event in events], [
-            'tool_call_attempted',
-            'payment_challenged',
-        ])
-        self.assertTrue(all(
-            event['transport'] == 'http' for event in events
-        ))
-        self.assertTrue(all(
-            event['tool'] == 'fetch_webpage' for event in events
-        ))
-        self.assertNotIn('customer-secret.example', json.dumps(events))
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()['error_code'], 'retrieval_unavailable')
+        events = self._events(stream)
+        self.assertEqual([event['event'] for event in events], ['unavailable_attempt'])
+        self.assertEqual(events[0]['surface'], 'fetch')
+        self.assertEqual(events[0]['request_id'], response.headers['x-request-id'])
+        self.assertNotIn('customer-secret.example', stream.getvalue())
+        self.assertNotIn('payment', stream.getvalue())
 
     def test_verified_http_fetch_logs_execution_and_settlement(self):
-        fetch_result = {
-            'success': True,
-            'requested_url': 'https://customer-secret.example/account',
-            'final_url': 'https://customer-secret.example/account',
-            'status_code': 200,
-            'content': 'private customer content',
-            'markdown': 'private customer content',
-        }
-        with patch(
-            'x402.http.middleware.fastapi.payment_middleware',
-            side_effect=self._verified_payment_middleware,
-        ):
-            app = server.create_app(PAID_SETTINGS)
-
+        app = server.create_app(PAID_SETTINGS)
+        stream = io.StringIO()
         with (
-            patch(
-                'smartfetch.server._run_fetch',
-                new_callable=AsyncMock,
-                return_value=fetch_result,
-            ) as fetch,
+            patch('x402.http.middleware.fastapi.payment_middleware', side_effect=AssertionError('x402 entered')) as wrapper,
+            patch.object(activity._HANDLER, 'stream', stream),
             TestClient(app) as client,
-            self.assertLogs('smartfetch.activity', level='INFO') as captured,
         ):
             response = client.post('/fetch', json={
                 'url': 'https://customer-secret.example/account',
-            })
+            }, headers={'PAYMENT-SIGNATURE': 'never-log-this-payment'})
 
-        fetch.assert_awaited_once()
-        self.assertEqual(response.status_code, 200)
-        events = self._events(captured)
-        self.assertEqual([event['event'] for event in events], [
-            'tool_call_attempted',
-            'payment_verified',
-            'tool_started',
-            'tool_completed',
-            'payment_settled',
-        ])
-        self.assertEqual(
-            {event['request_id'] for event in events},
-            {events[0]['request_id']},
-        )
-        serialized = json.dumps(events)
+        wrapper.assert_not_called()
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn('payment-response', response.headers)
+        events = self._events(stream)
+        self.assertEqual([event['event'] for event in events], ['unavailable_attempt'])
+        serialized = stream.getvalue() + response.text
         for forbidden in (
             'customer-secret.example',
             'private customer content',
             'never-log-this-payment',
             'never-log-this-settlement',
+            'payment_verified',
+            'payment_settled',
+            'tool_started',
         ):
             self.assertNotIn(forbidden, serialized)
 
     def test_failed_http_fetch_logs_failure_without_settlement_or_error_text(self):
-        with patch(
-            'x402.http.middleware.fastapi.payment_middleware',
-            side_effect=self._verified_payment_middleware,
-        ):
-            app = server.create_app(PAID_SETTINGS)
-
+        app = server.create_app(PAID_SETTINGS)
+        stream = io.StringIO()
         with (
-            patch(
-                'smartfetch.server._run_fetch',
-                new_callable=AsyncMock,
-                side_effect=RuntimeError(
-                    'failure at https://customer-secret.example/account'
-                ),
-            ),
+            patch.object(activity._HANDLER, 'stream', stream),
             TestClient(app) as client,
-            self.assertLogs('smartfetch.activity', level='INFO') as captured,
         ):
             response = client.post('/fetch', json={
                 'url': 'https://customer-secret.example/account',
-            })
+            }, headers={'PAYMENT-SIGNATURE': 'never-log-this-payment'})
 
-        self.assertEqual(response.status_code, 502)
-        events = self._events(captured)
-        self.assertEqual([event['event'] for event in events], [
-            'tool_call_attempted',
-            'payment_verified',
-            'tool_started',
-            'tool_failed',
-        ])
-        self.assertEqual(
-            events[-1]['target_host'],
-            'customer-secret.example',
-        )
-        serialized = json.dumps(events)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()['error_code'], 'retrieval_unavailable')
+        events = self._events(stream)
+        self.assertEqual([event['event'] for event in events], ['unavailable_attempt'])
+        serialized = stream.getvalue() + response.text
         self.assertNotIn('/account', serialized)
         self.assertNotIn('never-log-this-payment', serialized)
+        self.assertNotIn('tool_failed', serialized)
+        self.assertNotIn('payment_settled', serialized)
 
 
 if __name__ == '__main__':

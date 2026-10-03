@@ -134,10 +134,9 @@ class V19MCPToolContractTests(unittest.TestCase):
             'SmartFetch',
         )
         self.assertEqual([tool['name'] for tool in tools], TOOL_NAMES)
-        self.assertEqual(
-            {tool['name']: tool['description'] for tool in tools},
-            TOOL_DESCRIPTIONS,
-        )
+        self.assertTrue(all('unavailable' in tool['description'].lower() for tool in tools))
+        self.assertTrue(all(tool['_meta']['availability'] == 'unavailable' for tool in tools))
+        self.assertTrue(all(tool['_meta']['payment_challenge_enabled'] is False for tool in tools))
         by_name = {tool['name']: tool for tool in tools}
         for name in TOOL_NAMES:
             schema = by_name[name]['inputSchema']
@@ -155,58 +154,17 @@ class V19MCPToolContractTests(unittest.TestCase):
                 self.assertEqual(force_browser['type'], 'boolean')
 
     def test_each_tool_reuses_one_internal_fetch_with_expected_projection(self):
-        with (
-            patch(
-                'smartfetch.server._run_fetch',
-                new_callable=AsyncMock,
-                return_value=FULL_RESULT,
-            ) as fetch,
-            TestClient(server.create_app(FREE_SETTINGS)) as client,
-        ):
+        with TestClient(server.create_app(FREE_SETTINGS)) as client:
             initialize(client)
             results = {
-                name: json.loads(
-                    call_tool(client, name, request_id=index)['result'][
-                        'content'
-                    ][0]['text']
-                )
+                name: call_tool(client, name, request_id=index)['result']
                 for index, name in enumerate(TOOL_NAMES, start=3)
             }
-
-        self.assertEqual(fetch.await_count, 4)
-        self.assertEqual(fetch.await_args_list[0].args, (
-            'https://example.com/', False, 20000,
-        ))
-        self.assertEqual(fetch.await_args_list[1].args, (
-            'https://example.com/', False, 20000,
-        ))
-        self.assertEqual(fetch.await_args_list[2].args, (
-            'https://example.com/', False, 20000,
-        ))
-        self.assertEqual(fetch.await_args_list[3].args, (
-            'https://example.com/', True, 20000,
-        ))
-
-        self.assertEqual(results['fetch_webpage']['content'], 'clean text')
-        self.assertEqual(
-            results['fetch_webpage']['markdown'],
-            '# clean markdown',
-        )
-        self.assertEqual(
-            results['webpage_to_markdown']['markdown'],
-            '# clean markdown',
-        )
-        self.assertNotIn('content', results['webpage_to_markdown'])
-        self.assertEqual(
-            results['extract_webpage_text']['content'],
-            'clean text',
-        )
-        self.assertNotIn('markdown', results['extract_webpage_text'])
-        self.assertEqual(results['render_webpage']['content'], 'clean text')
-        self.assertEqual(
-            results['render_webpage']['markdown'],
-            '# clean markdown',
-        )
+        for name, result in results.items():
+            self.assertTrue(result['isError'])
+            expected = 'browser_unavailable' if name == 'render_webpage' else 'retrieval_unavailable'
+            self.assertEqual(result['structuredContent']['error_code'], expected)
+            self.assertNotIn('https://example.com/', json.dumps(result))
 
 
 class V19BazaarBuilderTests(unittest.TestCase):
@@ -297,67 +255,30 @@ class V19MCPPaymentDiscoveryTests(unittest.TestCase):
     def test_all_four_wrappers_use_shared_payment_and_unique_bazaar_resources(
         self,
     ):
-        from x402.mcp import create_payment_wrapper as real_wrapper
-
         with patch(
             'x402.mcp.create_payment_wrapper',
-            wraps=real_wrapper,
+            side_effect=AssertionError('paid wrapper entered'),
         ) as wrapper:
             app = server.create_app(PAID_SETTINGS)
-
-        self.assertEqual(wrapper.call_count, 4)
-        calls = wrapper.call_args_list
-        self.assertTrue(all(
-            call.args[0] is app.state.smartfetch_mcp.resource_server
-            for call in calls
-        ))
-        accepts = calls[0].kwargs['accepts']
-        self.assertTrue(all(call.kwargs['accepts'] is accepts for call in calls))
-        self.assertEqual(
-            [str(call.kwargs['resource'].url) for call in calls],
-            [f'mcp://tool/{name}' for name in TOOL_NAMES],
-        )
-        for name, call in zip(TOOL_NAMES, calls):
-            declaration = call.kwargs['extensions']['bazaar']
-            self.assertTrue(validate_discovery_extension_spec(
-                declaration,
-            ).valid)
-            info = declaration['info']['input']
-            self.assertEqual(info['type'], 'mcp')
-            self.assertEqual(info['toolName'], name)
-            self.assertEqual(info['description'], TOOL_DESCRIPTIONS[name])
-            self.assertEqual(info['transport'], 'streamable-http')
+        wrapper.assert_not_called()
+        self.assertIsNone(app.app.app.state.smartfetch_mcp.resource_server)
+        self.assertEqual(app.app.app.state.smartfetch_mcp.accepts, [])
 
     def test_every_unpaid_tool_challenges_before_retrieval(self):
         app = server.create_app(PAID_SETTINGS)
-
-        with (
-            patch('smartfetch.server._run_fetch', new_callable=AsyncMock) as fetch,
-            TestClient(app) as client,
-        ):
+        with TestClient(app) as client:
             initialize(client)
             challenges = {
                 name: call_tool(client, name, request_id=index)['result']
                 for index, name in enumerate(TOOL_NAMES, start=3)
             }
-
-        fetch.assert_not_awaited()
         for name, result in challenges.items():
             self.assertTrue(result['isError'])
             challenge = result['structuredContent']
-            self.assertEqual(challenge['error'], 'Payment Required')
-            self.assertEqual(
-                challenge['resource']['url'],
-                f'mcp://tool/{name}',
-            )
-            accepted = challenge['accepts'][0]
-            self.assertEqual(accepted['scheme'], 'exact')
-            self.assertEqual(accepted['amount'], '5000')
-            self.assertEqual(accepted['network'], BASE_SEPOLIA)
-            self.assertEqual(accepted['payTo'], VALID_ADDRESS)
-            info = challenge['extensions']['bazaar']['info']['input']
-            self.assertEqual(info['type'], 'mcp')
-            self.assertEqual(info['toolName'], name)
+            expected = 'browser_unavailable' if name == 'render_webpage' else 'retrieval_unavailable'
+            self.assertEqual(challenge['error_code'], expected)
+            self.assertNotIn('accepts', json.dumps(challenge))
+            self.assertNotIn('payment', json.dumps(challenge).lower())
 
     def test_existing_http_bazaar_resource_remains_distinct(self):
         app = server.create_app(PAID_SETTINGS)
@@ -367,23 +288,10 @@ class V19MCPPaymentDiscoveryTests(unittest.TestCase):
                 'url': 'https://example.com/',
             })
 
-        self.assertEqual(response.status_code, 402)
-        required = decode_payment_required_header(
-            response.headers['payment-required']
-        )
-        info = (required.extensions or {})['bazaar']['info']['input']
-        self.assertEqual(info['type'], 'http')
-        self.assertEqual(info['method'], 'POST')
-        self.assertEqual(str(required.resource.url), 'https://agent.example/fetch')
-        self.assertNotIn(
-            str(required.resource.url),
-            [f'mcp://tool/{name}' for name in TOOL_NAMES],
-        )
-        accepted = required.accepts[0]
-        self.assertEqual(accepted.scheme, 'exact')
-        self.assertEqual(accepted.amount, '5000')
-        self.assertEqual(accepted.network, BASE_SEPOLIA)
-        self.assertEqual(accepted.pay_to, VALID_ADDRESS)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()['error_code'], 'retrieval_unavailable')
+        self.assertNotIn('payment-required', response.headers)
+        self.assertNotIn('payment-response', response.headers)
 
 
 class V19DiscoveryDocumentTests(unittest.TestCase):
@@ -422,11 +330,11 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
         })
 
     def test_openapi_is_valid_v31_and_describes_only_post_fetch(self):
-        document = discovery.openapi_document(self.urls, PAID_SETTINGS)
+        document = discovery.emergency_openapi_document(self.urls)
 
         OpenAPI.model_validate(document)
         self.assertEqual(document['openapi'], '3.1.0')
-        self.assertEqual(document['info']['version'], '1.11.0')
+        self.assertEqual(document['info']['version'], '1.11.1')
         self.assertEqual(document['servers'], [{
             'url': 'https://agent.example:9443',
         }])
@@ -436,15 +344,11 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
             operation['requestBody']['content']['application/json']['schema'],
             bazaar.FETCH_INPUT_SCHEMA,
         )
-        self.assertEqual(
-            operation['responses']['200']['content'][
-                'application/json'
-            ]['example'],
-            bazaar.FETCH_OUTPUT_EXAMPLE,
-        )
+        self.assertEqual(operation['x-smartfetch-availability'], 'unavailable')
+        self.assertFalse(operation['payment_challenge_enabled'])
         self.assertEqual(
             set(operation['responses']),
-            {'200', '400', '402', '429', '502', '503', '504'},
+            {'400', '415', '422', '503'},
         )
         self.assertEqual(
             document['externalDocs']['url'],
@@ -637,11 +541,13 @@ class V19DiscoveryRouteTests(unittest.TestCase):
             )
         self.assertIn('result', initialize_response)
         self.assertEqual([tool['name'] for tool in tools], TOOL_NAMES)
-        self.assertEqual(paid_http.status_code, 402)
+        self.assertEqual(paid_http.status_code, 503)
+        self.assertEqual(paid_http.json()['error_code'], 'retrieval_unavailable')
+        self.assertNotIn('payment-required', paid_http.headers)
 
         meta = responses['/meta'].json()
-        self.assertEqual(meta['mcp']['tool'], 'fetch_webpage')
-        self.assertEqual(meta['mcp']['tools'], TOOL_NAMES)
+        self.assertFalse(meta['retrieval_available'])
+        self.assertEqual([tool['name'] for tool in meta['tools']], TOOL_NAMES)
         self.assertEqual(meta['mcp']['url'], 'https://agent.example/mcp')
         self.assertEqual(meta['discovery'], {
             'x402': 'https://agent.example/.well-known/x402',
@@ -684,7 +590,7 @@ class V19DiscoveryRouteTests(unittest.TestCase):
         base = 'https://test-host.example'
         self.assertEqual(meta['mcp']['url'], f'{base}/mcp')
         self.assertEqual(x402['homepage'], base)
-        self.assertEqual(x402['resources'], [f'{base}/fetch'])
+        self.assertEqual(x402['resources'], [])
         self.assertEqual(x402['endpoints']['mcp']['url'], f'{base}/mcp')
         self.assertTrue(all(
             url.startswith(f'{base}/')
@@ -711,10 +617,10 @@ class V19RegistryManifestTests(unittest.TestCase):
             'name': 'io.github.Friezaaaa/smartfetch',
             'title': 'SmartFetch',
             'description': (
-                'Paid public-web search, cited answers, and structured '
-                'extraction for webpages and multimodal media.'
+                'Emergency fail-closed service: retrieval and browser rendering '
+                'are temporarily unavailable; no payment challenge is active.'
             ),
-            'version': '1.11.0',
+            'version': '1.11.1',
             'repository': {
                 'url': 'https://github.com/Friezaaaa/smartfetch',
                 'source': 'github',

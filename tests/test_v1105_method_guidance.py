@@ -1,8 +1,10 @@
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
+import socket
 
 from fastapi.testclient import TestClient
-from x402.schemas import SupportedKind, SupportedResponse
+import x402.http.middleware.fastapi as official_http
+import x402.server as official_server
 
 from smartfetch import server
 from smartfetch.mcp_server import MCP_TOOLS
@@ -33,7 +35,12 @@ class FetchMethodGuidanceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 405)
         self.assertEqual(response.headers['allow'], 'POST')
         self.assertEqual(response.headers['content-type'], 'application/json')
-        self.assertEqual(response.json(), EXPECTED_GUIDANCE)
+        guidance = response.json()
+        for key, value in EXPECTED_GUIDANCE.items():
+            self.assertEqual(guidance[key], value)
+        self.assertIs(guidance['retrieval_available'], False)
+        self.assertEqual(guidance['mode'], 'emergency_fail_closed')
+        self.assertEqual(response.headers['x-smartfetch-availability'], 'unavailable')
 
     def test_head_fetch_returns_free_empty_guidance_response(self):
         with TestClient(server.create_app(FREE_SETTINGS)) as client:
@@ -41,6 +48,7 @@ class FetchMethodGuidanceTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 405)
         self.assertEqual(response.headers['allow'], 'POST')
+        self.assertEqual(response.headers['x-smartfetch-availability'], 'unavailable')
         self.assertEqual(response.content, b'')
 
     def test_openapi_still_exposes_only_post_fetch(self):
@@ -50,22 +58,14 @@ class FetchMethodGuidanceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(set(response.json()['paths']['/fetch']), {'post'})
 
-    @patch('x402.http.HTTPFacilitatorClient.verify', new_callable=AsyncMock)
-    @patch('x402.http.HTTPFacilitatorClient.get_supported')
-    @patch('smartfetch.server.smart_fetch')
-    def test_paid_mode_guidance_is_free_and_post_remains_challenged(
-        self,
-        smart_fetch,
-        get_supported,
-        verify,
-    ):
-        get_supported.return_value = SupportedResponse(kinds=[SupportedKind(
-            x402Version=2,
-            scheme='exact',
-            network='eip155:84532',
-        )])
-
-        with TestClient(server.create_app(PAID_SETTINGS)) as client:
+    def test_configured_payment_cannot_challenge_guidance_or_retrieval(self):
+        with (
+            patch.object(official_http, 'payment_middleware', side_effect=AssertionError('payment wrapper entered')),
+            patch.object(official_server.x402ResourceServer, 'verify_payment', side_effect=AssertionError('verification entered')),
+            patch.object(official_server.x402ResourceServer, 'settle_payment', side_effect=AssertionError('settlement entered')),
+            patch.object(socket, 'getaddrinfo', side_effect=AssertionError('DNS entered')),
+            TestClient(server.create_app(PAID_SETTINGS)) as client,
+        ):
             get_response = client.get('/fetch')
             head_response = client.head('/fetch')
             post_response = client.post(
@@ -75,13 +75,17 @@ class FetchMethodGuidanceTests(unittest.TestCase):
             meta_response = client.get('/meta')
 
         self.assertEqual(get_response.status_code, 405)
-        self.assertEqual(get_response.json(), EXPECTED_GUIDANCE)
+        for key, value in EXPECTED_GUIDANCE.items():
+            self.assertEqual(get_response.json()[key], value)
+        self.assertIs(get_response.json()['retrieval_available'], False)
         self.assertEqual(head_response.status_code, 405)
         self.assertEqual(head_response.content, b'')
-        self.assertEqual(post_response.status_code, 402)
-        self.assertEqual(meta_response.json()['mcp']['tools'], list(MCP_TOOLS))
-        verify.assert_not_awaited()
-        smart_fetch.assert_not_called()
+        self.assertEqual(post_response.status_code, 503)
+        self.assertEqual(post_response.json()['error_code'], 'retrieval_unavailable')
+        self.assertEqual(post_response.headers['cache-control'], 'no-store')
+        self.assertNotIn('payment-required', post_response.headers)
+        self.assertEqual([tool['name'] for tool in meta_response.json()['tools']], list(MCP_TOOLS))
+        self.assertIs(meta_response.json()['retrieval_available'], False)
 
 
 if __name__ == '__main__':

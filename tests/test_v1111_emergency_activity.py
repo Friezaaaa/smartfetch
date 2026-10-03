@@ -50,6 +50,8 @@ def test_terminal_unhealthy_health_is_exact_finite_503():
     assert response.headers["content-length"] == "92"
     assert response.headers["retry-after"] == "3600"
     assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert re.fullmatch(r"[0-9a-f]{16}", response.headers["x-request-id"])
 
 
 @pytest.mark.parametrize(("surface", "browser"), [
@@ -86,6 +88,7 @@ def test_one_bounded_allowlisted_unavailable_event_no_input_or_payment(surface, 
     assert event["error_code"] == ("browser_unavailable" if browser else "retrieval_unavailable")
     assert event["status"] == response.status_code
     assert re.fullmatch(r"[0-9a-f]{16}", event["request_id"])
+    assert response.headers["x-request-id"] == event["request_id"]
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", event["timestamp"])
     combined = output + response.text
     for canary in ("url-canary", "proof-canary", "provider-canary"):

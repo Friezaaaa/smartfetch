@@ -2,15 +2,11 @@ import hashlib
 import json
 from pathlib import Path
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from jsonschema import Draft202012Validator
-from x402.extensions.bazaar import (
-    bazaar_resource_server_extension,
-    validate_discovery_extension_spec,
-)
-from x402.http.utils import decode_payment_required_header
+from x402.extensions.bazaar import validate_discovery_extension_spec
 from x402.schemas import SupportedKind, SupportedResponse
 
 from smartfetch import bazaar, server
@@ -128,7 +124,7 @@ class V18MCPBazaarMetadataTests(unittest.TestCase):
         output = declaration['info']['output']
         self.assertEqual(output['type'], 'json')
         self.assertTrue(output['example']['success'])
-        self.assertEqual(output['example']['service_version'], '1.11.0')
+        self.assertEqual(output['example']['service_version'], '1.11.1')
         output_schema = declaration['schema']['properties']['output'][
             'properties'
         ]['example']
@@ -152,42 +148,25 @@ class V18MCPBazaarIntegrationTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_mcp_server_registers_and_passes_bazaar_to_payment_wrapper(self):
-        from x402.mcp import create_payment_wrapper as real_wrapper
-
+    def test_mcp_server_never_constructs_a_payment_wrapper(self):
         with patch(
             'x402.mcp.create_payment_wrapper',
-            wraps=real_wrapper,
+            side_effect=AssertionError('x402 wrapper entered'),
         ) as wrapper:
-            app = server.create_app(PAID_SETTINGS)
-
-        mcp_payment = app.state.smartfetch_mcp
-        self.assertIs(
-            mcp_payment.resource_server._extensions['bazaar'],
-            bazaar_resource_server_extension,
-        )
-        self.assertEqual(wrapper.call_count, 4)
-        fetch_call = next(
-            call for call in wrapper.call_args_list
-            if str(call.kwargs['resource'].url) == 'mcp://tool/fetch_webpage'
-        )
-        extensions = fetch_call.kwargs['extensions']
+            with TestClient(server.create_app(PAID_SETTINGS)) as client:
+                initialize(client)
+                result = call_fetch(client)
+        wrapper.assert_not_called()
+        self.assertTrue(result['result']['isError'])
         self.assertEqual(
-            extensions['bazaar']['info']['input']['type'],
-            'mcp',
-        )
-        self.assertEqual(
-            extensions['bazaar']['info']['input']['toolName'],
-            'fetch_webpage',
+            result['result']['structuredContent']['error_code'],
+            'retrieval_unavailable',
         )
 
     def test_unpaid_challenge_is_discoverable_without_fetching(self):
         app = server.create_app(PAID_SETTINGS)
 
-        with (
-            patch('smartfetch.server._run_fetch', new_callable=AsyncMock) as fetch,
-            TestClient(app, base_url='https://agent.example') as client,
-        ):
+        with TestClient(app, base_url='https://agent.example') as client:
             initialized = initialize(client)
             listed = rpc(client, 'tools/list', {}, request_id=2)
             mcp_response = call_fetch(client)
@@ -200,7 +179,6 @@ class V18MCPBazaarIntegrationTests(unittest.TestCase):
                 'url': 'https://example.com/article',
             })
 
-        fetch.assert_not_awaited()
         self.assertIn('result', initialized)
         self.assertEqual(
             [tool['name'] for tool in listed['result']['tools']],
@@ -217,39 +195,11 @@ class V18MCPBazaarIntegrationTests(unittest.TestCase):
 
         challenge = mcp_response['result']['structuredContent']
         self.assertTrue(mcp_response['result']['isError'])
-        self.assertEqual(challenge['resource']['url'], 'mcp://tool/fetch_webpage')
-        mcp_bazaar = challenge['extensions']['bazaar']
-        self.assertTrue(validate_discovery_extension_spec(mcp_bazaar).valid)
-        self.assertEqual(mcp_bazaar['info']['input']['type'], 'mcp')
-        self.assertEqual(
-            mcp_bazaar['info']['input']['toolName'],
-            'fetch_webpage',
-        )
-        self.assertEqual(
-            mcp_bazaar['info']['input']['transport'],
-            'streamable-http',
-        )
-        accepted = challenge['accepts'][0]
-        self.assertEqual(accepted['scheme'], 'exact')
-        self.assertEqual(accepted['network'], BASE_SEPOLIA)
-        self.assertEqual(accepted['payTo'], VALID_ADDRESS)
-        self.assertEqual(accepted['amount'], '5000')
-
-        self.assertEqual(http_response.status_code, 402)
-        http_required = decode_payment_required_header(
-            http_response.headers['payment-required']
-        )
-        http_bazaar = (http_required.extensions or {})['bazaar']
-        self.assertEqual(http_bazaar['info']['input']['type'], 'http')
-        self.assertEqual(http_bazaar['info']['input']['method'], 'POST')
-        self.assertEqual(
-            str(http_required.resource.url),
-            'https://agent.example/fetch',
-        )
-        self.assertNotEqual(
-            str(http_required.resource.url),
-            challenge['resource']['url'],
-        )
+        self.assertEqual(challenge['error_code'], 'retrieval_unavailable')
+        self.assertNotIn('accepts', json.dumps(mcp_response))
+        self.assertEqual(http_response.status_code, 503)
+        self.assertEqual(http_response.json()['error_code'], 'retrieval_unavailable')
+        self.assertNotIn('payment-required', http_response.headers)
 
 
 class V18RegistryManifestTests(unittest.TestCase):
@@ -266,10 +216,10 @@ class V18RegistryManifestTests(unittest.TestCase):
             'name': 'io.github.Friezaaaa/smartfetch',
             'title': 'SmartFetch',
             'description': (
-                'Paid public-web search, cited answers, and structured '
-                'extraction for webpages and multimodal media.'
+                'Emergency fail-closed service: retrieval and browser '
+                'rendering are temporarily unavailable; no payment challenge is active.'
             ),
-            'version': '1.11.0',
+            'version': '1.11.1',
             'repository': {
                 'url': 'https://github.com/Friezaaaa/smartfetch',
                 'source': 'github',

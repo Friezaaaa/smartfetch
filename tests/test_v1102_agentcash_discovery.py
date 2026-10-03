@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 import unittest
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 from x402.schemas import SupportedKind, SupportedResponse
@@ -109,7 +109,7 @@ class AgentCashOpenAPITests(unittest.TestCase):
         self.assertEqual(operation['x-x402']['price'], '$0.0075')
         self.assertEqual(operation['x-x402']['amount'], '7500')
 
-    def test_agentcash_metadata_matches_generated_mainnet_requirement(self):
+    def test_emergency_discovery_has_no_actionable_mainnet_requirement(self):
         facilitator = Mock()
         facilitator.get_supported.return_value = SUPPORTED_MAINNET
         settings = paid_settings()
@@ -119,28 +119,27 @@ class AgentCashOpenAPITests(unittest.TestCase):
         ):
             app = server.create_app(settings)
 
-        generated = app.state.smartfetch_mcp.accepts[0]
         with TestClient(app) as client:
             document = client.get('/openapi.json').json()
+            manifest = client.get('/.well-known/x402').json()
 
         operation = document['paths']['/fetch']['post']
-        self.assertEqual(operation['x-x402']['scheme'], generated.scheme)
-        self.assertEqual(operation['x-x402']['network'], generated.network)
-        self.assertEqual(operation['x-x402']['asset'], generated.asset)
-        self.assertEqual(operation['x-x402']['amount'], generated.amount)
-        self.assertEqual(
-            operation['x-payment-info']['price']['amount'],
-            '0.005000',
-        )
+        self.assertEqual(operation['x-smartfetch-availability'], 'unavailable')
+        self.assertNotIn('x-x402', operation)
+        self.assertNotIn('x-payment-info', operation)
+        self.assertEqual(manifest['resources'], [])
+        facilitator.get_supported.assert_not_called()
 
     def test_free_discovery_probes_never_execute_retrieval(self):
         facilitator = Mock()
         facilitator.get_supported.return_value = SUPPORTED_MAINNET
-        retrieval = AsyncMock()
         with patch(
             'smartfetch.payments.create_facilitator',
             return_value=facilitator,
-        ), patch('smartfetch.server._run_fetch', retrieval):
+        ) as create_facilitator, patch(
+            'socket.create_connection',
+            side_effect=AssertionError('network entered'),
+        ) as network:
             app = server.create_app(paid_settings())
             with TestClient(app, base_url='https://agent.example') as client:
                 responses = [
@@ -156,7 +155,8 @@ class AgentCashOpenAPITests(unittest.TestCase):
             'payment-required' not in response.headers
             for response in responses
         ))
-        retrieval.assert_not_awaited()
+        create_facilitator.assert_not_called()
+        network.assert_not_called()
 
     def test_discovery_metadata_exposes_no_payment_secrets(self):
         serialized = json.dumps(discovery.openapi_document(
@@ -175,17 +175,17 @@ class AgentCashOpenAPITests(unittest.TestCase):
 
 
 class CurrentVersionAndRegistryTests(unittest.TestCase):
-    def test_service_and_registry_are_v1102_with_four_unchanged_tools(self):
+    def test_service_and_registry_are_emergency_v1111_with_four_unchanged_tools(self):
         manifest = json.loads(
             (REPO_ROOT / 'server.json').read_text(encoding='utf-8')
         )
 
-        self.assertEqual(SERVICE_VERSION, '1.11.0')
-        self.assertEqual(manifest['version'], '1.11.0')
+        self.assertEqual(SERVICE_VERSION, '1.11.1')
+        self.assertEqual(manifest['version'], '1.11.1')
         self.assertEqual(
             manifest['description'],
-            'Paid public-web search, cited answers, and structured extraction '
-            'for webpages and multimodal media.',
+            'Emergency fail-closed service: retrieval and browser rendering '
+            'are temporarily unavailable; no payment challenge is active.',
         )
         self.assertEqual(MCP_TOOLS, (
             'fetch_webpage',

@@ -1,6 +1,7 @@
 """Free emergency discovery cannot advertise a payable retrieval resource."""
 
 import json
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -11,7 +12,7 @@ from smartfetch.mcp_server import MCP_TOOLS
 MCP_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 FREE_PATHS = (
     "/", "/meta", "/docs", "/openapi.json", "/llms.txt",
-    "/.well-known/x402", "/robots.txt", "/sitemap.xml",
+    "/.well-known/x402", "/.well-known/glama.json", "/robots.txt", "/sitemap.xml",
 )
 FORBIDDEN_KEYS = {
     "accepts", "paymentrequirements", "scheme", "network", "asset", "payto",
@@ -91,6 +92,108 @@ def test_openapi_docs_and_llms_report_unavailable_not_success_or_402():
     _assert_no_payable_fields(openapi)
 
 
+def test_llms_preserves_free_openapi_navigation_with_emergency_status():
+    with TestClient(server.create_app(), base_url="https://agent.example") as client:
+        response = client.get("/llms.txt")
+    assert response.status_code == 200
+    assert "- [OpenAPI 3.1](https://agent.example/openapi.json)" in response.text
+    assert "mode: emergency_fail_closed" in response.text
+    assert "fetch.availability: unavailable" in response.text
+    assert "fetch.payment_challenge_enabled: false" in response.text
+    assert "HTTP buyer example" not in response.text
+    assert "PAYMENT-SIGNATURE" not in response.text
+
+
+def test_meta_preserves_free_mcp_url_with_emergency_status():
+    with TestClient(server.create_app(), base_url="https://agent.example") as client:
+        response = client.get("/meta")
+    assert response.status_code == 200
+    meta = response.json()
+    assert meta["mcp"]["url"] == "https://agent.example/mcp"
+    assert meta["mode"] == "emergency_fail_closed"
+    assert meta["retrieval_available"] is False
+    assert meta["fetch"]["availability"] == "unavailable"
+    assert meta["fetch"]["payment_challenge_enabled"] is False
+    assert all(tool["availability"] == "unavailable" for tool in meta["tools"])
+    _assert_no_payable_fields(meta)
+
+
+def test_meta_preserves_free_discovery_navigation_without_payable_fields():
+    base = "https://agent.example"
+    with TestClient(server.create_app(), base_url=base) as client:
+        meta = client.get("/meta").json()
+    assert meta["discovery"] == {
+        "x402": f"{base}/.well-known/x402",
+        "docs": f"{base}/docs",
+        "openapi": f"{base}/openapi.json",
+        "llms": f"{base}/llms.txt",
+        "robots": f"{base}/robots.txt",
+        "sitemap": f"{base}/sitemap.xml",
+    }
+    assert meta["retrieval_available"] is False
+    assert meta["fetch"]["payment_challenge_enabled"] is False
+    _assert_no_payable_fields(meta)
+
+
+def test_root_and_docs_preserve_free_navigation_with_unavailable_status():
+    base = "https://agent.example"
+    with TestClient(server.create_app(), base_url=base) as client:
+        pages = (client.get("/"), client.get("/docs"))
+    for response in pages:
+        assert response.status_code == 200
+        for path in ("/meta", "/.well-known/x402", "/openapi.json", "/llms.txt", "/mcp"):
+            assert f'href="{base}{path}"' in response.text
+        assert '"retrieval_available":false' in response.text
+        assert '"payment_challenge_enabled":false' in response.text
+        assert "PAYMENT-REQUIRED" not in response.text
+        assert "Paid HTTP retrieval" not in response.text
+
+
+def test_openapi_preserves_free_server_and_docs_links_without_402():
+    base = "https://agent.example"
+    with TestClient(server.create_app(), base_url=base) as client:
+        document = client.get("/openapi.json").json()
+    assert document["servers"] == [{"url": base}]
+    assert document["externalDocs"]["url"] == f"{base}/docs"
+    assert document["paths"]["/fetch"]["post"]["x-smartfetch-availability"] == "unavailable"
+    assert "402" not in document["paths"]["/fetch"]["post"]["responses"]
+    _assert_no_payable_fields(document)
+
+
+def test_llms_preserves_other_free_navigation_without_buyer_links():
+    base = "https://agent.example"
+    with TestClient(server.create_app(), base_url=base) as client:
+        text = client.get("/llms.txt").text
+    for label, path in (
+        ("Community x402 manifest", "/.well-known/x402"),
+        ("Documentation", "/docs"),
+        ("Metadata", "/meta"),
+        ("Remote MCP Streamable HTTP", "/mcp"),
+    ):
+        assert f"- [{label}]({base}{path})" in text
+    assert "mode: emergency_fail_closed" in text
+    assert "fetch.payment_challenge_enabled: false" in text
+    assert "HTTP buyer example" not in text
+    assert "PAYMENT-SIGNATURE" not in text
+
+
+def test_x402_manifest_preserves_free_navigation_with_empty_resources():
+    base = "https://agent.example"
+    with TestClient(server.create_app(), base_url=base) as client:
+        manifest = client.get("/.well-known/x402").json()
+    assert manifest["homepage"] == base
+    assert manifest["endpoints"] == {
+        "mcp": {"url": f"{base}/mcp", "transport": "streamable-http"},
+        "openapi": f"{base}/openapi.json",
+        "llms": f"{base}/llms.txt",
+        "docs": f"{base}/docs",
+        "metadata": f"{base}/meta",
+    }
+    assert manifest["resources"] == []
+    assert manifest["retrieval_available"] is False
+    _assert_no_payable_fields(manifest)
+
+
 def test_robots_and_sitemap_remain_free_ownership_metadata():
     with TestClient(server.create_app()) as client:
         robots = client.get("/robots.txt")
@@ -101,6 +204,31 @@ def test_robots_and_sitemap_remain_free_ownership_metadata():
     assert "/openapi.json" in sitemap.text
     assert "/fetch" not in sitemap.text
     assert "payment" not in (robots.text + sitemap.text).lower()
+
+
+def test_sitemap_preserves_the_established_xml_media_type():
+    with TestClient(server.create_app()) as client:
+        response = client.get("/sitemap.xml")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/xml")
+    assert b"<loc>" in response.content
+    assert b"/fetch" not in response.content
+    assert "payment-required" not in response.headers
+
+
+def test_glama_ownership_retains_main_contract_without_payment_or_work():
+    expected = {
+        "$schema": "https://glama.ai/mcp/schemas/connector.json",
+        "maintainers": [{"email": "smartfetch.contact@gmail.com"}],
+    }
+    with patch("x402.http.HTTPFacilitatorClient.get_supported", side_effect=AssertionError("payment entry")):
+        with TestClient(server.create_app()) as client:
+            response = client.get("/.well-known/glama.json", headers={"PAYMENT-SIGNATURE": "ignored"})
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    assert response.json() == expected
+    assert "payment-required" not in response.headers
+    assert "payment-response" not in response.headers
 
 
 def test_mcp_listing_agrees_and_has_no_paid_extension():
@@ -122,7 +250,11 @@ def test_mcp_listing_agrees_and_has_no_paid_extension():
 def test_historical_normal_price_without_adjacent_unavailable_marker_is_invalid():
     from smartfetch.discovery import emergency_openapi_document
 
-    document = emergency_openapi_document({"base": "http://testserver", "fetch": "http://testserver/fetch"})
+    document = emergency_openapi_document({
+        "base": "http://testserver",
+        "fetch": "http://testserver/fetch",
+        "docs": "http://testserver/docs",
+    })
     _assert_no_payable_fields(document)
     operation = document["paths"]["/fetch"]["post"]
     _assert_unavailable_identity({

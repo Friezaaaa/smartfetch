@@ -42,19 +42,18 @@ class Stage5DocumentationTests(unittest.TestCase):
             },
         )
 
-    def test_release_metadata_is_consistently_v1110(self):
+    def test_release_metadata_is_consistently_emergency_v1111(self):
         manifest = json.loads((ROOT / "server.json").read_text("utf-8"))
         readme = (ROOT / "README.md").read_text("utf-8")
-        self.assertEqual(SERVICE_VERSION, "1.11.0")
-        self.assertEqual(manifest["version"], "1.11.0")
-        self.assertIn("SmartFetch V1.11.0", readme)
-        self.assertIn("not deployed", readme)
-        self.assertIn("not enabled", readme)
-        self.assertIn("not benchmark-approved", readme)
-        self.assertIn("not Registry-published", readme)
-        self.assertIn('"service_version": "1.11.0"', readme)
-        self.assertIn("docker build -t smartfetch:v1.11.0 .", readme)
-        self.assertIn("docker run --rm -p 8787:8787 smartfetch:v1.11.0", readme)
+        self.assertEqual(SERVICE_VERSION, "1.11.1")
+        self.assertEqual(manifest["version"], "1.11.1")
+        self.assertIn("SmartFetch V1.11.1", readme)
+        self.assertIn("Retrieval is temporarily unavailable", readme)
+        self.assertIn("Browser rendering is temporarily unavailable", readme)
+        self.assertIn("no payment challenge", readme)
+        self.assertIn("V1.11 paid capabilities remain disabled", readme)
+        self.assertIn("docker build -t smartfetch:v1.11.1 .", readme)
+        self.assertIn("local image tag", readme)
         self.assertNotIn("docker pull", readme)
 
     def test_tool_provenance_records_historical_rolling_download(self):
@@ -71,80 +70,37 @@ class Stage5DocumentationTests(unittest.TestCase):
             provenance,
         )
 
-    def test_enabled_docs_and_llms_describe_every_runtime_variant(self):
+    def test_configured_runtime_cannot_advertise_paid_variants(self):
         app = self.app()
         with TestClient(app) as client:
             docs = client.get("/docs").text
             llms = client.get("/llms.txt").text
+            openapi = client.get("/openapi.json").json()
         for definition in V111_VARIANTS:
-            requirement = app.state.smartfetch_mcp.v111_accepts[
-                definition.mcp_resource
-            ][0]
-            price = f"${int(requirement.amount) / 1_000_000:.2f}"
             for rendered in (docs, llms):
-                self.assertIn(definition.rest_path, rendered)
-                self.assertIn(definition.mcp_resource, rendered)
-                self.assertIn(price, rendered)
-        self.assertIn("six", llms.lower())
+                self.assertNotIn(definition.rest_path, rendered)
+                self.assertNotIn(definition.mcp_resource, rendered)
+            self.assertNotIn(definition.rest_path, openapi["paths"])
+        self.assertIn("availability: unavailable", llms)
         self.assertLess(len(llms.encode("utf-8")), 16_000)
 
-    def test_enabled_documentation_covers_contract_and_payment_boundaries(self):
+    def test_documentation_is_consistently_fail_closed_even_with_runtime_supplied(self):
         app = self.app()
         with TestClient(app) as client:
-            root = client.get("/").json()
+            root = client.get("/").text
             docs = client.get("/docs").text
             llms = client.get("/llms.txt").text
             openapi = client.get("/openapi.json").json()
             meta = client.get("/meta").json()
             x402 = client.get("/.well-known/x402").json()
-        combined = f"{docs}\n{llms}".lower()
-        for phrase in (
-            "cited answer",
-            "structured search",
-            "webpage",
-            "image",
-            "pdf",
-            "audio",
-            "video",
-            "evidence",
-            "nullable",
-            "missing_fields",
-            "payment-required",
-            "payment-signature",
-            "payment-response",
-            "no settlement",
-            "deadline",
-        ):
-            self.assertIn(phrase, combined)
-        serialized = json.dumps(openapi).lower()
-        self.assertIn("maxresults", serialized.replace("_", ""))
-        self.assertIn("maxsources", serialized.replace("_", ""))
-        self.assertIn("additionalproperties", serialized.replace("_", ""))
-        for rendered in (docs, llms):
-            self.assertIn("Legacy", rendered)
-            self.assertIn("four existing MCP tools", rendered)
-            self.assertIn("individually listed", rendered)
-            self.assertIn("$0.005", rendered)
-            for price in ("$0.05", "$0.10", "$0.15"):
-                self.assertIn(price, rendered)
-            self.assertNotIn("per paid HTTP or MCP tool execution", rendered)
-            self.assertNotIn("Each paid HTTP or MCP execution", rendered)
-        self.assertEqual(
-            {key: value for key, value in root.items() if key != "request_id"},
-            {key: value for key, value in meta.items() if key != "request_id"},
-        )
-        self.assertEqual(x402["payment"]["price"], "$0.005")
-        self.assertEqual(len(meta["capabilities"]["variants"]), 8)
-        self.assertEqual(len(x402["v111"]["http"]), 8)
-        self.assertEqual(len(x402["v111"]["mcp"]), 8)
+        for rendered in (root, docs, llms, json.dumps(meta), json.dumps(openapi), json.dumps(x402)):
+            self.assertIn("unavailable", rendered.lower())
+            self.assertNotIn("payment-required", rendered.lower())
+            self.assertNotIn("payment-signature", rendered.lower())
+        self.assertEqual(x402["resources"], [])
+        self.assertEqual(len(meta["tools"]), 4)
         for definition in V111_VARIANTS:
-            amount = int(app.state.smartfetch_mcp.v111_accepts[
-                definition.mcp_resource
-            ][0].amount)
-            self.assertEqual(
-                openapi["paths"][definition.rest_path]["post"]["x-x402"]["amount"],
-                str(amount),
-            )
+            self.assertNotIn(definition.rest_path, openapi["paths"])
 
     def test_disabled_docs_preserve_legacy_surface(self):
         with TestClient(self.app(enabled=False)) as client:
@@ -159,7 +115,7 @@ class Stage5DocumentationTests(unittest.TestCase):
         with TestClient(self.app()) as client:
             llms = client.get("/llms.txt").text
         links = re.findall(r"\[[^\]]+\]\(([^)]+)\)", llms)
-        self.assertGreaterEqual(len(links), 6)
+        self.assertGreaterEqual(len(links), 5)
         self.assertTrue(all(link.startswith(("http://", "https://")) for link in links))
         for forbidden in (
             "captcha bypass",

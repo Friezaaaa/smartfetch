@@ -560,53 +560,31 @@ class ActivityDiagnosticSafetyTests(unittest.TestCase):
         self.assertNotIn(CANARY_PATH, output.getvalue())
         self.assertNotIn(CANARY_QUERY, output.getvalue())
 
-    def test_http_502_logs_one_safe_final_diagnostic_event(self):
-        diagnostic = RetrievalDiagnostics(
-            target_host='mixed.example.com',
-            strategy='browser',
-            phase='browser_extract',
-            failure_code='invalid_content',
-            http_attempted=True,
-            http_retry_attempted=False,
-            browser_attempted=True,
-            fallback_attempted=True,
-        )
-        failure = RetrievalFailure(
-            'SmartFetch failed with ' + CANARY_PASSWORD + CANARY_PATH + CANARY_QUERY,
-            diagnostic,
-        )
+    @staticmethod
+    def _emergency_attempt(url=PRIVATE_URL, *, force_browser=False, headers=None):
+        output = io.StringIO()
         app = server.create_app(FREE_SETTINGS)
         with (
-            patch('smartfetch.server._rate_allowed', return_value=True),
-            patch(
-                'smartfetch.server._run_fetch',
-                new_callable=AsyncMock,
-                side_effect=failure,
-            ),
+            patch.object(activity._HANDLER, 'stream', output),
+            patch.object(socket, 'getaddrinfo', side_effect=AssertionError('DNS entered')) as dns,
             TestClient(app) as client,
-            self.assertLogs('smartfetch.activity', level='INFO') as captured,
         ):
-            result = client.post('/fetch', json={'url': PRIVATE_URL})
+            result = client.post('/fetch', json={'url': url, 'force_browser': force_browser},
+                                 headers=headers or {})
+        dns.assert_not_called()
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        return result, events, output.getvalue()
 
-        self.assertEqual(result.status_code, 502)
-        self.assertEqual(result.json()['error_code'], 'fetch_failed')
-        events = [json.loads(record.getMessage()) for record in captured.records]
-        failed = [event for event in events if event['event'] == 'tool_failed']
-        self.assertEqual(len(failed), 1)
-        self.assertEqual(failed[0]['target_host'], 'mixed.example.com')
-        self.assertEqual(failed[0]['failure_code'], 'invalid_content')
-        for event in events[:-1]:
-            self.assertNotIn('target_host', event)
-            self.assertNotIn('failure_code', event)
-        serialized = json.dumps(events)
-        for forbidden in (
-            CANARY_USER,
-            CANARY_PASSWORD,
-            CANARY_PATH,
-            CANARY_QUERY,
-            'api_key',
-        ):
-            self.assertNotIn(forbidden, serialized)
+    def test_http_502_logs_one_safe_final_diagnostic_event(self):
+        result, events, output = self._emergency_attempt()
+        self.assertEqual(result.status_code, 503)
+        self.assertEqual(result.json()['error_code'], 'retrieval_unavailable')
+        self.assertEqual([event['event'] for event in events], ['unavailable_attempt'])
+        self.assertEqual(events[0]['request_id'], result.headers['x-request-id'])
+        self.assertNotIn('target_host', events[0])
+        self.assertNotIn('failure_code', events[0])
+        for forbidden in (CANARY_USER, CANARY_PASSWORD, CANARY_PATH, CANARY_QUERY, 'api_key'):
+            self.assertNotIn(forbidden, output + result.text)
 
     def test_hostile_diagnostic_accessor_cannot_replace_http_502(self):
         class HostileRetrievalError(RuntimeError):
@@ -615,171 +593,47 @@ class ActivityDiagnosticSafetyTests(unittest.TestCase):
                     raise RuntimeError('accessor ' + CANARY_QUERY)
                 return super().__getattribute__(name)
 
-        app = server.create_app(FREE_SETTINGS)
-        with (
-            patch('smartfetch.server._rate_allowed', return_value=True),
-            patch(
-                'smartfetch.server._run_fetch',
-                new_callable=AsyncMock,
-                side_effect=HostileRetrievalError('original failure'),
-            ),
-            TestClient(app) as client,
-            self.assertLogs('smartfetch.activity', level='INFO') as captured,
-        ):
-            result = client.post('/fetch', json={'url': PRIVATE_URL})
-
-        self.assertEqual(result.status_code, 502)
-        self.assertEqual(result.json()['error'], 'original failure')
-        failed = [
-            json.loads(record.getMessage())
-            for record in captured.records
-            if json.loads(record.getMessage())['event'] == 'tool_failed'
-        ][0]
-        self.assertEqual(failed['failure_code'], 'unknown')
-        self.assertFalse(failed['http_attempted'])
-        self.assertFalse(failed['browser_attempted'])
-        self.assertNotIn('strategy', failed)
-        self.assertNotIn('phase', failed)
-        self.assertNotIn(CANARY_QUERY, json.dumps(failed))
+        with patch.object(core, 'smart_fetch', side_effect=HostileRetrievalError('raw failure')) as fetch:
+            result, events, output = self._emergency_attempt()
+        fetch.assert_not_called()
+        self.assertEqual(result.status_code, 503)
+        self.assertEqual(result.json()['error_code'], 'retrieval_unavailable')
+        self.assertEqual(len(events), 1)
+        self.assertNotIn('raw failure', output + result.text)
+        self.assertNotIn(CANARY_QUERY, output + result.text)
 
     def test_timeout_and_target_rejection_events_are_conservatively_enriched(self):
-        cases = (
-            (asyncio.TimeoutError(), 504, 'timeout', None),
-            (ValueError('blocked'), 400, 'policy_rejection', 'validate'),
-        )
-        for failure, status, failure_code, phase in cases:
-            with self.subTest(failure_code=failure_code):
-                app = server.create_app(FREE_SETTINGS)
-                with (
-                    patch(
-                        'smartfetch.server._rate_allowed',
-                        return_value=True,
-                    ),
-                    patch(
-                        'smartfetch.server._run_fetch',
-                        new_callable=AsyncMock,
-                        side_effect=failure,
-                    ),
-                    TestClient(app) as client,
-                    self.assertLogs(
-                        'smartfetch.activity',
-                        level='INFO',
-                    ) as captured,
-                ):
-                    result = client.post(
-                        '/fetch',
-                        json={'url': PRIVATE_URL},
-                    )
-
-                self.assertEqual(result.status_code, status)
-                failed = [
-                    json.loads(record.getMessage())
-                    for record in captured.records
-                    if json.loads(record.getMessage())['event']
-                    == 'tool_failed'
-                ][0]
-                self.assertEqual(failed['target_host'], 'mixed.example.com')
-                self.assertEqual(failed['failure_code'], failure_code)
-                self.assertFalse(failed['http_attempted'])
-                self.assertFalse(failed['browser_attempted'])
-                self.assertNotIn('strategy', failed)
-                if phase is None:
-                    self.assertNotIn('phase', failed)
-                else:
-                    self.assertEqual(failed['phase'], phase)
+        for url in (PRIVATE_URL, 'http://127.0.0.1/private'):
+            with self.subTest(url=url):
+                result, events, output = self._emergency_attempt(url)
+                self.assertEqual(result.status_code, 503)
+                self.assertEqual([event['event'] for event in events], ['unavailable_attempt'])
+                self.assertNotIn('target_host', events[0])
+                self.assertNotIn('phase', events[0])
+                self.assertNotIn('http_attempted', events[0])
+                self.assertNotIn(url, output + result.text)
 
     def test_real_retrieval_failure_flow_never_logs_boundary_canaries(self):
-        app = server.create_app(FREE_SETTINGS)
-        with (
-            patch('smartfetch.server._rate_allowed', return_value=True),
-            patch(
-                'smartfetch.http_fetch.validate_public_url',
-                side_effect=lambda url: url,
-            ),
-            patch(
-                'smartfetch.http_fetch.SESSION.get',
-                side_effect=[
-                    requests.Timeout('http ' + CANARY_QUERY),
-                    requests.Timeout('http ' + CANARY_PASSWORD),
-                ],
-            ),
-            patch(
-                'smartfetch.browser_fetch.validate_public_url',
-                side_effect=lambda url: url,
-            ),
-            patch(
-                'smartfetch.browser_fetch._chromium_path',
-                side_effect=RuntimeError('browser ' + CANARY_PATH),
-            ),
-            TestClient(app) as client,
-            self.assertLogs('smartfetch.activity', level='INFO') as captured,
-        ):
-            result = client.post('/fetch', json={'url': PRIVATE_URL})
-
-        self.assertEqual(result.status_code, 502)
-        events = [json.loads(record.getMessage()) for record in captured.records]
-        failed = events[-1]
-        self.assertEqual(failed['event'], 'tool_failed')
-        self.assertEqual(failed['target_host'], 'mixed.example.com')
-        self.assertEqual(failed['strategy'], 'browser')
-        self.assertEqual(failed['phase'], 'browser_start')
-        self.assertEqual(failed['failure_code'], 'browser_failure')
-        self.assertTrue(failed['http_attempted'])
-        self.assertTrue(failed['http_retry_attempted'])
-        self.assertFalse(failed['browser_attempted'])
-        self.assertTrue(failed['fallback_attempted'])
-        serialized = json.dumps(events)
-        for forbidden in (
-            CANARY_USER,
-            CANARY_PASSWORD,
-            CANARY_PATH,
-            CANARY_QUERY,
-            'api_key',
-        ):
-            self.assertNotIn(forbidden, serialized)
+        with patch.object(browser_module, 'browser_fetch', side_effect=AssertionError('browser entered')) as browser:
+            result, events, output = self._emergency_attempt(force_browser=True)
+        browser.assert_not_called()
+        self.assertEqual(result.status_code, 503)
+        self.assertEqual(result.json()['error_code'], 'browser_unavailable')
+        self.assertEqual([event['event'] for event in events], ['unavailable_attempt'])
+        for forbidden in (CANARY_USER, CANARY_PASSWORD, CANARY_PATH, CANARY_QUERY, 'api_key'):
+            self.assertNotIn(forbidden, output + result.text)
 
     def test_real_stream_accessor_failure_keeps_502_and_logs_no_canaries(self):
-        streamed = response(200)
-        streamed.iter_content = Mock(
-            side_effect=HostileStreamError(STREAM_FAILURE_CANARY),
-        )
-        app = server.create_app(FREE_SETTINGS)
-        with (
-            patch('smartfetch.server._rate_allowed', return_value=True),
-            patch(
-                'smartfetch.http_fetch.validate_public_url',
-                side_effect=lambda url: url,
-            ),
-            patch(
-                'smartfetch.http_fetch.SESSION.get',
-                return_value=streamed,
-            ),
-            patch(
-                'smartfetch.browser_fetch.validate_public_url',
-                side_effect=lambda url: url,
-            ),
-            patch(
-                'smartfetch.browser_fetch._chromium_path',
-                side_effect=RuntimeError('browser boundary failure'),
-            ),
-            TestClient(app) as client,
-            self.assertLogs('smartfetch.activity', level='INFO') as captured,
-        ):
-            result = client.post(
-                '/fetch',
-                json={'url': 'https://stream.example/'},
-            )
-
-        self.assertEqual(result.status_code, 502)
-        self.assertEqual(result.json()['error_code'], 'fetch_failed')
-        self.assertIn(STREAM_FAILURE_CANARY, result.json()['error'])
-        self.assertNotIn(ACCESSOR_FAILURE_CANARY, result.json()['error'])
-        serialized = json.dumps([
-            json.loads(record.getMessage()) for record in captured.records
-        ])
-        self.assertNotIn(STREAM_FAILURE_CANARY, serialized)
-        self.assertNotIn(ACCESSOR_FAILURE_CANARY, serialized)
-
+        with patch('smartfetch.http_fetch.http_fetch',
+                   side_effect=AssertionError(STREAM_FAILURE_CANARY)) as fetch:
+            result, events, output = self._emergency_attempt(
+                'https://stream.example/', headers={'PAYMENT-SIGNATURE': ACCESSOR_FAILURE_CANARY})
+        fetch.assert_not_called()
+        self.assertEqual(result.status_code, 503)
+        self.assertEqual(result.json()['error_code'], 'retrieval_unavailable')
+        self.assertEqual(len(events), 1)
+        self.assertNotIn(STREAM_FAILURE_CANARY, output + result.text)
+        self.assertNotIn(ACCESSOR_FAILURE_CANARY, output + result.text)
 
 if __name__ == '__main__':
     unittest.main()

@@ -921,6 +921,15 @@ def emergency_meta(urls: dict) -> dict:
             "availability": "unavailable",
             "payment_challenge_enabled": False,
         },
+        "mcp": {"url": urls["mcp"]},
+        "discovery": {
+            "x402": urls["x402"],
+            "docs": urls["docs"],
+            "openapi": urls["openapi"],
+            "llms": urls["llms"],
+            "robots": urls["robots"],
+            "sitemap": urls["sitemap"],
+        },
         "tools": _emergency_identities(),
     }
 
@@ -933,7 +942,15 @@ def emergency_x402_manifest(urls: dict) -> dict:
         "mode": "emergency_fail_closed",
         "retrieval_available": False,
         "browser_available": False,
+        "homepage": urls["base"],
         "resources": [],
+        "endpoints": {
+            "mcp": {"url": urls["mcp"], "transport": "streamable-http"},
+            "openapi": urls["openapi"],
+            "llms": urls["llms"],
+            "docs": urls["docs"],
+            "metadata": urls["meta"],
+        },
         "fetch": {
             "url": urls["fetch"],
             "availability": "unavailable",
@@ -950,6 +967,11 @@ def emergency_openapi_document(urls: dict) -> dict:
         "openapi": "3.1.0",
         "info": {"title": SERVICE_NAME, "version": SERVICE_VERSION,
                  "description": "Emergency fail-closed mode; retrieval and browser rendering are unavailable."},
+        "servers": [{"url": urls["base"]}],
+        "externalDocs": {
+            "description": "SmartFetch discovery documentation",
+            "url": urls["docs"],
+        },
         "x-smartfetch-mode": "emergency_fail_closed",
         "x-smartfetch-tools": _emergency_identities(),
         "paths": {
@@ -984,11 +1006,22 @@ def emergency_docs_html(urls: dict) -> str:
         "tools": _emergency_identities(),
     }
     metadata = json.dumps(status, separators=(",", ":"), ensure_ascii=True)
+    free_links = "".join(
+        f'<a href="{escape(urls[key], quote=True)}">{label}</a>'
+        for key, label in (
+            ("meta", "Metadata"),
+            ("x402", "Community x402 manifest"),
+            ("openapi", "OpenAPI 3.1"),
+            ("llms", "Agent discovery summary"),
+            ("mcp", "POST /mcp"),
+        )
+    )
     return (
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<title>SmartFetch emergency availability</title></head><body>"
         f"<h1>SmartFetch {SERVICE_VERSION}</h1><p>Retrieval and browser rendering are temporarily unavailable. "
         "Do not submit a payment for these operations.</p>"
+        f"<nav>{free_links}</nav>"
         "<p>Future successful retrieved results may identify external content with "
         "<code>content_trust: untrusted_external</code>; no retrieval executes in this mode.</p>"
         f'<script id="smartfetch-availability" type="application/json">{metadata}</script>'
@@ -1000,6 +1033,11 @@ def emergency_llms_text(urls: dict) -> str:
     lines = [
         f"# SmartFetch {SERVICE_VERSION} emergency availability",
         "Retrieval and browser rendering are temporarily unavailable; no payment challenge is active.",
+        f"- [Community x402 manifest]({urls['x402']})",
+        f"- [Documentation]({urls['docs']})",
+        f"- [OpenAPI 3.1]({urls['openapi']})",
+        f"- [Metadata]({urls['meta']})",
+        f"- [Remote MCP Streamable HTTP]({urls['mcp']})",
         "BEGIN SMARTFETCH AVAILABILITY",
         "mode: emergency_fail_closed",
         "fetch.availability: unavailable",

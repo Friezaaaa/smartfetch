@@ -13,7 +13,8 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --no-cache-dir --upgrade pip==26.2.1 \
+ && python -m pip install --no-cache-dir -r requirements.txt
 COPY --chown=10001:10001 smartfetch ./smartfetch
 COPY --chown=10001:10001 tests/container_emergency_smoke.py ./tests/container_emergency_smoke.py
 

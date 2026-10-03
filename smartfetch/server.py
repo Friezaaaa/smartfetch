@@ -8,7 +8,7 @@ import os
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from .access_logging import uvicorn_log_config
 from .config import HOST, PORT, SERVICE_NAME, SERVICE_VERSION
@@ -77,6 +77,13 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
     async def x402_manifest(request: Request):
         return emergency_x402_manifest(public_urls(request))
 
+    @application.get("/.well-known/glama.json")
+    async def glama_ownership():
+        return JSONResponse({
+            "$schema": "https://glama.ai/mcp/schemas/connector.json",
+            "maintainers": [{"email": "smartfetch.contact@gmail.com"}],
+        })
+
     @application.get("/openapi.json")
     async def openapi(request: Request):
         return emergency_openapi_document(public_urls(request))
@@ -93,9 +100,9 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
     async def robots(request: Request):
         return robots_text(public_urls(request))
 
-    @application.get("/sitemap.xml", response_class=PlainTextResponse)
+    @application.get("/sitemap.xml")
     async def sitemap(request: Request):
-        return sitemap_xml(public_urls(request))
+        return Response(content=sitemap_xml(public_urls(request)), media_type="application/xml")
 
     return BoundedRequestMiddleware(EmergencyDispatch(application))
 

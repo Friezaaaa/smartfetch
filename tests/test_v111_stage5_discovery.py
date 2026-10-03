@@ -48,11 +48,10 @@ class Stage5ConditionalDiscoveryTests(unittest.TestCase):
             meta = client.get("/meta").json()
             manifest = client.get("/.well-known/x402").json()
             self.assertEqual(set(openapi["paths"]), {"/fetch"})
-            self.assertEqual(meta["mcp"]["tools"], LEGACY_TOOLS)
+            self.assertEqual([tool["name"] for tool in meta["tools"]], LEGACY_TOOLS)
+            self.assertTrue(all(tool["availability"] == "unavailable" for tool in meta["tools"]))
             self.assertNotIn("capabilities", meta)
-            self.assertEqual(manifest["resources"], [
-                "http://testserver/fetch",
-            ])
+            self.assertEqual(manifest["resources"], [])
             self.assertNotIn("v111", manifest)
 
     def test_incomplete_configuration_advertises_no_v111_capability(self):
@@ -66,85 +65,42 @@ class Stage5ConditionalDiscoveryTests(unittest.TestCase):
                 "/fetch",
             })
 
-    def test_enabled_discovery_exposes_eight_paths_and_six_tools(self):
+    def test_requested_enabled_discovery_still_exposes_no_v111_execution(self):
         app = self.app()
         with TestClient(app) as client:
             openapi = client.get("/openapi.json").json()
             meta = client.get("/meta").json()
             manifest = client.get("/.well-known/x402").json()
-        expected_paths = {item.rest_path for item in V111_VARIANTS}
-        self.assertEqual(set(openapi["paths"]) - {"/fetch"}, expected_paths)
-        self.assertEqual(meta["mcp"]["tools"], LEGACY_TOOLS + V111_TOOLS)
-        self.assertEqual(
-            set(meta["capabilities"]["variants"]),
-            {item.variant for item in V111_VARIANTS},
-        )
-        self.assertEqual(
-            set(manifest["resources"][1:]),
-            {f"http://testserver{path}" for path in expected_paths},
-        )
-        self.assertEqual(len(manifest["v111"]["http"]), 8)
-        self.assertEqual(len(manifest["v111"]["mcp"]), 8)
+        self.assertEqual(set(openapi["paths"]), {"/fetch"})
+        self.assertEqual([tool["name"] for tool in meta["tools"]], LEGACY_TOOLS)
+        self.assertEqual(manifest["resources"], [])
+        self.assertNotIn("capabilities", meta)
+        self.assertNotIn("v111", manifest)
+        for item in V111_VARIANTS:
+            self.assertNotIn(item.rest_path, openapi["paths"])
+            self.assertNotIn(item.mcp_resource, [tool["name"] for tool in meta["tools"]])
 
-    def test_enabled_openapi_payment_metadata_matches_generated_requirements(self):
+    def test_enabled_flag_cannot_create_payable_openapi_metadata(self):
         app = self.app()
         with TestClient(app) as client:
             document = client.get("/openapi.json").json()
-        for definition in V111_VARIANTS:
-            with self.subTest(variant=definition.variant):
-                operation = document["paths"][definition.rest_path]["post"]
-                requirement = app.state.smartfetch_mcp.v111_accepts[
-                    definition.mcp_resource
-                ][0]
-                payment = operation["x-x402"]
-                self.assertEqual(payment["scheme"], requirement.scheme)
-                self.assertEqual(payment["network"], requirement.network)
-                self.assertEqual(payment["amount"], requirement.amount)
-                self.assertEqual(payment["asset"], requirement.asset)
-                self.assertEqual(payment["payTo"], requirement.pay_to)
-                self.assertEqual(payment["resource"], definition.rest_path)
-                self.assertEqual(
-                    operation["x-payment-info"]["price"]["amount"],
-                    f"{int(requirement.amount) / 1_000_000:.6f}",
-                )
-                self.assertEqual(set(operation["responses"]), {
-                    "200", "400", "402", "413", "415", "422", "502",
-                    "503", "504",
-                })
-                self.assertEqual(
-                    operation["parameters"][0]["name"],
-                    "PAYMENT-SIGNATURE",
-                )
-                self.assertIn(
-                    "PAYMENT-REQUIRED",
-                    operation["responses"]["402"]["headers"],
-                )
-                self.assertIn(
-                    "PAYMENT-RESPONSE",
-                    operation["responses"]["200"]["headers"],
-                )
+        self.assertEqual(set(document["paths"]), {"/fetch"})
+        operation = document["paths"]["/fetch"]["post"]
+        self.assertEqual(operation["x-smartfetch-availability"], "unavailable")
+        self.assertFalse(operation["payment_challenge_enabled"])
+        for forbidden in ("x-x402", "x-payment-info", "PAYMENT-SIGNATURE",
+                          "PAYMENT-REQUIRED", "PAYMENT-RESPONSE"):
+            self.assertNotIn(forbidden, str(operation))
 
-    def test_rest_schemas_do_not_expose_path_discriminators(self):
+    def test_public_fetch_schema_has_no_v111_path_discriminators(self):
         app = self.app()
         with TestClient(app) as client:
             paths = client.get("/openapi.json").json()["paths"]
-        for definition in V111_VARIANTS:
-            schema = paths[definition.rest_path]["post"]["requestBody"][
-                "content"
-            ]["application/json"]["schema"]
-            self.assertNotIn("mode", schema.get("properties", {}))
-            self.assertNotIn("source_type", schema.get("properties", {}))
-            if definition.variant in {"results", "answer"}:
-                self.assertNotIn("max_sources", schema["properties"])
-            if (
-                definition.capability == "search_and_extract"
-                and definition.variant != "structured"
-            ):
-                self.assertNotIn("json_schema", schema["properties"])
-            if definition.capability == "extract_structured_data":
-                self.assertIn("json_schema", schema["properties"])
-            if definition.variant != "webpage":
-                self.assertNotIn("render_mode", schema["properties"])
+        self.assertEqual(set(paths), {"/fetch"})
+        schema = paths["/fetch"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+        self.assertEqual(set(schema["properties"]), {"url", "max_chars", "force_browser"})
+        for name in ("mode", "source_type", "max_sources", "json_schema", "render_mode"):
+            self.assertNotIn(name, schema["properties"])
 
 
 if __name__ == "__main__":

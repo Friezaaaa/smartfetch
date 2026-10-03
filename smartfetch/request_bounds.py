@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 import json
+import secrets
 
 from .config import (
     MAX_CONSECUTIVE_EMPTY_BODY_CHUNKS,
@@ -112,6 +113,28 @@ class BoundedRequestMiddleware:
         self.paths = frozenset(paths)
 
     async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http":
+            request_id = secrets.token_hex(8)
+            scope["smartfetch.request_id"] = request_id
+            original_send = send
+
+            async def send_with_headers(message):
+                if message["type"] == "http.response.start":
+                    message = dict(message)
+                    protected = {b"cache-control", b"x-content-type-options", b"x-request-id"}
+                    headers = [
+                        (name, value) for name, value in message.get("headers", [])
+                        if name.lower() not in protected
+                    ]
+                    headers.extend([
+                        (b"cache-control", b"no-store"),
+                        (b"x-content-type-options", b"nosniff"),
+                        (b"x-request-id", request_id.encode("ascii")),
+                    ])
+                    message["headers"] = headers
+                await original_send(message)
+
+            send = send_with_headers
         if (
             scope.get("type") != "http"
             or scope.get("method") != "POST"

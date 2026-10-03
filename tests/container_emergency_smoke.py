@@ -1,6 +1,7 @@
 """Run inside the built emergency image against its own loopback service."""
 
 import argparse
+import importlib.metadata
 import json
 import os
 import shutil
@@ -47,6 +48,8 @@ def main():
     assert base == "http://127.0.0.1:8787", "only container loopback is allowed"
     assert os.getuid() == os.getgid() == 10001
     assert all(shutil.which(name) is None for name in ("chromium", "ffmpeg", "ffprobe"))
+    assert importlib.metadata.version("pypdf") == "6.19.0"
+    assert importlib.metadata.version("pip") == "26.2.1"
 
     status, _, data = request(base, "/health")
     assert status == 200

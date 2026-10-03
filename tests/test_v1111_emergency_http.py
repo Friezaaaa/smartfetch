@@ -2,6 +2,9 @@
 
 import importlib
 import os
+import re
+import socket
+import subprocess
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -10,6 +13,35 @@ from fastapi.testclient import TestClient
 
 ORDINARY_BODY = b'{"success":false,"error_code":"retrieval_unavailable","error":"Retrieval is temporarily unavailable"}'
 BROWSER_BODY = b'{"success":false,"error_code":"browser_unavailable","error":"Browser rendering is temporarily unavailable"}'
+
+
+def _assert_shared_headers(response):
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert re.fullmatch(r"[0-9a-f]{16}", response.headers["x-request-id"])
+    for name in (b"cache-control", b"x-content-type-options", b"x-request-id"):
+        assert sum(key.lower() == name for key, _ in response.headers.raw) == 1
+
+
+@pytest.mark.parametrize("path", [
+    "/health", "/", "/meta", "/openapi.json", "/docs", "/llms.txt",
+    "/.well-known/x402", "/.well-known/glama.json", "/robots.txt", "/sitemap.xml",
+])
+def test_free_responses_preserve_generated_security_and_cache_headers(path):
+    _, app = _app()
+    with (
+        patch.object(socket, "getaddrinfo", side_effect=AssertionError("DNS entered")) as dns,
+        patch.object(socket, "create_connection", side_effect=AssertionError("network entered")) as network,
+        patch.object(subprocess, "Popen", side_effect=AssertionError("worker entered")) as worker,
+        TestClient(app) as client,
+    ):
+        response = client.get(path, headers={"X-Request-ID": "client-chosen-canary"})
+    assert response.status_code == 200
+    _assert_shared_headers(response)
+    assert response.headers["x-request-id"] != "client-chosen-canary"
+    dns.assert_not_called()
+    network.assert_not_called()
+    worker.assert_not_called()
 
 
 def _app():
@@ -46,6 +78,7 @@ def test_valid_fetch_is_unavailable_before_retrieval_or_payment(payload, expecte
     assert response.headers["content-length"] == str(len(expected))
     assert response.headers["retry-after"] == "3600"
     assert response.headers["cache-control"] == "no-store"
+    _assert_shared_headers(response)
     assert all("payment" not in name.lower() for name in response.headers)
     assert b"private-canary" not in response.content
     assert b"secret-payment-canary" not in response.content
@@ -72,6 +105,7 @@ def test_invalid_fetch_is_not_relabelled_unavailable(body, content_type, status)
         )
     assert response.status_code == status
     assert response.headers["cache-control"] == "no-store"
+    _assert_shared_headers(response)
     assert "payment-required" not in response.headers
     assert "payment-response" not in response.headers
     assert b"proof-canary" not in response.content
@@ -84,7 +118,65 @@ def test_get_and_head_fetch_remain_method_not_allowed():
         head_result = client.head("/fetch")
     assert get_result.status_code == head_result.status_code == 405
     assert get_result.headers["allow"] == head_result.headers["allow"] == "POST"
+    _assert_shared_headers(get_result)
+    _assert_shared_headers(head_result)
     assert head_result.content == b""
+
+
+def test_get_fetch_preserves_machine_guidance_and_discloses_emergency_unavailability():
+    import socket
+    import x402.http.middleware.fastapi as official_http
+    import x402.server as official_server
+
+    _, app = _app()
+    with (
+        patch.object(official_http, "payment_middleware", wraps=official_http.payment_middleware) as wrapper,
+        patch.object(official_server.x402ResourceServer, "verify_payment", wraps=official_server.x402ResourceServer.verify_payment) as verify,
+        patch.object(official_server.x402ResourceServer, "settle_payment", wraps=official_server.x402ResourceServer.settle_payment) as settle,
+        patch.object(socket, "getaddrinfo", side_effect=AssertionError("DNS entered")) as dns,
+        TestClient(app) as client,
+    ):
+        response = client.get("/fetch", headers={"PAYMENT-SIGNATURE": "private-proof-canary"})
+    assert response.status_code == 405
+    assert response.headers["allow"] == "POST"
+    assert response.headers["content-type"] == "application/json"
+    assert response.headers["cache-control"] == "no-store"
+    assert len(response.content) <= 256
+    guidance = response.json()
+    assert guidance["error"] == "method_not_allowed"
+    assert guidance["openapi"] == "/openapi.json"
+    assert guidance["documentation"] == "/docs"
+    assert guidance["payment_discovery"] == "/.well-known/x402"
+    assert guidance["retrieval_available"] is False
+    assert guidance["mode"] == "emergency_fail_closed"
+    assert b"private-proof-canary" not in response.content
+    assert all("payment" not in name.lower() for name in response.headers)
+    for boundary in (wrapper, verify, settle, dns):
+        boundary.assert_not_called()
+
+
+def test_head_fetch_preserves_empty_guidance_and_machine_unavailability_header():
+    import socket
+    import x402.http.middleware.fastapi as official_http
+    import x402.server as official_server
+
+    _, app = _app()
+    with (
+        patch.object(official_http, "payment_middleware", wraps=official_http.payment_middleware) as wrapper,
+        patch.object(official_server.x402ResourceServer, "verify_payment", wraps=official_server.x402ResourceServer.verify_payment) as verify,
+        patch.object(official_server.x402ResourceServer, "settle_payment", wraps=official_server.x402ResourceServer.settle_payment) as settle,
+        patch.object(socket, "getaddrinfo", side_effect=AssertionError("DNS entered")) as dns,
+        TestClient(app) as client,
+    ):
+        response = client.head("/fetch", headers={"PAYMENT-SIGNATURE": "private-proof-canary"})
+    assert response.status_code == 405
+    assert response.headers["allow"] == "POST"
+    assert response.headers["x-smartfetch-availability"] == "unavailable"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.content == b""
+    assert all("payment" not in name.lower() for name in response.headers)
+    for boundary in (wrapper, verify, settle, dns):
+        boundary.assert_not_called()
 
 
 @pytest.mark.parametrize("path", [

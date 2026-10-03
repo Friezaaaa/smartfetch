@@ -19,6 +19,12 @@ _ERRORS = {
     "unsupported_media_type": b'{"success":false,"error_code":"unsupported_media_type","error":"Unsupported media type"}',
 }
 _METHOD_NOT_ALLOWED = b'{"success":false,"error_code":"method_not_allowed","error":"Method not allowed"}'
+_FETCH_METHOD_GUIDANCE = (
+    b'{"error":"method_not_allowed","message":"Use POST /fetch.",'
+    b'"openapi":"/openapi.json","documentation":"/docs",'
+    b'"payment_discovery":"/.well-known/x402",'
+    b'"retrieval_available":false,"mode":"emergency_fail_closed"}'
+)
 
 
 def _compact(payload: dict) -> bytes:
@@ -60,6 +66,19 @@ async def _send_json(send, status: int, body: bytes, *, unavailable: bool = Fals
     await send({"type": "http.response.body", "body": body})
 
 
+async def _send_fetch_method_guidance(send, method: str):
+    body = b"" if method == "HEAD" else _FETCH_METHOD_GUIDANCE
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(body)).encode("ascii")),
+        (b"cache-control", b"no-store"),
+        (b"allow", b"POST"),
+        (b"x-smartfetch-availability", b"unavailable"),
+    ]
+    await send({"type": "http.response.start", "status": 405, "headers": headers})
+    await send({"type": "http.response.body", "body": body})
+
+
 class EmergencyDispatch:
     def __init__(self, app):
         self.app = app
@@ -78,6 +97,9 @@ class EmergencyDispatch:
         path = scope["path"]
         method = scope.get("method")
         if method != "POST":
+            if path == "/fetch" and method in ("GET", "HEAD"):
+                await _send_fetch_method_guidance(send, method)
+                return
             body = b"" if method == "HEAD" else _METHOD_NOT_ALLOWED
             await _send_json(send, 405, body, allow=True)
             return
@@ -103,7 +125,7 @@ class EmergencyDispatch:
             await _send_json(send, 200, _mcp_unavailable(call.jsonrpc_id, call.browser))
             try:
                 emit_unavailable_attempt(
-                    request_id=secrets.token_hex(8),
+                    request_id=scope.get("smartfetch.request_id") or secrets.token_hex(8),
                     surface="mcp",
                     tool=call.tool,
                     code="browser_unavailable" if call.browser else "retrieval_unavailable",
@@ -121,7 +143,7 @@ class EmergencyDispatch:
         await _send_json(send, 503, _UNAVAILABLE[code], unavailable=True)
         try:
             emit_unavailable_attempt(
-                request_id=secrets.token_hex(8),
+                request_id=scope.get("smartfetch.request_id") or secrets.token_hex(8),
                 surface="fetch",
                 tool=None,
                 code=code,

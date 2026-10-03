@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -22,6 +23,14 @@ BROWSER = {
     "error_code": "browser_unavailable",
     "error": "Browser rendering is temporarily unavailable",
 }
+
+
+def assert_shared_headers(response):
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert re.fullmatch(r"[0-9a-f]{16}", response.headers["x-request-id"])
+    for name in (b"cache-control", b"x-content-type-options", b"x-request-id"):
+        assert sum(key.lower() == name for key, _ in response.headers.raw) == 1
 
 
 def rpc(client, method, params=None, request_id=1, headers=None):
@@ -52,6 +61,8 @@ def test_initialize_and_list_are_free_and_four_tools_are_natively_unavailable():
         started = initialize(client)
         listed = rpc(client, "tools/list", {}, 2)
     assert started.status_code == listed.status_code == 200
+    assert_shared_headers(started)
+    assert_shared_headers(listed)
     assert started.json()["result"]["serverInfo"]["name"] == "SmartFetch"
     tools = listed.json()["result"]["tools"]
     assert [tool["name"] for tool in tools] == list(MCP_TOOLS)
@@ -96,6 +107,7 @@ def test_every_tool_call_is_exact_bounded_unavailable_before_sdk_handler(tool, b
     body = {"jsonrpc": "2.0", "id": 1, "result": expected_call_result(expected)}
     encoded = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()
     assert result.status_code == 200
+    assert_shared_headers(result)
     assert result.content == encoded
     assert result.headers["content-type"] == "application/json; charset=utf-8"
     assert result.headers["cache-control"] == "no-store"
@@ -110,6 +122,7 @@ def test_non_post_mcp_methods_are_405_before_sdk(method):
     with TestClient(server.create_app()) as client:
         result = client.request(method, "/mcp", headers=HEADERS)
     assert result.status_code == 405
+    assert_shared_headers(result)
     assert result.headers["allow"] == "POST"
     assert result.headers["cache-control"] == "no-store"
     assert result.content == (b"" if method == "HEAD" else b'{"success":false,"error_code":"method_not_allowed","error":"Method not allowed"}')
@@ -124,6 +137,7 @@ def test_other_mcp_methods_are_finite_not_available(method):
     with TestClient(server.create_app()) as client:
         result = rpc(client, method, {}, 7)
     assert result.status_code == 200
+    assert_shared_headers(result)
     assert result.json() == {"jsonrpc": "2.0", "id": 7, "error": {"code": -32601, "message": "Method not available"}}
     assert result.headers["cache-control"] == "no-store"
 
@@ -144,6 +158,7 @@ def test_malformed_mcp_envelopes_are_not_unavailable(body):
     with TestClient(server.create_app()) as client:
         result = client.post("/mcp", content=body, headers=HEADERS)
     assert result.status_code == 400
+    assert_shared_headers(result)
     assert b"unavailable" not in result.content
     assert result.headers["cache-control"] == "no-store"
 
