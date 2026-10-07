@@ -75,7 +75,7 @@ def _parse_json(body: bytes, headers: tuple[tuple[bytes, bytes], ...]) -> dict:
         raise EmergencyRequestError(415, "unsupported_media_type")
     try:
         parsed = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         raise EmergencyRequestError(400, "invalid_json") from None
     if type(parsed) is not dict:
         raise EmergencyRequestError(400, "invalid_request")
@@ -121,6 +121,11 @@ def classify_mcp(
     request_id = payload.get("id")
     if type(request_id) not in (str, int):
         raise EmergencyRequestError(400, "invalid_request")
+    if type(request_id) is str:
+        try:
+            request_id.encode("utf-8")
+        except UnicodeEncodeError:
+            raise EmergencyRequestError(400, "invalid_request") from None
     if len(json.dumps(request_id, separators=(",", ":")).encode("utf-8")) > 128:
         raise EmergencyRequestError(400, "invalid_request")
     if method in FREE_MCP_METHODS:

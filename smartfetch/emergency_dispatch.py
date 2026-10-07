@@ -84,19 +84,23 @@ class EmergencyDispatch:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if (
+        terminal_unhealthy = (
             scope.get("type") == "http"
             and scope.get("path") != "/health"
             and getattr(self.app.state, "terminal_unhealthy", False)
-        ):
-            await _send_json(send, 503, _UNAVAILABLE["service_unhealthy"], unavailable=True)
-            return
+        )
         if scope.get("type") != "http" or scope.get("path") not in ("/fetch", "/mcp"):
+            if terminal_unhealthy:
+                await _send_json(send, 503, _UNAVAILABLE["service_unhealthy"], unavailable=True)
+                return
             await self.app(scope, receive, send)
             return
         path = scope["path"]
         method = scope.get("method")
         if method != "POST":
+            if terminal_unhealthy:
+                await _send_json(send, 503, _UNAVAILABLE["service_unhealthy"], unavailable=True)
+                return
             if path == "/fetch" and method in ("GET", "HEAD"):
                 await _send_fetch_method_guidance(send, method)
                 return
@@ -119,6 +123,9 @@ class EmergencyDispatch:
                     body = _ERRORS[exc.code]
                 await _send_json(send, exc.status, body)
                 return
+            if terminal_unhealthy:
+                await _send_json(send, 503, _UNAVAILABLE["service_unhealthy"], unavailable=True)
+                return
             if isinstance(call, FreeMCPMethod):
                 await self.app(scope, receive, send)
                 return
@@ -138,6 +145,9 @@ class EmergencyDispatch:
             call = classify_fetch(bounded.body, bounded.headers)
         except EmergencyRequestError as exc:
             await _send_json(send, exc.status, _ERRORS[exc.code])
+            return
+        if terminal_unhealthy:
+            await _send_json(send, 503, _UNAVAILABLE["service_unhealthy"], unavailable=True)
             return
         code = "browser_unavailable" if call.browser else "retrieval_unavailable"
         await _send_json(send, 503, _UNAVAILABLE[code], unavailable=True)
