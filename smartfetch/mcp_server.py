@@ -9,7 +9,7 @@ from mcp.types import CallToolResult, TextContent
 from pydantic import Field
 from starlette.routing import Route
 
-from .config import HOST, MAX_REQUEST_BODY_BYTES
+from .config import HOST, MAX_REQUEST_BODY_BYTES, SERVICE_VERSION
 from .mcp_logging import configure_mcp_sdk_logging
 
 
@@ -64,6 +64,7 @@ def create_emergency_mcp() -> SmartFetchMCP:
         json_response=True,
         max_request_body_size=MAX_REQUEST_BODY_BYTES,
     )
+    mcp._mcp_server.version = SERVICE_VERSION
     configure_mcp_sdk_logging()
 
     async def fetch_webpage(

@@ -3,12 +3,16 @@
 import asyncio
 import json
 import re
+import socket
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+import x402.mcp as official_mcp
+from x402.server import x402ResourceServer
 
 from smartfetch import server
+from smartfetch.config import SERVICE_VERSION
 from smartfetch.mcp_server import MCP_TOOLS, create_smartfetch_mcp
 
 
@@ -64,6 +68,7 @@ def test_initialize_and_list_are_free_and_four_tools_are_natively_unavailable():
     assert_shared_headers(started)
     assert_shared_headers(listed)
     assert started.json()["result"]["serverInfo"]["name"] == "SmartFetch"
+    assert started.json()["result"]["serverInfo"]["version"] == SERVICE_VERSION
     tools = listed.json()["result"]["tools"]
     assert [tool["name"] for tool in tools] == list(MCP_TOOLS)
     for tool in tools:
@@ -161,6 +166,39 @@ def test_malformed_mcp_envelopes_are_not_unavailable(body):
     assert_shared_headers(result)
     assert b"unavailable" not in result.content
     assert result.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize(("method", "params", "request_id"), [
+    ("initialize", {"clientInfo": "private-canary"}, 1),
+    ("ping", "private-canary", 2),
+    ("tools/list", {"cursor": {"private": "private-canary"}}, 3),
+    ("notifications/initialized", "private-canary", None),
+])
+def test_malformed_free_method_params_are_private_and_rejected_before_sdk_or_work(
+    method, params, request_id, caplog,
+):
+    payload = {"jsonrpc": "2.0", "method": method, "params": params}
+    if request_id is not None:
+        payload["id"] = request_id
+    with (
+        patch.object(official_mcp, "create_payment_wrapper", side_effect=AssertionError("payment entered")) as payment,
+        patch.object(x402ResourceServer, "verify_payment", side_effect=AssertionError("verification entered")) as verify,
+        patch.object(x402ResourceServer, "settle_payment", side_effect=AssertionError("settlement entered")) as settle,
+        patch.object(socket, "getaddrinfo", side_effect=AssertionError("DNS entered")) as dns,
+        TestClient(server.create_app()) as client,
+    ):
+        result = client.post("/mcp", json=payload, headers=HEADERS)
+    assert result.status_code == 400
+    assert_shared_headers(result)
+    assert result.content == b'{"success":false,"error_code":"invalid_request","error":"Invalid request"}'
+    assert len(result.content) <= 128
+    assert "private-canary" not in caplog.text
+    assert "private-canary" not in result.text
+    assert "payment-response" not in result.headers
+    payment.assert_not_called()
+    verify.assert_not_called()
+    settle.assert_not_called()
+    dns.assert_not_called()
 
 
 def test_payment_headers_are_opaque_and_repeated_requests_remain_unavailable():

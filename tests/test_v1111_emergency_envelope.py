@@ -172,7 +172,13 @@ def _mcp_message(method, *, request_id=1, params=None):
 
 
 def test_mcp_only_four_lifecycle_methods_are_free():
-    for method in ("initialize", "ping", "tools/list"):
+    initialized = _classify_mcp(_mcp_message("initialize", params={
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "emergency-test", "version": "1"},
+    }))
+    assert (initialized.method, initialized.jsonrpc_id) == ("initialize", 1)
+    for method in ("ping", "tools/list"):
         classified = _classify_mcp(_mcp_message(method))
         assert (classified.method, classified.jsonrpc_id) == (method, 1)
     notification = _classify_mcp(b'{"jsonrpc":"2.0","method":"notifications/initialized"}')

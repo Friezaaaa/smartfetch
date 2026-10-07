@@ -5,6 +5,8 @@ import json
 from typing import Literal
 
 from jsonschema import Draft202012Validator, FormatChecker
+from mcp.types import InitializeRequest, InitializedNotification, ListToolsRequest, PingRequest
+from pydantic import ValidationError
 
 from .bazaar import FETCH_INPUT_SCHEMA, RENDER_INPUT_SCHEMA
 
@@ -42,6 +44,12 @@ MCP_RENDER_ARGUMENT_SCHEMA = {
 }
 _MCP_FETCH_VALIDATOR = Draft202012Validator(MCP_FETCH_ARGUMENT_SCHEMA)
 _MCP_RENDER_VALIDATOR = Draft202012Validator(MCP_RENDER_ARGUMENT_SCHEMA)
+_FREE_MCP_MODELS = {
+    "initialize": InitializeRequest,
+    "notifications/initialized": InitializedNotification,
+    "ping": PingRequest,
+    "tools/list": ListToolsRequest,
+}
 
 
 class EmergencyRequestError(ValueError):
@@ -91,6 +99,13 @@ def _validate_arguments(arguments: dict, *, render: bool = False, mcp: bool = Fa
         raise EmergencyRequestError(422, "invalid_request")
 
 
+def _validate_free_mcp_params(payload: dict, method: str) -> None:
+    try:
+        _FREE_MCP_MODELS[method].model_validate(payload)
+    except ValidationError:
+        raise EmergencyRequestError(400, "invalid_request") from None
+
+
 def classify_fetch(
     body: bytes,
     headers: tuple[tuple[bytes, bytes], ...],
@@ -116,6 +131,7 @@ def classify_mcp(
     if method == "notifications/initialized":
         if "id" in payload:
             raise EmergencyRequestError(400, "invalid_request")
+        _validate_free_mcp_params(payload, method)
         return FreeMCPMethod(method=method, jsonrpc_id=None)
 
     request_id = payload.get("id")
@@ -129,6 +145,7 @@ def classify_mcp(
     if len(json.dumps(request_id, separators=(",", ":")).encode("utf-8")) > 128:
         raise EmergencyRequestError(400, "invalid_request")
     if method in FREE_MCP_METHODS:
+        _validate_free_mcp_params(payload, method)
         return FreeMCPMethod(method=method, jsonrpc_id=request_id)
     if method != "tools/call":
         raise EmergencyRequestError(200, "method_not_available", request_id)
