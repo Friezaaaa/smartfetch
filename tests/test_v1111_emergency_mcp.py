@@ -201,6 +201,38 @@ def test_malformed_free_method_params_are_private_and_rejected_before_sdk_or_wor
     dns.assert_not_called()
 
 
+@pytest.mark.parametrize("method", [
+    "initialize", "ping", "tools/list", "notifications/initialized",
+])
+def test_deep_extra_free_method_params_fail_before_sdk_serialization_or_logging(method, caplog):
+    nested = {"private": "private-review-canary"}
+    for _ in range(300):
+        nested = {"next": nested}
+    params = {"extra": nested}
+    if method == "initialize":
+        params.update({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "emergency-test", "version": "1"},
+        })
+    payload = {"jsonrpc": "2.0", "method": method, "params": params}
+    if method != "notifications/initialized":
+        payload["id"] = 9
+    with (
+        patch.object(official_mcp, "create_payment_wrapper", side_effect=AssertionError("payment entered")) as payment,
+        patch.object(socket, "getaddrinfo", side_effect=AssertionError("DNS entered")) as dns,
+        TestClient(server.create_app()) as client,
+    ):
+        result = client.post("/mcp", content=json.dumps(payload).encode(), headers=HEADERS)
+    assert result.status_code == 400
+    assert_shared_headers(result)
+    assert result.content == b'{"success":false,"error_code":"invalid_request","error":"Invalid request"}'
+    assert "private-review-canary" not in result.text
+    assert "private-review-canary" not in caplog.text
+    payment.assert_not_called()
+    dns.assert_not_called()
+
+
 def test_payment_headers_are_opaque_and_repeated_requests_remain_unavailable():
     with TestClient(server.create_app()) as client:
         results = [

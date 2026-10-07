@@ -5,7 +5,7 @@ import json
 from typing import Literal
 
 from jsonschema import Draft202012Validator, FormatChecker
-from mcp.types import InitializeRequest, InitializedNotification, ListToolsRequest, PingRequest
+from mcp.types import InitializeRequest, InitializedNotification, JSONRPCMessage, ListToolsRequest, PingRequest
 from pydantic import ValidationError
 
 from .bazaar import FETCH_INPUT_SCHEMA, RENDER_INPUT_SCHEMA
@@ -102,7 +102,8 @@ def _validate_arguments(arguments: dict, *, render: bool = False, mcp: bool = Fa
 def _validate_free_mcp_params(payload: dict, method: str) -> None:
     try:
         _FREE_MCP_MODELS[method].model_validate(payload)
-    except ValidationError:
+        JSONRPCMessage.model_validate(payload).root.model_dump(mode="json", exclude_none=True)
+    except (ValidationError, ValueError, RecursionError):
         raise EmergencyRequestError(400, "invalid_request") from None
 
 
