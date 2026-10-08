@@ -74,6 +74,10 @@ class FreeMCPMethod:
     jsonrpc_id: str | int | None
 
 
+def _reject_nonstandard_json_constant(value: str) -> None:
+    raise ValueError("nonstandard JSON constant")
+
+
 def _parse_json(body: bytes, headers: tuple[tuple[bytes, bytes], ...]) -> dict:
     content_types = [value for name, value in headers if name.lower() == b"content-type"]
     if len(content_types) != 1:
@@ -82,7 +86,9 @@ def _parse_json(body: bytes, headers: tuple[tuple[bytes, bytes], ...]) -> dict:
     if media_type != b"application/json":
         raise EmergencyRequestError(415, "unsupported_media_type")
     try:
-        parsed = json.loads(body.decode("utf-8"))
+        parsed = json.loads(
+            body.decode("utf-8"), parse_constant=_reject_nonstandard_json_constant
+        )
     except (UnicodeDecodeError, ValueError, RecursionError):
         raise EmergencyRequestError(400, "invalid_json") from None
     if type(parsed) is not dict:

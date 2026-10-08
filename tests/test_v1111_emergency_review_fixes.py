@@ -134,3 +134,39 @@ def test_5000_digit_integer_is_finite_invalid_json_before_work(path):
     assert response.headers["cache-control"] == "no-store"
     for boundary in (http, mcp, verify, settle, dns):
         boundary.assert_not_called()
+
+
+@pytest.mark.parametrize("path", ["/fetch", "/mcp"])
+@pytest.mark.parametrize("constant", [b"NaN", b"Infinity", b"-Infinity"])
+@pytest.mark.parametrize("nested", [False, True])
+def test_nonstandard_json_constant_is_finite_invalid_json_before_work(path, constant, nested):
+    extra = b'{"value":[' + constant + b"]}" if nested else constant
+    if path == "/fetch":
+        body = b'{"url":"https://example.com/","extra":' + extra + b"}"
+    else:
+        body = (
+            b'{"jsonrpc":"2.0","id":1,"method":"tools/call",'
+            b'"params":{"name":"fetch_webpage","arguments":'
+            b'{"url":"https://example.com/","extra":' + extra + b"}}}"
+        )
+    with (
+        patch.object(official_http, "payment_middleware", side_effect=AssertionError("HTTP x402 entered")) as http,
+        patch.object(official_mcp, "create_payment_wrapper", side_effect=AssertionError("MCP x402 entered")) as mcp,
+        patch.object(official_server.x402ResourceServer, "verify_payment", side_effect=AssertionError("payment verified")) as verify,
+        patch.object(official_server.x402ResourceServer, "settle_payment", side_effect=AssertionError("payment settled")) as settle,
+        patch.object(socket, "getaddrinfo", side_effect=AssertionError("DNS entered")) as dns,
+        TestClient(create_app(), raise_server_exceptions=False) as client,
+    ):
+        response = client.post(
+            path,
+            content=body,
+            headers={"Content-Type": "application/json", "PAYMENT-SIGNATURE": "private-canary"},
+        )
+    assert response.status_code == 400
+    assert response.content == INVALID_JSON
+    assert response.headers["content-type"] == "application/json; charset=utf-8"
+    assert response.headers["cache-control"] == "no-store"
+    assert b"private-canary" not in response.content
+    assert all("payment" not in name.lower() for name in response.headers)
+    for boundary in (http, mcp, verify, settle, dns):
+        boundary.assert_not_called()
