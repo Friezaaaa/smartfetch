@@ -903,10 +903,13 @@ def sitemap_xml(urls):
 
 def _emergency_identities():
     """The stable identities are informational, never payable resources."""
-    return [
-        {"name": name, "availability": "unavailable", "payment_challenge_enabled": False}
-        for name in TOOL_NAMES
-    ]
+    identities = []
+    for name in TOOL_NAMES:
+        identity = {"name": name, "availability": "unavailable", "payment_challenge_enabled": False}
+        if name == "render_webpage":
+            identity["error_code"] = "browser_unavailable"
+        identities.append(identity)
+    return identities
 
 
 def emergency_meta(urls: dict) -> dict:

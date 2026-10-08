@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import socket
+import subprocess
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -199,6 +200,31 @@ def test_malformed_free_method_params_are_private_and_rejected_before_sdk_or_wor
     verify.assert_not_called()
     settle.assert_not_called()
     dns.assert_not_called()
+
+
+@pytest.mark.parametrize("params", [42, "private-canary", None, []])
+def test_unknown_method_malformed_params_fail_before_payment_or_retrieval(params, caplog):
+    payload = {"jsonrpc": "2.0", "id": 9, "method": "resources/read", "params": params}
+    with (
+        patch.object(official_mcp, "create_payment_wrapper", side_effect=AssertionError("payment entered")) as payment,
+        patch.object(x402ResourceServer, "verify_payment", side_effect=AssertionError("verification entered")) as verify,
+        patch.object(x402ResourceServer, "settle_payment", side_effect=AssertionError("settlement entered")) as settle,
+        patch.object(socket, "getaddrinfo", side_effect=AssertionError("DNS entered")) as dns,
+        patch.object(socket, "create_connection", side_effect=AssertionError("network entered")) as network,
+        patch.object(subprocess, "Popen", side_effect=AssertionError("worker entered")) as worker,
+        TestClient(server.create_app()) as client,
+    ):
+        result = client.post("/mcp", json=payload, headers={**HEADERS, "PAYMENT-SIGNATURE": "private-payment-canary"})
+    assert result.status_code == 400
+    assert result.content == b'{"success":false,"error_code":"invalid_request","error":"Invalid request"}'
+    assert_shared_headers(result)
+    assert b"private-canary" not in result.content
+    assert b"private-payment-canary" not in result.content
+    assert "private-canary" not in caplog.text
+    assert "private-payment-canary" not in caplog.text
+    assert "payment-response" not in result.headers
+    for boundary in (payment, verify, settle, dns, network, worker):
+        boundary.assert_not_called()
 
 
 @pytest.mark.parametrize("method", [

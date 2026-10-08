@@ -155,6 +155,8 @@ def classify_mcp(
         _validate_free_mcp_params(payload, method)
         return FreeMCPMethod(method=method, jsonrpc_id=request_id)
     if method != "tools/call":
+        if "params" in payload and type(payload["params"]) is not dict:
+            raise EmergencyRequestError(400, "invalid_request")
         raise EmergencyRequestError(200, "method_not_available", request_id)
 
     params = payload.get("params")

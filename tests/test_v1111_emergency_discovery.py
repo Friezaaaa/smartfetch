@@ -1,9 +1,13 @@
 """Free emergency discovery cannot advertise a payable retrieval resource."""
 
 import json
+import re
+import socket
+import subprocess
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+import x402.mcp as official_mcp
 
 from smartfetch import server
 from smartfetch.mcp_server import MCP_TOOLS
@@ -66,6 +70,32 @@ def test_root_meta_and_x402_manifest_are_machine_readable_but_not_payable():
     assert manifest["retrieval_available"] is False
     _assert_no_payable_fields(meta)
     _assert_no_payable_fields(manifest)
+
+
+def test_root_and_meta_identify_render_tool_browser_failure_without_work():
+    with (
+        patch.object(official_mcp, "create_payment_wrapper", side_effect=AssertionError("payment entered")) as payment,
+        patch.object(socket, "getaddrinfo", side_effect=AssertionError("DNS entered")) as dns,
+        patch.object(socket, "create_connection", side_effect=AssertionError("network entered")) as network,
+        patch.object(subprocess, "Popen", side_effect=AssertionError("worker entered")) as worker,
+        TestClient(server.create_app()) as client,
+    ):
+        root = client.get("/")
+        meta = client.get("/meta")
+    assert root.status_code == meta.status_code == 200
+    match = re.search(r'<script id="smartfetch-availability" type="application/json">([^<]+)</script>', root.text)
+    assert match is not None
+    for identities in (json.loads(match.group(1))["tools"], meta.json()["tools"]):
+        assert [item["name"] for item in identities] == list(MCP_TOOLS)
+        render = next(item for item in identities if item["name"] == "render_webpage")
+        assert render["availability"] == "unavailable"
+        assert render["payment_challenge_enabled"] is False
+        assert render["error_code"] == "browser_unavailable"
+        _assert_no_payable_fields(identities)
+    payment.assert_not_called()
+    dns.assert_not_called()
+    network.assert_not_called()
+    worker.assert_not_called()
 
 
 def test_openapi_docs_and_llms_report_unavailable_not_success_or_402():
