@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -41,6 +42,22 @@ def rpc(base, method, params=None, request_id=1):
     }, MCP_HEADERS)
 
 
+def wait_for_health(base, timeout_seconds=30):
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            result = request(base, "/health")
+        except urllib.error.URLError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("health readiness deadline exceeded")
+            time.sleep(min(0.1, remaining))
+            continue
+        if time.monotonic() > deadline:
+            raise TimeoutError("health readiness deadline exceeded")
+        return result
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", required=True)
@@ -51,7 +68,7 @@ def main():
     assert importlib.metadata.version("pypdf") == "6.19.0"
     assert importlib.metadata.version("pip") == "26.2.1"
 
-    status, _, data = request(base, "/health")
+    status, _, data = wait_for_health(base)
     assert status == 200
     assert {key: json.loads(data)[key] for key in ("version", "mode", "retrieval_available", "browser_available")} == {
         "version": "1.11.1", "mode": "emergency_fail_closed",
