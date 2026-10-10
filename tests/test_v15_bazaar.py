@@ -5,14 +5,8 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from jsonschema import Draft202012Validator
-from x402.extensions.bazaar import (
-    bazaar_resource_server_extension,
-    validate_discovery_extension,
-    validate_discovery_extension_spec,
-)
+from x402.extensions.bazaar import validate_discovery_extension, validate_discovery_extension_spec
 from x402.http.middleware import fastapi as x402_fastapi_middleware
-from x402.http.utils import decode_payment_required_header
-from x402.schemas import SupportedKind, SupportedResponse
 
 from smartfetch import server
 from smartfetch.bazaar import fetch_discovery_extension
@@ -27,13 +21,6 @@ PAID_SETTINGS = X402Settings(
     '$0.005',
     BASE_SEPOLIA,
 )
-SUPPORTED = SupportedResponse(kinds=[SupportedKind(
-    x402Version=2,
-    scheme='exact',
-    network=BASE_SEPOLIA,
-)])
-
-
 class V16BazaarDiscoveryTests(unittest.TestCase):
     def test_static_post_fetch_declaration_is_valid_before_installation(self):
         bazaar = fetch_discovery_extension()['bazaar']
@@ -76,13 +63,7 @@ class V16BazaarDiscoveryTests(unittest.TestCase):
         self.assertEqual(example['returned_markdown_chars'], len(markdown))
         self.assertEqual(example['links_returned'], len(example['links']))
 
-    @patch(
-        'x402.http.HTTPFacilitatorClient.get_supported',
-        return_value=SUPPORTED,
-    )
-    def test_paid_fetch_402_contains_valid_agent_ready_bazaar_metadata(
-        self, _get_supported
-    ):
+    def test_static_bazaar_declaration_remains_valid_but_is_not_publicly_payable(self):
         with TestClient(
             server.create_app(PAID_SETTINGS),
             base_url='https://agent.example',
@@ -92,34 +73,16 @@ class V16BazaarDiscoveryTests(unittest.TestCase):
                 'max_chars': 20000,
                 'force_browser': False,
             })
+            manifest = client.get('/.well-known/x402').json()
 
-        self.assertEqual(response.status_code, 402)
-        payment_required = decode_payment_required_header(
-            response.headers['payment-required']
-        )
-        extensions = payment_required.extensions or {}
-        self.assertIn('bazaar', extensions)
-        bazaar = extensions['bazaar']
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()['error_code'], 'retrieval_unavailable')
+        self.assertNotIn('payment-required', response.headers)
+        self.assertEqual(manifest['resources'], [])
+        bazaar = fetch_discovery_extension()['bazaar']
 
         self.assertTrue(validate_discovery_extension_spec(bazaar).valid)
         self.assertTrue(validate_discovery_extension(bazaar).valid)
-        self.assertEqual(
-            str(payment_required.resource.url),
-            'https://agent.example/fetch',
-        )
-        self.assertEqual(payment_required.resource.service_name, 'SmartFetch')
-        self.assertEqual(
-            payment_required.resource.description,
-            'Read, fetch, scrape, or extract any public webpage or URL for '
-            'AI agents. Returns clean text, Markdown, links, and metadata, '
-            'with automatic browser rendering for JavaScript-heavy pages.',
-        )
-        self.assertEqual(
-            payment_required.resource.tags,
-            ['web-reader', 'web-scraping', 'markdown', 'browser', 'agents'],
-        )
-        self.assertLessEqual(len(payment_required.resource.description), 500)
-
         input_info = bazaar['info']['input']
         self.assertEqual(input_info, {
             'type': 'http',
@@ -155,7 +118,9 @@ class V16BazaarDiscoveryTests(unittest.TestCase):
         output_example = bazaar['info']['output']['example']
         self.assertTrue(output_example['success'])
         self.assertEqual(output_example['render_method'], 'http')
-        self.assertEqual(output_example['service_version'], '1.11.0')
+        # This declaration is retained for compatibility but is not advertised
+        # while retrieval is unavailable.
+        self.assertEqual(output_example['service_version'], '1.11.1')
         self.assertTrue({
             'requested_url',
             'final_url',
@@ -182,12 +147,6 @@ class V16BazaarDiscoveryTests(unittest.TestCase):
             '1242309f47ddf83e2056d4a4eceb16e2a90a7b10f2240cf4bb70b046d89eed6d',
         )
 
-        accepted = payment_required.accepts[0]
-        self.assertEqual(accepted.scheme, 'exact')
-        self.assertEqual(accepted.network, BASE_SEPOLIA)
-        self.assertEqual(accepted.pay_to, VALID_ADDRESS)
-        self.assertEqual(accepted.amount, '5000')
-
         serialized = json.dumps(bazaar, sort_keys=True)
         for forbidden in (
             'CDP_API_KEY_ID',
@@ -198,41 +157,19 @@ class V16BazaarDiscoveryTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, serialized)
 
-    @patch(
-        'x402.http.HTTPFacilitatorClient.get_supported',
-        return_value=SUPPORTED,
-    )
-    def test_bazaar_extension_is_registered_before_middleware_installation(
-        self, _get_supported
-    ):
-        observed_extensions = []
-        real_payment_middleware = x402_fastapi_middleware.payment_middleware
-
-        def inspect_registration(*, routes, server, **kwargs):
-            observed_extensions.append(server._extensions.get('bazaar'))
-            return real_payment_middleware(
-                routes=routes,
-                server=server,
-                **kwargs,
-            )
-
+    def test_emergency_app_never_registers_bazaar_payment_middleware(self):
         with patch.object(
-            x402_fastapi_middleware,
-            'payment_middleware',
-            side_effect=inspect_registration,
-        ):
-            app = server.create_app(PAID_SETTINGS)
+            x402_fastapi_middleware, 'payment_middleware',
+            side_effect=AssertionError('x402 middleware entered'),
+        ) as middleware:
+            with TestClient(server.create_app(PAID_SETTINGS)) as client:
+                response = client.post('/fetch', json={
+                    'url': 'https://example.com/article',
+                })
+        self.assertEqual(response.status_code, 503)
+        middleware.assert_not_called()
 
-        self.assertEqual(
-            observed_extensions,
-            [bazaar_resource_server_extension],
-        )
-
-    @patch(
-        'x402.http.HTTPFacilitatorClient.get_supported',
-        return_value=SUPPORTED,
-    )
-    def test_only_post_fetch_is_paid_and_discoverable(self, _get_supported):
+    def test_free_discovery_and_post_fetch_is_unavailable_not_payable(self):
         with TestClient(server.create_app(PAID_SETTINGS)) as client:
             for path in ('/', '/health', '/meta'):
                 with self.subTest(path=path):
@@ -247,11 +184,9 @@ class V16BazaarDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(get_fetch.status_code, 405)
         self.assertNotIn('payment-required', get_fetch.headers)
-        self.assertEqual(paid_fetch.status_code, 402)
-        decoded = decode_payment_required_header(
-            paid_fetch.headers['payment-required']
-        )
-        self.assertIn('bazaar', decoded.extensions or {})
+        self.assertEqual(paid_fetch.status_code, 503)
+        self.assertEqual(paid_fetch.json()['error_code'], 'retrieval_unavailable')
+        self.assertNotIn('payment-required', paid_fetch.headers)
 
 
 if __name__ == '__main__':

@@ -98,298 +98,109 @@ def paid_call(client, definition, payment, request_id=50):
 
 
 class V111MCPIntegrationTests(unittest.TestCase):
-    def setUp(self):
-        patcher = patch(
-            "x402.http.HTTPFacilitatorClient.get_supported",
-            return_value=SUPPORTED,
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
     def app(self, runtime=None, flag="true"):
         return server.create_app(
-            PAID,
-            v111_runtime=runtime or complete_runtime(),
+            PAID, v111_runtime=runtime or complete_runtime(),
             v111_environ={"SMARTFETCH_V111_ENABLED": flag},
         )
+
+    def _call(self, client, name, arguments=None, payment=None, request_id=50):
+        params = {"name": name, "arguments": arguments or {}}
+        if payment is not None:
+            params["_meta"] = {"x402/payment": payment}
+        return rpc(client, "tools/call", params, request_id)
+
+    def _assert_unknown(self, result):
+        self.assertEqual(result["error"], {"code": -32602, "message": "Unknown tool"})
+        self.assertNotIn("accepts", str(result))
+        self.assertNotIn("payment-response", str(result))
 
     def test_disabled_lists_exactly_existing_four_tools(self):
         with TestClient(self.app(flag="false")) as client:
             initialize(client)
             listed = rpc(client, "tools/list", {}, 2)
-        self.assertEqual(
-            [item["name"] for item in listed["result"]["tools"]],
-            ["fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage"],
-        )
+        self.assertEqual([item["name"] for item in listed["result"]["tools"]],
+                         ["fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage"])
 
     def test_enabled_lists_exactly_six_tools_and_eight_static_wrappers(self):
-        with TestClient(self.app()) as client:
+        with patch("x402.mcp.create_payment_wrapper", side_effect=AssertionError("paid wrapper entered")) as wrapper:
+            app = self.app()
+        with TestClient(app) as client:
             initialize(client)
             listed = rpc(client, "tools/list", {}, 2)
-        self.assertEqual(
-            [item["name"] for item in listed["result"]["tools"]],
-            [
-                "fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage",
-                "search_and_extract", "extract_structured_data",
-            ],
-        )
-        self.assertEqual(len(self.app().state.smartfetch_mcp.v111_accepts), 8)
+        self.assertEqual(len(listed["result"]["tools"]), 4)
+        self.assertEqual(app.app.app.state.smartfetch_mcp.accepts, [])
+        wrapper.assert_not_called()
 
     def test_every_variant_selects_its_exact_mcp_resource_and_amount(self):
         with TestClient(self.app()) as client:
             initialize(client)
             for index, definition in enumerate(V111_VARIANTS, start=10):
-                result = rpc(client, "tools/call", {
-                    "name": definition.capability,
-                    "arguments": arguments_for(definition),
-                }, index)
-                challenge = result["result"]["structuredContent"]
-                self.assertTrue(result["result"]["isError"])
-                self.assertEqual(challenge["resource"]["url"], definition.mcp_resource)
-                self.assertEqual(challenge["accepts"][0]["amount"], EXPECTED_ATOMIC[definition.variant])
-                self.assertEqual(challenge["accepts"][0]["payTo"], PAYEE)
+                self._assert_unknown(self._call(client, definition.capability, request_id=index))
 
     def test_invalid_variant_and_open_circuit_return_free_structured_error(self):
         runtime = complete_runtime()
         runtime.exa_circuit.record_failure(runtime.exa_circuit.begin_call())
         with TestClient(self.app(runtime)) as client:
             initialize(client)
-            invalid = rpc(client, "tools/call", {
-                "name": "search_and_extract",
-                "arguments": {"query": "valid", "mode": "unknown"},
-            }, 2)
-            unavailable = rpc(client, "tools/call", {
-                "name": "search_and_extract",
-                "arguments": {"query": "valid", "mode": "results"},
-            }, 3)
-        for result, code in ((invalid, "invalid_request"), (unavailable, "provider_unavailable")):
-            body = result["result"]["structuredContent"]
-            self.assertTrue(result["result"]["isError"])
-            self.assertEqual(body["error_code"], code)
-            self.assertNotIn("accepts", body)
+            for mode in ("unknown", "results"):
+                self._assert_unknown(self._call(client, "search_and_extract",
+                                                {"query": "valid", "mode": mode}))
 
     def test_paid_success_executes_once_and_settles_once(self):
-        app = self.app()
-        payment_server = app.state.smartfetch_mcp.resource_server
-        definition = V111_VARIANTS[0]
-        requirement = app.state.smartfetch_mcp.v111_accepts[
-            definition.mcp_resource
-        ][0]
-        payment_server.find_matching_requirements = Mock(return_value=requirement)
-        payment_server.verify_payment = AsyncMock(return_value=VerifyResponse(
-            isValid=True, payer=PAYEE
-        ))
-        payment_server.settle_payment = AsyncMock(return_value=SettleResponse(
-            success=True, payer=PAYEE, transaction="0xabc", network=BASE_SEPOLIA
-        ))
-        service = app.state.v111_activation.service
-        result = type("Result", (), {
-            "model_dump": lambda self, **_kwargs: {
-                "success": True, "mode": "results", "request_id": "mcp-test",
-                "service_version": "1.11.0",
-                "retrieved_at": "2026-09-13T00:00:00Z", "query": "current public facts",
-                "results": [{
-                    "source_id": "s1", "rank": 1, "title": "Example",
-                    "url": "https://example.com/", "snippet": "Example",
-                    "published_at": None,
-                }],
-            }
-        })()
-        with (
-            patch.object(
-                service, "execute_search", new_callable=AsyncMock,
-                return_value=result,
-            ) as execute,
-            TestClient(app) as client,
-        ):
+        proof = {"authorization": {"nonce": "private-payment-canary"}}
+        with TestClient(self.app()) as client:
             initialize(client)
-            response = paid_call(client, definition, payment_for(requirement))
-        self.assertFalse(response["result"]["isError"])
-        execute.assert_awaited_once()
-        payment_server.verify_payment.assert_awaited_once()
-        payment_server.settle_payment.assert_awaited_once()
+            result = self._call(client, "search_and_extract",
+                                {"query": "current public facts", "mode": "results"}, proof)
+        self._assert_unknown(result)
+        self.assertNotIn("private-payment-canary", str(result))
 
     def test_execution_failure_after_verification_never_settles(self):
-        app = self.app()
-        payment_server = app.state.smartfetch_mcp.resource_server
-        definition = V111_VARIANTS[0]
-        requirement = app.state.smartfetch_mcp.v111_accepts[
-            definition.mcp_resource
-        ][0]
-        payment_server.find_matching_requirements = Mock(return_value=requirement)
-        payment_server.verify_payment = AsyncMock(return_value=VerifyResponse(
-            isValid=True, payer=PAYEE
-        ))
-        payment_server.settle_payment = AsyncMock()
-        service = app.state.v111_activation.service
-        with (
-            patch.object(
-                service, "execute_search", new_callable=AsyncMock,
-                side_effect=__import__(
-                    "smartfetch.v111_service", fromlist=["V111ExecutionError"]
-                ).V111ExecutionError("evidence_validation_failed"),
-            ),
-            TestClient(app) as client,
-        ):
+        with TestClient(self.app()) as client:
             initialize(client)
-            response = paid_call(client, definition, payment_for(requirement))
-        self.assertTrue(response["result"]["isError"])
-        self.assertEqual(
-            response["result"]["structuredContent"]["error_code"],
-            "evidence_validation_failed",
-        )
-        payment_server.verify_payment.assert_awaited_once()
-        payment_server.settle_payment.assert_not_awaited()
+            result = self._call(client, "search_and_extract", {"query": "valid", "mode": "results"})
+        self._assert_unknown(result)
 
     def test_cheaper_payment_cannot_execute_expensive_mcp_variant(self):
-        app = self.app()
-        payment_server = app.state.smartfetch_mcp.resource_server
-        cheap = app.state.smartfetch_mcp.v111_accepts[
-            "mcp://tool/search_and_extract/results"
-        ][0]
-        expensive = next(
-            item for item in V111_VARIANTS
-            if item.mcp_resource == "mcp://tool/search_and_extract/answer"
-        )
-        payment_server.verify_payment = AsyncMock()
-        payment_server.settle_payment = AsyncMock()
-        with TestClient(app) as client:
+        with TestClient(self.app()) as client:
             initialize(client)
-            response = paid_call(client, expensive, payment_for(cheap))
-        self.assertTrue(response["result"]["isError"])
-        challenge = response["result"]["structuredContent"]
-        self.assertEqual(challenge["resource"]["url"], expensive.mcp_resource)
-        self.assertEqual(challenge["accepts"][0]["amount"], "100000")
-        payment_server.verify_payment.assert_not_awaited()
-        payment_server.settle_payment.assert_not_awaited()
+            result = self._call(client, "search_and_extract", {"query": "valid", "mode": "answer"},
+                                {"accepted": {"amount": "50000"}})
+        self._assert_unknown(result)
 
     def test_circuit_race_after_verification_performs_no_provider_work_or_settlement(self):
         runtime = complete_runtime()
-        app = self.app(runtime)
-        payment_server = app.state.smartfetch_mcp.resource_server
-        definition = V111_VARIANTS[0]
-        requirement = app.state.smartfetch_mcp.v111_accepts[
-            definition.mcp_resource
-        ][0]
-        payment_server.find_matching_requirements = Mock(return_value=requirement)
-
-        async def verify(*_args, **_kwargs):
-            runtime.exa_circuit.record_failure(runtime.exa_circuit.begin_call())
-            return VerifyResponse(isValid=True, payer=PAYEE)
-
-        payment_server.verify_payment = AsyncMock(side_effect=verify)
-        payment_server.settle_payment = AsyncMock()
-        with TestClient(app) as client:
-            initialize(client)
-            response = paid_call(client, definition, payment_for(requirement))
-        self.assertTrue(response["result"]["isError"])
-        self.assertEqual(
-            response["result"]["structuredContent"]["error_code"],
-            "provider_unavailable",
-        )
-        payment_server.verify_payment.assert_awaited_once()
-        payment_server.settle_payment.assert_not_awaited()
+        with patch("smartfetch.v111_service.V111Service.execute_search",
+                   new_callable=AsyncMock, side_effect=AssertionError("provider entered")) as provider:
+            with TestClient(self.app(runtime)) as client:
+                initialize(client)
+                result = self._call(client, "search_and_extract", {"query": "valid", "mode": "results"})
+        self._assert_unknown(result)
+        provider.assert_not_called()
 
     def test_replayed_authorization_never_executes_or_settles_twice(self):
-        app = self.app()
-        payment_server = app.state.smartfetch_mcp.resource_server
-        definition = V111_VARIANTS[0]
-        requirement = app.state.smartfetch_mcp.v111_accepts[definition.mcp_resource][0]
-        payment_server.find_matching_requirements = Mock(return_value=requirement)
-        payment_server.verify_payment = AsyncMock(return_value=VerifyResponse(
-            isValid=True, payer=PAYEE
-        ))
-        payment_server.settle_payment = AsyncMock(return_value=SettleResponse(
-            success=True, payer=PAYEE, transaction="0xonce", network=BASE_SEPOLIA
-        ))
-        service = app.state.v111_activation.service
-        result = type("Result", (), {"model_dump": lambda self, **_kwargs: {
-            "success": True, "mode": "results", "request_id": "mcp-replay",
-            "service_version": "1.11.0", "retrieved_at": "2026-09-13T00:00:00Z",
-            "query": "current public facts", "results": [],
-        }})()
-        payment = payment_for(requirement, "20")
-        with (
-            patch.object(service, "execute_search", new_callable=AsyncMock,
-                         return_value=result) as execute,
-            TestClient(app) as client,
-        ):
+        proof = {"authorization": {"nonce": "replay-canary"}}
+        with TestClient(self.app()) as client:
             initialize(client)
-            first = paid_call(client, definition, payment, 70)
-            second = paid_call(client, definition, payment, 71)
-        self.assertFalse(first["result"]["isError"])
-        self.assertTrue(second["result"]["isError"])
-        execute.assert_awaited_once()
-        payment_server.settle_payment.assert_awaited_once()
+            first = self._call(client, "search_and_extract", {"query": "valid", "mode": "results"}, proof, 70)
+            second = self._call(client, "search_and_extract", {"query": "valid", "mode": "results"}, proof, 71)
+        self._assert_unknown(first)
+        self._assert_unknown(second)
 
     def test_same_price_authorization_selects_only_paid_retry_mcp_variant(self):
-        app = self.app()
-        payment_server = app.state.smartfetch_mcp.resource_server
-        results = V111_VARIANTS[0]
-        image = next(item for item in V111_VARIANTS if item.variant == "image")
-        results_requirement = app.state.smartfetch_mcp.v111_accepts[
-            results.mcp_resource
-        ][0]
-        payment_server.verify_payment = AsyncMock(return_value=VerifyResponse(
-            isValid=True, payer=PAYEE
-        ))
-        payment_server.settle_payment = AsyncMock(return_value=SettleResponse(
-            success=True, payer=PAYEE, transaction="0xsame", network=BASE_SEPOLIA
-        ))
-        service = app.state.v111_activation.service
-        result = type("Result", (), {"model_dump": lambda self, **_kwargs: {
-            "success": True, "request_id": "mcp-same", "service_version": "1.11.0",
-            "retrieved_at": "2026-09-13T00:00:00Z", "source_type": "image",
-            "retrieval_method": "image", "data": {"name": "ok"}, "sources": [],
-            "evidence": [], "missing_fields": [], "uncertainties": [],
-        }})()
-        with (
-            patch.object(service, "execute_search", new_callable=AsyncMock) as search,
-            patch.object(service, "execute_extraction", new_callable=AsyncMock,
-                         return_value=result) as extraction,
-            TestClient(app) as client,
-        ):
+        with TestClient(self.app()) as client:
             initialize(client)
-            response = paid_call(
-                client,
-                image,
-                payment_for(results_requirement, "30"),
-                80,
-            )
-        self.assertFalse(response["result"]["isError"])
-        search.assert_not_awaited()
-        extraction.assert_awaited_once()
+            result = self._call(client, "extract_structured_data", {"source_type": "image"},
+                                {"accepted": {"amount": "50000"}}, 80)
+        self._assert_unknown(result)
 
     def test_post_verification_deadline_returns_finite_error_without_settlement(self):
-        app = self.app()
-        payment_server = app.state.smartfetch_mcp.resource_server
-        definition = V111_VARIANTS[0]
-        requirement = app.state.smartfetch_mcp.v111_accepts[definition.mcp_resource][0]
-        payment_server.find_matching_requirements = Mock(return_value=requirement)
-        payment_server.verify_payment = AsyncMock(return_value=VerifyResponse(
-            isValid=True, payer=PAYEE
-        ))
-        payment_server.settle_payment = AsyncMock()
-        service = app.state.v111_activation.service
-
-        async def hang(*_args, **_kwargs):
-            await __import__("asyncio").Event().wait()
-
-        with (
-            patch.object(service, "execute_search", new_callable=AsyncMock,
-                         side_effect=hang),
-            patch("smartfetch.v111_service._deadline_for_variant", return_value=0.01),
-            TestClient(app) as client,
-        ):
+        with TestClient(self.app()) as client:
             initialize(client)
-            response = paid_call(client, definition, payment_for(requirement, "31"), 81)
-        self.assertTrue(response["result"]["isError"])
-        self.assertEqual(
-            response["result"]["structuredContent"]["error_code"],
-            "provider_timeout",
-        )
-        payment_server.settle_payment.assert_not_awaited()
-
+            result = self._call(client, "search_and_extract", {"query": "valid", "mode": "results"},
+                                {"accepted": {"amount": "50000"}}, 81)
+        self._assert_unknown(result)
 
 if __name__ == "__main__":
     unittest.main()

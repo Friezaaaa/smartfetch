@@ -123,7 +123,9 @@ class V17MCPDiscoveryTests(unittest.TestCase):
         )
         tool = listed['result']['tools'][0]
         self.assertEqual(tool['name'], 'fetch_webpage')
-        self.assertEqual(tool['description'], FETCH_DESCRIPTION)
+        self.assertIn('unavailable', tool['description'].lower())
+        self.assertEqual(tool['_meta']['availability'], 'unavailable')
+        self.assertFalse(tool['_meta']['payment_challenge_enabled'])
         self.assertEqual(tool['inputSchema'], {
             'properties': {
                 'url': {'title': 'Url', 'type': 'string'},
@@ -144,7 +146,9 @@ class V17MCPDiscoveryTests(unittest.TestCase):
             'title': 'fetch_webpageArguments',
             'type': 'object',
         })
-        self.assertEqual(slash_response.status_code, 404)
+        self.assertEqual(slash_response.status_code, 307)
+        self.assertEqual(slash_response.headers['location'], 'http://testserver/mcp')
+        self.assertNotIn('payment-required', slash_response.headers)
 
     def test_meta_advertises_exact_streamable_http_route_and_tool(self):
         with TestClient(server.create_app(X402Settings(
@@ -155,20 +159,14 @@ class V17MCPDiscoveryTests(unittest.TestCase):
         ))) as client:
             meta = client.get('/meta').json()
 
-        self.assertEqual(meta['version'], '1.11.0')
-        self.assertEqual(meta['mcp'], {
-            'enabled': True,
-            'path': '/mcp',
-            'transport': 'streamable-http',
-            'tool': 'fetch_webpage',
-            'tools': [
-                'fetch_webpage',
-                'webpage_to_markdown',
-                'extract_webpage_text',
-                'render_webpage',
-            ],
-            'url': 'http://testserver/mcp',
-        })
+        self.assertEqual(meta['version'], '1.11.1')
+        self.assertEqual(meta['mcp']['url'], 'http://testserver/mcp')
+        self.assertEqual([tool['name'] for tool in meta['tools']], [
+            'fetch_webpage', 'webpage_to_markdown',
+            'extract_webpage_text', 'render_webpage',
+        ])
+        self.assertTrue(all(tool['availability'] == 'unavailable'
+                            for tool in meta['tools']))
 
 
 class V17MCPPaymentTests(unittest.TestCase):
@@ -182,120 +180,56 @@ class V17MCPPaymentTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         return server.create_app(paid_settings(network)), get_supported
 
-    def test_unpaid_call_challenges_without_fetching(self):
-        app, _get_supported = self._paid_app()
+    def test_unpaid_call_is_unavailable_without_payment_or_fetching(self):
+        app, get_supported = self._paid_app()
 
-        with (
-            patch('smartfetch.server._run_fetch', new_callable=AsyncMock) as fetch,
-            TestClient(app) as client,
-        ):
+        with TestClient(app) as client:
             initialize(client)
             listed = rpc(client, 'tools/list', {}, request_id=2)
-            challenge_response = call_fetch(client)
+            unavailable_response = call_fetch(client)
 
-        fetch.assert_not_awaited()
+        get_supported.assert_not_called()
         self.assertEqual(len(listed['result']['tools']), 4)
-        result = challenge_response['result']
+        result = unavailable_response['result']
         self.assertTrue(result['isError'])
-        challenge = result['structuredContent']
-        self.assertEqual(challenge['x402Version'], 2)
-        self.assertEqual(challenge['error'], 'Payment Required')
-        self.assertEqual(challenge['resource'], {
-            'url': 'mcp://tool/fetch_webpage',
-            'description': FETCH_DESCRIPTION,
-            'mimeType': 'application/json',
-            'serviceName': 'SmartFetch',
-        })
-        self.assertEqual(len(challenge['accepts']), 1)
-        accepted = challenge['accepts'][0]
-        self.assertEqual(accepted['scheme'], 'exact')
-        self.assertEqual(accepted['network'], BASE_SEPOLIA)
-        self.assertEqual(accepted['payTo'], VALID_ADDRESS)
-        self.assertEqual(accepted['amount'], '5000')
+        self.assertEqual(result['structuredContent']['error_code'],
+                         'retrieval_unavailable')
+        self.assertNotIn('accepts', json.dumps(result))
 
-    def test_valid_mocked_payment_fetches_once_and_settles_once(self):
-        app, _get_supported = self._paid_app()
-        mcp_payment = app.state.smartfetch_mcp
-        payment_requirement = mcp_payment.accepts[0]
-        resource_server = mcp_payment.resource_server
-        resource_server.find_matching_requirements = Mock(
-            return_value=payment_requirement,
-        )
-        resource_server.verify_payment = AsyncMock(return_value=VerifyResponse(
-            isValid=True,
-            payer=VALID_ADDRESS,
-        ))
-        resource_server.settle_payment = AsyncMock(return_value=SettleResponse(
-            success=True,
-            payer=VALID_ADDRESS,
-            transaction='0xabc123',
-            network=BASE_SEPOLIA,
-        ))
-        payment = {
-            'x402Version': 2,
-            'accepted': payment_requirement.model_dump(
-                by_alias=True,
-                exclude_none=True,
-            ),
-            'payload': {'mockAuthorization': 'public-test-value'},
-        }
-        fetch_result = {
-            'success': True,
-            'requested_url': 'https://example.com/',
-            'final_url': 'https://example.com/',
-            'status_code': 200,
-            'render_method': 'http',
-            'title': 'Example Domain',
-            'content': 'Example content',
-            'markdown': 'Example content',
-            'links': [],
-            'word_count': 2,
-            'content_hash': '0' * 64,
-            'low_quality': False,
-            'truncated': False,
-            'elapsed_ms': 10,
-            'max_chars': 20000,
-        }
-
+    def test_payment_payload_never_verifies_executes_or_settles(self):
+        app, get_supported = self._paid_app()
+        payment = {'mockAuthorization': 'private-proof-canary'}
         with (
-            patch(
-                'smartfetch.server._run_fetch',
-                new_callable=AsyncMock,
-                return_value=fetch_result,
-            ) as fetch,
+            patch('x402.server.x402ResourceServer.verify_payment',
+                  side_effect=AssertionError('verify entered')) as verify,
+            patch('x402.server.x402ResourceServer.settle_payment',
+                  side_effect=AssertionError('settle entered')) as settle,
             TestClient(app) as client,
         ):
             response = call_fetch(client, payment=payment)
-
-        fetch.assert_awaited_once_with('https://example.com/', False, 20000)
-        resource_server.verify_payment.assert_awaited_once()
-        resource_server.settle_payment.assert_awaited_once()
         result = response['result']
-        self.assertFalse(result['isError'])
-        body = json.loads(result['content'][0]['text'])
-        self.assertTrue(body['success'])
-        self.assertEqual(body['service_version'], '1.11.0')
-        self.assertRegex(body['request_id'], '^[0-9a-f]{16}$')
-        settlement = result['_meta']['x402/payment-response']
-        self.assertTrue(settlement['success'])
-        self.assertEqual(settlement['transaction'], '0xabc123')
-        self.assertEqual(settlement['network'], BASE_SEPOLIA)
+        self.assertTrue(result['isError'])
+        self.assertEqual(result['structuredContent']['error_code'],
+                         'retrieval_unavailable')
+        self.assertNotIn('private-proof-canary', json.dumps(result))
+        self.assertNotIn('payment-response', json.dumps(result).lower())
+        get_supported.assert_not_called()
+        verify.assert_not_called()
+        settle.assert_not_called()
 
-    def test_sepolia_and_mainnet_keep_existing_payment_configuration(self):
+    def test_sepolia_and_mainnet_settings_cannot_enable_payment(self):
         for network in (BASE_SEPOLIA, BASE_MAINNET):
             with self.subTest(network=network):
-                app, _get_supported = self._paid_app(network)
+                app, get_supported = self._paid_app(network)
                 with TestClient(app) as client:
-                    challenge = call_fetch(client)['result'][
+                    unavailable = call_fetch(client)['result'][
                         'structuredContent'
                     ]
-                accepted = challenge['accepts'][0]
-                self.assertEqual(accepted['scheme'], 'exact')
-                self.assertEqual(accepted['network'], network)
-                self.assertEqual(accepted['payTo'], VALID_ADDRESS)
-                self.assertEqual(accepted['amount'], '5000')
+                self.assertEqual(unavailable['error_code'], 'retrieval_unavailable')
+                self.assertNotIn('accepts', unavailable)
+                get_supported.assert_not_called()
 
-    def test_only_tool_execution_and_existing_post_fetch_are_paid(self):
+    def test_free_lifecycle_and_unavailable_http_and_mcp_execution(self):
         app, _get_supported = self._paid_app()
 
         with TestClient(app, base_url='https://agent.example') as client:
@@ -314,12 +248,11 @@ class V17MCPPaymentTests(unittest.TestCase):
         self.assertIn('result', initialize_response)
         self.assertEqual(len(list_response['result']['tools']), 4)
         self.assertTrue(mcp_challenge['result']['isError'])
-        self.assertEqual(http_challenge.status_code, 402)
-        decoded = decode_payment_required_header(
-            http_challenge.headers['payment-required']
-        )
-        self.assertIn('bazaar', decoded.extensions or {})
-        self.assertEqual(str(decoded.resource.url), 'https://agent.example/fetch')
+        self.assertEqual(mcp_challenge['result']['structuredContent']['error_code'],
+                         'retrieval_unavailable')
+        self.assertEqual(http_challenge.status_code, 503)
+        self.assertEqual(http_challenge.json()['error_code'], 'retrieval_unavailable')
+        self.assertNotIn('payment-required', http_challenge.headers)
 
     def test_server_mcp_layer_has_no_wallet_or_private_key_input(self):
         source = inspect.getsource(mcp_server).lower()
@@ -329,32 +262,27 @@ class V17MCPPaymentTests(unittest.TestCase):
         self.assertNotIn('private_key', signature.parameters)
         self.assertNotIn('wallet_secret', signature.parameters)
 
-    def test_mcp_initialization_failure_is_closed_and_redacts_secrets(self):
+    def test_mcp_initialization_does_not_construct_payment_server_or_expose_secrets(self):
         settings = paid_settings(BASE_MAINNET)
         stdout = io.StringIO()
         stderr = io.StringIO()
-
-        async def unused_fetch(_url, _force_browser, _max_chars):
-            raise AssertionError('fetch must not run during initialization')
 
         with (
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
             patch(
-                'smartfetch.mcp_server.create_x402_resource_server',
+                'smartfetch.payments.create_x402_resource_server',
                 side_effect=RuntimeError(CDP_KEY_SECRET),
-            ),
-            self.assertRaisesRegex(
-                RuntimeError,
-                '^x402 MCP initialization failed$',
-            ) as caught,
+            ) as resource,
         ):
-            mcp_server.create_smartfetch_mcp(settings, unused_fetch)
+            with TestClient(server.create_app(settings)) as client:
+                initialized = initialize(client)
+                listed = rpc(client, 'tools/list', {}, request_id=2)
 
-        exposed = ''.join(traceback.format_exception(caught.exception))
-        exposed += stdout.getvalue() + stderr.getvalue()
-        self.assertIsNone(caught.exception.__cause__)
-        self.assertIsNone(caught.exception.__context__)
+        self.assertIn('result', initialized)
+        self.assertEqual(len(listed['result']['tools']), 4)
+        resource.assert_not_called()
+        exposed = stdout.getvalue() + stderr.getvalue()
         self.assertNotIn(CDP_KEY_ID, exposed)
         self.assertNotIn(CDP_KEY_SECRET, exposed)
 

@@ -3,19 +3,22 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8787 \
-    HOST=0.0.0.0 \
-    CHROMIUM_PATH=/usr/bin/chromium \
-    MAX_CONCURRENT_BROWSERS=1 \
-    MAX_CONCURRENT_FETCHES=4
+    HOST=0.0.0.0
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends chromium ca-certificates ffmpeg=7:7.1.5-0+deb13u1 \
- && rm -rf /var/lib/apt/lists/*
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --gid 10001 smartfetch \
+ && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin smartfetch
 
 WORKDIR /app
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
+RUN python -m pip install --no-cache-dir --upgrade pip==26.2.1 \
+ && python -m pip install --no-cache-dir -r requirements.txt
+COPY --chown=10001:10001 smartfetch ./smartfetch
+COPY --chown=10001:10001 tests/container_emergency_smoke.py ./tests/container_emergency_smoke.py
+
+USER 10001:10001
 
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=4s --start-period=15s --retries=3 \

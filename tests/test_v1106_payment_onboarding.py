@@ -63,171 +63,68 @@ def create_paid_app():
 
 
 class PaymentOnboardingOpenAPITests(unittest.TestCase):
-    def test_402_header_example_matches_real_unpaid_challenge(self):
+    def test_public_openapi_matches_real_unavailable_response(self):
         app = create_paid_app()
-        generated = app.state.smartfetch_mcp.accepts[0]
-
         with TestClient(app, base_url='https://agent.example') as client:
             document = client.get('/openapi.json').json()
-            challenge_response = client.post('/fetch', json={
+            response = client.post('/fetch', json={
                 'url': 'https://example.com/',
             })
+        operation = document['paths']['/fetch']['post']
+        self.assertEqual(document['x-smartfetch-mode'], 'emergency_fail_closed')
+        self.assertEqual(operation['x-smartfetch-availability'], 'unavailable')
+        self.assertTrue(operation['requestBody']['required'])
+        self.assertIn('application/json', operation['requestBody']['content'])
+        self.assertIn('503', operation['responses'])
+        self.assertNotIn('402', operation['responses'])
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()['error_code'], 'retrieval_unavailable')
+        self.assertNotIn('payment-required', response.headers)
+        self.assertNotIn('payment-response', response.headers)
 
-        self.assertEqual(challenge_response.status_code, 402)
-        self.assertEqual(
-            set(challenge_response.json()),
-            {'request_id'},
-        )
-        live = decode_payment_required_header(
-            challenge_response.headers['payment-required']
-        )
-
-        response_402 = document['paths']['/fetch']['post']['responses']['402']
-        self.assertIn('headers', response_402)
-        self.assertIn('PAYMENT-REQUIRED', response_402['headers'])
-        documented = decode_payment_required_header(
-            response_402['headers']['PAYMENT-REQUIRED']['example']
-        )
-        body_contract = response_402['content']['application/json']
-
-        self.assertEqual(body_contract['schema'], {
-            'type': 'object',
-            'properties': {'request_id': {'type': 'string'}},
-            'required': ['request_id'],
-            'additionalProperties': False,
-        })
-        self.assertEqual(body_contract['example'], {
-            'request_id': 'a1b2c3d4e5f60708',
-        })
-        self.assertEqual(documented.x402_version, 2)
-        self.assertEqual(documented.resource.url, 'https://agent.example/fetch')
-
-        live_requirement = live.accepts[0]
-        documented_requirement = documented.accepts[0]
-        for field in ('scheme', 'network', 'amount', 'asset', 'pay_to'):
-            with self.subTest(field=field):
-                expected = getattr(generated, field)
-                self.assertEqual(getattr(live_requirement, field), expected)
-                self.assertEqual(getattr(documented_requirement, field), expected)
-
-    def test_openapi_places_all_three_x402_headers_correctly(self):
+    def test_openapi_advertises_no_actionable_x402_headers(self):
         app = create_paid_app()
         with TestClient(app) as client:
             operation = client.get('/openapi.json').json()['paths']['/fetch']['post']
 
-        self.assertIn('parameters', operation)
-        signature = next(
-            parameter for parameter in operation['parameters']
-            if parameter['name'] == 'PAYMENT-SIGNATURE'
-        )
-        self.assertEqual(signature['in'], 'header')
-        self.assertFalse(signature['required'])
-        self.assertEqual(signature['schema'], {'type': 'string'})
-        self.assertIn(
-            'PAYMENT-REQUIRED',
-            operation['responses']['402']['headers'],
-        )
-        self.assertIn(
-            'PAYMENT-RESPONSE',
-            operation['responses']['200']['headers'],
-        )
+        self.assertFalse(operation['payment_challenge_enabled'])
+        serialized = json.dumps(operation).lower()
+        for forbidden in ('payment-signature', 'payment-required',
+                          'payment-response', 'x-x402', 'accepts'):
+            self.assertNotIn(forbidden, serialized)
 
-    def test_openapi_has_realistic_502_example(self):
+    def test_openapi_has_finite_503_and_validation_responses(self):
         app = create_paid_app()
         with TestClient(app) as client:
-            response_502 = client.get('/openapi.json').json()[
-                'paths'
-            ]['/fetch']['post']['responses']['502']
+            responses = client.get('/openapi.json').json()[
+                'paths']['/fetch']['post']['responses']
 
-        self.assertIn('example', response_502['content']['application/json'])
-        self.assertEqual(
-            response_502['content']['application/json']['example'],
-            {
-                'success': False,
-                'error_code': 'fetch_failed',
-                'error': 'Retrieval failed',
-                'request_id': 'a1b2c3d4e5f60708',
-            },
-        )
+        self.assertEqual(set(responses), {'503', '400', '415', '422'})
+        self.assertEqual(responses['503']['description'],
+                         'Retrieval is temporarily unavailable')
 
-    def test_verified_http_502_never_calls_settlement(self):
-        facilitator = Mock()
-        facilitator.get_supported.return_value = SupportedResponse(kinds=[
-            SupportedKind(
-                x402Version=2,
-                scheme='exact',
-                network=BASE_MAINNET,
-            ),
-        ])
-        original_create = payments.create_x402_resource_server
-        http_resource_servers = []
-
-        def capture_http_resource_server(settings, *, register_bazaar=False):
-            resource_server = original_create(
-                settings,
-                register_bazaar=register_bazaar,
-            )
-            http_resource_servers.append(resource_server)
-            return resource_server
-
+    def test_payment_header_never_enters_verification_or_settlement(self):
         with (
-            patch(
-                'smartfetch.payments.create_facilitator',
-                return_value=facilitator,
-            ),
-            patch(
-                'smartfetch.payments.create_x402_resource_server',
-                side_effect=capture_http_resource_server,
-            ),
+            patch('smartfetch.payments.create_x402_resource_server',
+                  side_effect=AssertionError('payment server entered')) as resource,
+            patch('x402.server.x402ResourceServer.verify_payment',
+                  side_effect=AssertionError('verification entered')) as verify,
+            patch('x402.server.x402ResourceServer.settle_payment',
+                  side_effect=AssertionError('settlement entered')) as settle,
+            TestClient(server.create_app(paid_settings())) as client,
         ):
-            app = server.create_app(paid_settings())
-
-        self.assertEqual(len(http_resource_servers), 1)
-        resource_server = http_resource_servers[0]
-        requirement = app.state.smartfetch_mcp.accepts[0]
-        resource_server.verify_payment = AsyncMock(
-            return_value=ResourceVerifyResponse(verify=VerifyResponse(
-                isValid=True,
-                payer='0x2222222222222222222222222222222222222222',
-            )),
-        )
-        resource_server.settle_payment = AsyncMock()
-        payment = PaymentPayload(
-            accepted=requirement,
-            payload={'authorization': 'opaque-test-authorization'},
-        )
-
-        with (
-            patch(
-                'smartfetch.server._run_fetch',
-                new_callable=AsyncMock,
-                side_effect=RuntimeError('test retrieval failure'),
-            ),
-            TestClient(app) as client,
-        ):
-            response = client.post(
-                '/fetch',
-                headers={
-                    'PAYMENT-SIGNATURE': encode_payment_signature_header(
-                        payment,
-                    ),
-                },
-                json={'url': 'https://example.com/'},
-            )
-
-        self.assertEqual(
-            response.status_code,
-            502,
-            decode_payment_required_header(
-                response.headers['payment-required']
-            ).error if response.status_code == 402 else response.text,
-        )
-        self.assertEqual(response.json()['error_code'], 'fetch_failed')
-        resource_server.verify_payment.assert_awaited_once()
-        resource_server.settle_payment.assert_not_awaited()
+            response = client.post('/fetch',
+                                   headers={'PAYMENT-SIGNATURE': 'opaque-test-authorization'},
+                                   json={'url': 'https://example.com/'})
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()['error_code'], 'retrieval_unavailable')
+        self.assertNotIn('payment-response', response.headers)
+        resource.assert_not_called()
+        verify.assert_not_called()
+        settle.assert_not_called()
 
 class PaymentOnboardingDocumentationTests(unittest.TestCase):
-    def test_docs_and_llms_derive_active_payment_requirement(self):
+    def test_docs_and_llms_disclose_unavailable_not_payment_requirement(self):
         app = create_paid_app()
         with TestClient(app, base_url='https://agent.example') as client:
             docs = client.get('/docs').text
@@ -235,16 +132,12 @@ class PaymentOnboardingDocumentationTests(unittest.TestCase):
 
         for output in (docs, llms):
             with self.subTest(output=output[:20]):
-                self.assertIn('exact', output)
-                self.assertIn(PRICE, output)
-                self.assertIn(BASE_MAINNET, output)
-                self.assertIn(BASE_MAINNET_USDC, output)
+                self.assertIn('unavailable', output.lower())
+                self.assertNotIn(PRICE, output)
+                self.assertNotIn(BASE_MAINNET, output)
+                self.assertNotIn(BASE_MAINNET_USDC, output)
 
-    def test_docs_price_comes_from_generated_atomic_requirement(self):
-        app = create_paid_app()
-        generated = app.state.smartfetch_mcp.accepts[0].model_copy(
-            update={'amount': '8750'},
-        )
+    def test_emergency_docs_are_independent_of_configured_price(self):
         urls = {
             key: f'https://agent.example/{path}'
             for key, path in {
@@ -261,31 +154,26 @@ class PaymentOnboardingDocumentationTests(unittest.TestCase):
             }.items()
         }
 
-        docs = discovery.docs_html(urls, paid_settings(), generated)
-        llms = discovery.llms_text(urls, paid_settings(), generated)
+        docs = discovery.emergency_docs_html(urls)
+        llms = discovery.emergency_llms_text(urls)
 
         for output in (docs, llms):
-            self.assertIn('$0.00875', output)
+            self.assertIn('unavailable', output.lower())
+            self.assertNotIn('$0.00875', output)
             self.assertNotIn(PRICE, output)
 
-    def test_docs_explain_safe_http_payment_flow(self):
+    def test_docs_do_not_invite_payment_for_unavailable_retrieval(self):
         app = create_paid_app()
         with TestClient(app, base_url='https://agent.example') as client:
             docs = client.get('/docs').text
 
-        for required in (
-            'PAYMENT-REQUIRED',
-            'PAYMENT-SIGNATURE',
-            'PAYMENT-RESPONSE',
-            'scheme, network, asset, amount, and payee',
-            'settles only after successful delivery',
-            'status 400 or higher',
-            SECRET_SAFETY,
-            'scripts/paid_fetch_mainnet_test.py',
-            'docs.x402.org/getting-started/quickstart-for-buyers',
-        ):
-            with self.subTest(required=required):
-                self.assertIn(required, docs)
+        self.assertIn('temporarily unavailable', docs)
+        self.assertIn('Do not submit a payment', docs)
+        for forbidden in ('PAYMENT-REQUIRED', 'PAYMENT-SIGNATURE',
+                          'PAYMENT-RESPONSE', 'paid_fetch_mainnet_test.py',
+                          'quickstart-for-buyers'):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, docs)
 
     def test_llms_is_bounded_and_uses_markdown_navigation_links(self):
         app = create_paid_app()
@@ -297,21 +185,17 @@ class PaymentOnboardingDocumentationTests(unittest.TestCase):
             '- [OpenAPI 3.1](https://agent.example/openapi.json)',
             llms,
         )
-        self.assertIn(
-            '- [HTTP buyer example]('
-            'https://github.com/Friezaaaa/smartfetch/blob/main/'
-            'scripts/paid_fetch_mainnet_test.py)',
-            llms,
-        )
+        self.assertIn('- [Documentation](https://agent.example/docs)', llms)
+        self.assertNotIn('paid_fetch_mainnet_test.py', llms)
         self.assertNotIn('```', llms)
 
-    def test_version_and_registry_manifest_are_v1106(self):
+    def test_version_and_registry_manifest_are_emergency_v1111(self):
         manifest = json.loads(
             (REPO_ROOT / 'server.json').read_text(encoding='utf-8')
         )
 
-        self.assertEqual(SERVICE_VERSION, '1.11.0')
-        self.assertEqual(manifest['version'], '1.11.0')
+        self.assertEqual(SERVICE_VERSION, '1.11.1')
+        self.assertEqual(manifest['version'], '1.11.1')
         self.assertEqual(MCP_TOOLS, (
             'fetch_webpage',
             'webpage_to_markdown',

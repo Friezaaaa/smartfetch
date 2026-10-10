@@ -59,8 +59,8 @@ class ProviderStage2ScopeTests(unittest.IsolatedAsyncioTestCase):
                 await provider.synthesize_answer(AnswerRequest("q", (("s1", "source"),)))
             client.assert_not_called()
 
-    def test_stage2_does_not_change_release_version_or_contain_public_tool_wiring(self) -> None:
-        self.assertEqual(SERVICE_VERSION, "1.11.0")
+    def test_stage2_keeps_emergency_release_version_and_no_public_tool_wiring(self) -> None:
+        self.assertEqual(SERVICE_VERSION, "1.11.1")
         provider_source = "\n".join(
             (ROOT / "smartfetch" / "providers" / filename).read_text(
                 encoding="utf-8"

@@ -5,6 +5,7 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 import json
 import logging
+import re
 import sys
 from typing import Iterator, Optional
 
@@ -82,6 +83,11 @@ _V111_COUNT_FIELDS = frozenset((
 ))
 _V111_MAX_COUNT = 100_000_000
 _V111_MAX_COST_MICRO_USD = 1_000_000_000
+_EMERGENCY_TOOLS = frozenset((
+    "fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage",
+))
+_EMERGENCY_CODES = frozenset(("retrieval_unavailable", "browser_unavailable"))
+_EMERGENCY_ID = re.compile(r"[0-9a-f]{16}\Z")
 
 
 def _bounded_string(value, limit: int) -> Optional[str]:
@@ -226,5 +232,47 @@ def emit_v111_activity(event: str, **fields) -> None:
     """Emit only the finite V1.11 activity extension fields."""
     try:
         emit_activity(event, _v111_event=True, **fields)
+    except Exception:
+        return None
+
+
+def emit_unavailable_attempt(
+    *, request_id: str, surface: str, tool: str | None,
+    code: str, status: int,
+) -> None:
+    """Write only one bounded, independently allowlisted emergency event."""
+    try:
+        if type(request_id) is not str or _EMERGENCY_ID.fullmatch(request_id) is None:
+            return None
+        if type(surface) is not str or type(code) is not str:
+            return None
+        if surface not in ("fetch", "mcp") or code not in _EMERGENCY_CODES:
+            return None
+        if type(status) is not int or status != (503 if surface == "fetch" else 200):
+            return None
+        if (tool is not None and type(tool) is not str) or (
+            surface == "fetch" and tool is not None
+        ) or (
+            surface == "mcp" and tool not in _EMERGENCY_TOOLS
+        ):
+            return None
+        record = {
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            "event": "unavailable_attempt",
+            "request_id": request_id,
+            "surface": surface,
+            "error_code": code,
+            "status": status,
+        }
+        if tool is not None:
+            record["tool"] = tool
+        line = json.dumps(record, separators=(",", ":"), ensure_ascii=True) + "\n"
+        if len(line.encode("utf-8")) > 512:
+            return None
+        stream = _HANDLER.stream
+        written = stream.write(line)
+        if written != len(line):
+            return None
+        stream.flush()
     except Exception:
         return None

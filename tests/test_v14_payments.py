@@ -302,14 +302,10 @@ class V14FacilitatorSelectionTests(unittest.TestCase):
 
 class V14RouteAndMetadataTests(unittest.TestCase):
     @patch('x402.http.HTTPFacilitatorClient.get_supported')
-    def test_mainnet_protects_only_post_fetch_and_reports_mainnet(
+    def test_mainnet_settings_cannot_enable_emergency_retrieval(
         self, get_supported
     ):
-        get_supported.return_value = SupportedResponse(kinds=[SupportedKind(
-            x402Version=2,
-            scheme='exact',
-            network=BASE_MAINNET,
-        )])
+        get_supported.side_effect = AssertionError('facilitator entered')
         settings = payments.load_x402_settings(enabled_env(
             BASE_MAINNET,
             CDP_API_KEY_ID=CDP_KEY_ID,
@@ -319,29 +315,34 @@ class V14RouteAndMetadataTests(unittest.TestCase):
         with TestClient(server.create_app(settings)) as client:
             health = client.get('/health')
             self.assertEqual(health.status_code, 200)
-            self.assertEqual(health.json()['version'], '1.11.0')
+            self.assertEqual(health.json()['version'], '1.11.1')
+            self.assertIs(health.json()['retrieval_available'], False)
             self.assertEqual(client.get('/').status_code, 200)
             meta = client.get('/meta')
             self.assertEqual(meta.status_code, 200)
-            self.assertEqual(meta.json()['version'], '1.11.0')
-            self.assertEqual(meta.json()['payment'], 'x402-enabled-mainnet')
+            self.assertEqual(meta.json()['version'], '1.11.1')
+            self.assertIs(meta.json()['retrieval_available'], False)
+            self.assertNotIn('payment', meta.json())
             self.assertEqual(client.get('/fetch').status_code, 405)
-            self.assertEqual(client.post('/fetch').status_code, 402)
+            unavailable = client.post('/fetch', json={'url': 'https://example.com/'})
+            self.assertEqual(unavailable.status_code, 503)
+            self.assertEqual(unavailable.json()['error_code'], 'retrieval_unavailable')
+            self.assertNotIn('payment-required', unavailable.headers)
+        get_supported.assert_not_called()
 
     @patch('x402.http.HTTPFacilitatorClient.get_supported')
-    def test_sepolia_meta_remains_testnet(self, get_supported):
-        get_supported.return_value = SupportedResponse(kinds=[SupportedKind(
-            x402Version=2,
-            scheme='exact',
-            network=BASE_SEPOLIA,
-        )])
+    def test_sepolia_settings_cannot_advertise_payable_retrieval(self, get_supported):
+        get_supported.side_effect = AssertionError('facilitator entered')
         settings = payments.load_x402_settings(enabled_env())
 
         with TestClient(server.create_app(settings)) as client:
-            self.assertEqual(
-                client.get('/meta').json()['payment'],
-                'x402-enabled-testnet',
-            )
+            meta = client.get('/meta').json()
+            unavailable = client.post('/fetch', json={'url': 'https://example.com/'})
+        self.assertIs(meta['retrieval_available'], False)
+        self.assertNotIn('payment', meta)
+        self.assertEqual(unavailable.status_code, 503)
+        self.assertNotIn('payment-required', unavailable.headers)
+        get_supported.assert_not_called()
 
 
 if __name__ == '__main__':
