@@ -1,13 +1,20 @@
 """Synthetic peers exercise the real local proxy, never an external host."""
 
 import http.client
+from contextlib import contextmanager, redirect_stderr
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import io
+from pathlib import Path
+import shutil
 import socket
+import ssl
+import subprocess
+import tempfile
 import threading
 import time
 import unittest
 
-from smartfetch.browser_prototype.broker import Broker
+from smartfetch.browser_prototype.broker import Broker, _ProxyHandler, _ProxyServer
 from smartfetch.browser_prototype.policy import DestinationPolicy
 
 
@@ -44,6 +51,59 @@ class FixtureHandler(BaseHTTPRequestHandler):
 
     def log_message(self, *_args):
         pass
+
+
+class TLSFixtureHandler(BaseHTTPRequestHandler):
+    seen = []
+
+    def do_GET(self):
+        self.seen.append((self.path, self.headers.get("Host")))
+        if self.path == "/redirect":
+            self.send_response(302)
+            self.send_header("Location", f"https://other.test:{self.server.server_port}/done")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        body = b"synthetic-tls-page"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):
+        pass
+
+
+@contextmanager
+def synthetic_tls_fixture():
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        raise unittest.SkipTest("local OpenSSL unavailable for synthetic TLS fixture")
+    with tempfile.TemporaryDirectory(prefix="smartfetch-synthetic-tls-") as directory:
+        cert = Path(directory) / "fixture.pem"
+        key = Path(directory) / "fixture.key"
+        subprocess.run(
+            [openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+             "-sha256", "-days", "1", "-keyout", str(key), "-out", str(cert),
+             "-subj", "/CN=fixture.test",
+             "-addext", "subjectAltName=DNS:fixture.test,DNS:other.test"],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        server = ThreadingHTTPServer(("127.0.0.1", 0), TLSFixtureHandler)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield server, cert
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            if thread.is_alive():
+                raise AssertionError("synthetic TLS fixture did not stop")
 
 
 class BrokerTests(unittest.TestCase):
@@ -85,6 +145,29 @@ class BrokerTests(unittest.TestCase):
         connection.close()
         return result
 
+    def _tls_get(self, host, port, path, cert):
+        raw = socket.create_connection((self.proxy_host, self.proxy_port), timeout=2)
+        try:
+            raw.sendall(
+                f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode()
+            )
+            reply = bytearray()
+            while b"\r\n\r\n" not in reply and len(reply) < 512:
+                reply.extend(raw.recv(1))
+            self.assertIn(b"200 Connection Established", reply)
+            context = ssl.create_default_context(cafile=str(cert))
+            self.assertTrue(context.check_hostname)
+            with context.wrap_socket(raw, server_hostname=host) as tunnel:
+                tunnel.sendall(
+                    f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                    "Connection: close\r\n\r\n".encode()
+                )
+                response = http.client.HTTPResponse(tunnel)
+                response.begin()
+                return response.status, response.read(), response.getheader("Location")
+        finally:
+            raw.close()
+
     def test_http_proxy_rewrites_host_and_drops_proxy_credentials(self):
         status, body, _ = self._http("/story", {"Proxy-Authorization": "secret"})
         self.assertEqual((status, body), (200, b"synthetic-page"))
@@ -123,6 +206,37 @@ class BrokerTests(unittest.TestCase):
                 data.extend(chunk)
             self.assertIn(b"synthetic-page", data)
         self.assertEqual(self.broker.connects, 1)
+
+    def test_https_connect_relays_real_tls_with_client_certificate_validation(self):
+        with synthetic_tls_fixture() as (server, cert):
+            TLSFixtureHandler.seen = []
+            self.policy.fixture_port = server.server_port
+            self.broker.max_tunnel_bytes_each_direction = 64_000
+            status, body, _ = self._tls_get(
+                "fixture.test", server.server_port, "/story", cert
+            )
+            self.assertEqual((status, body), (200, b"synthetic-tls-page"))
+            self.assertEqual(TLSFixtureHandler.seen, [
+                ("/story", f"fixture.test:{server.server_port}")
+            ])
+            self.assertEqual((self.broker.allowed, self.broker.connects), (1, 1))
+
+    def test_https_redirect_uses_a_second_validated_connect(self):
+        with synthetic_tls_fixture() as (server, cert):
+            TLSFixtureHandler.seen = []
+            self.policy.fixture_port = server.server_port
+            self.broker.max_tunnel_bytes_each_direction = 64_000
+            first = self._tls_get("fixture.test", server.server_port, "/redirect", cert)
+            self.assertEqual(first, (
+                302, b"", f"https://other.test:{server.server_port}/done"
+            ))
+            second = self._tls_get("other.test", server.server_port, "/done", cert)
+            self.assertEqual(second[:2], (200, b"synthetic-tls-page"))
+            self.assertEqual(TLSFixtureHandler.seen, [
+                ("/redirect", f"fixture.test:{server.server_port}"),
+                ("/done", f"other.test:{server.server_port}"),
+            ])
+            self.assertEqual((self.broker.allowed, self.broker.connects), (2, 2))
 
     def test_arbitrary_connect_is_denied_before_connector(self):
         attempted = []
@@ -226,6 +340,35 @@ class BrokerTests(unittest.TestCase):
         status, _, _ = self._http("/story")
         self.assertEqual(status, 503)
         self.assertEqual(attempted, [])
+
+    def test_closed_client_during_finite_reply_does_not_raise(self):
+        class ClosedClient:
+            def write(self, _data):
+                raise ConnectionResetError("synthetic closed client")
+
+        handler = object.__new__(_ProxyHandler)
+        handler.request_version = "HTTP/1.1"
+        handler.requestline = "GET / HTTP/1.1"
+        handler.command = "GET"
+        handler.wfile = ClosedClient()
+        handler.close_connection = False
+        handler._reply(503)
+        self.assertTrue(handler.close_connection)
+
+    def test_unexpected_handler_error_is_counted_without_raw_stderr(self):
+        server = _ProxyServer(("127.0.0.1", 0), _ProxyHandler)
+        server.broker = self.broker
+        output = io.StringIO()
+        try:
+            with redirect_stderr(output):
+                try:
+                    raise ConnectionResetError("synthetic-private-marker")
+                except ConnectionResetError:
+                    server.handle_error(None, ("127.0.0.1", 0))
+        finally:
+            server.server_close()
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(self.broker.handler_failures, 1)
 
 
 if __name__ == "__main__":

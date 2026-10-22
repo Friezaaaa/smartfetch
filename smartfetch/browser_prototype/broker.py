@@ -24,6 +24,11 @@ class _ProxyServer(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
 
+    def handle_error(self, _request, _client_address):
+        # Socket closures and unexpected handler failures are finite counters,
+        # never raw tracebacks containing browser-controlled request material.
+        self.broker._count("handler_failures")
+
     def process_request(self, request, client_address):
         if not self.broker._slots.acquire(blocking=False):
             try:
@@ -62,12 +67,17 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         pass
 
     def _reply(self, status: int):
-        self.send_response(status)
-        self.send_header("Content-Length", "0")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Connection", "close")
-        self.end_headers()
-        self.close_connection = True
+        try:
+            self.send_response(status)
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+        except OSError:
+            # A cancelled browser may already have closed its local socket.
+            pass
+        finally:
+            self.close_connection = True
 
     def _admit(self, *, connect: bool):
         broker = self.broker
@@ -233,6 +243,7 @@ class Broker:
         self.allowed = 0
         self.denied = 0
         self.connects = 0
+        self.handler_failures = 0
         self._server = None
         self._serve_thread = None
 
