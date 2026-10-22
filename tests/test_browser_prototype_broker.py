@@ -1,0 +1,232 @@
+"""Synthetic peers exercise the real local proxy, never an external host."""
+
+import http.client
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import socket
+import threading
+import time
+import unittest
+
+from smartfetch.browser_prototype.broker import Broker
+from smartfetch.browser_prototype.policy import DestinationPolicy
+
+
+class FixturePolicy(DestinationPolicy):
+    def port_allowed(self, scheme, port):
+        return scheme in {"http", "https"} and port == self.fixture_port
+
+    def address_allowed(self, ip):
+        return ip == "127.0.0.1"
+
+
+class FixtureHandler(BaseHTTPRequestHandler):
+    seen = []
+
+    def do_GET(self):
+        self.seen.append((self.path, self.headers.get("Host"),
+                          self.headers.get("Proxy-Authorization")))
+        if self.path == "/stall":
+            time.sleep(0.5)
+        if self.path == "/redirect":
+            self.send_response(302)
+            self.send_header("Location", f"http://other.test:{self.server.server_port}/done")
+            self.end_headers()
+            return
+        body = b"x" * 2048 if self.path == "/large" else b"synthetic-page"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except OSError:
+            # A bounded proxy timeout deliberately closes the fixture peer.
+            pass
+
+    def log_message(self, *_args):
+        pass
+
+
+class BrokerTests(unittest.TestCase):
+    def setUp(self):
+        FixtureHandler.seen = []
+        self.fixture = ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
+        self.fixture_thread = threading.Thread(target=self.fixture.serve_forever,
+                                               daemon=True)
+        self.fixture_thread.start()
+        self.policy = FixturePolicy()
+        self.policy.fixture_port = self.fixture.server_port
+        self.broker = Broker(
+            self.policy,
+            resolver=lambda host, port: ["127.0.0.1"],
+            connector=lambda ip, port, timeout: socket.create_connection(
+                (ip, port), timeout=timeout
+            ),
+            total_deadline=time.monotonic() + 5,
+            max_request_bytes=4096,
+            max_tunnel_bytes_each_direction=1024,
+            max_connections=4,
+        )
+        self.proxy_host, self.proxy_port = self.broker.start()
+
+    def tearDown(self):
+        self.assertTrue(self.broker.close())
+        self.fixture.shutdown()
+        self.fixture.server_close()
+        self.fixture_thread.join(timeout=2)
+        self.assertFalse(self.fixture_thread.is_alive())
+
+    def _http(self, path, headers=None):
+        connection = http.client.HTTPConnection(self.proxy_host, self.proxy_port,
+                                                timeout=2)
+        connection.request("GET", f"http://fixture.test:{self.fixture.server_port}{path}",
+                           headers=headers or {})
+        response = connection.getresponse()
+        result = (response.status, response.read(), response.getheader("Location"))
+        connection.close()
+        return result
+
+    def test_http_proxy_rewrites_host_and_drops_proxy_credentials(self):
+        status, body, _ = self._http("/story", {"Proxy-Authorization": "secret"})
+        self.assertEqual((status, body), (200, b"synthetic-page"))
+        self.assertEqual(FixtureHandler.seen,
+                         [("/story", f"fixture.test:{self.fixture.server_port}", None)])
+        self.assertEqual(self.broker.allowed, 1)
+
+    def test_http_redirect_requires_second_destination_decision(self):
+        first_status, _, location = self._http("/redirect")
+        self.assertEqual(first_status, 302)
+        self.assertEqual(location,
+                         f"http://other.test:{self.fixture.server_port}/done")
+        connection = http.client.HTTPConnection(self.proxy_host, self.proxy_port,
+                                                timeout=2)
+        connection.request("GET", location)
+        second = connection.getresponse()
+        self.assertEqual((second.status, second.read()), (200, b"synthetic-page"))
+        connection.close()
+        self.assertEqual(self.broker.allowed, 2)
+        self.assertEqual(FixtureHandler.seen[-1][1],
+                         f"other.test:{self.fixture.server_port}")
+
+    def test_validated_connect_relays_opaque_bytes(self):
+        with socket.create_connection((self.proxy_host, self.proxy_port), timeout=2) as client:
+            client.sendall(
+                f"CONNECT fixture.test:{self.fixture.server_port} HTTP/1.1\r\n"
+                f"Host: fixture.test:{self.fixture.server_port}\r\n\r\n".encode()
+            )
+            self.assertIn(b"200 Connection Established", client.recv(256))
+            client.sendall(b"GET /story HTTP/1.1\r\nHost: fixture.test\r\nConnection: close\r\n\r\n")
+            data = bytearray()
+            while b"synthetic-page" not in data:
+                chunk = client.recv(1024)
+                if not chunk:
+                    break
+                data.extend(chunk)
+            self.assertIn(b"synthetic-page", data)
+        self.assertEqual(self.broker.connects, 1)
+
+    def test_arbitrary_connect_is_denied_before_connector(self):
+        attempted = []
+        self.broker.connector = lambda *args: attempted.append(args)
+        with socket.create_connection((self.proxy_host, self.proxy_port), timeout=2) as client:
+            client.sendall(b"CONNECT 169.254.169.254:443 HTTP/1.1\r\n\r\n")
+            self.assertIn(b"403", client.recv(256))
+        self.assertEqual(attempted, [])
+        self.assertEqual(self.broker.denied, 1)
+
+    def test_wrong_connected_peer_fails_before_forwarding(self):
+        self.broker.resolver = lambda host, port: ["8.8.8.8"]
+        self.broker.policy = DestinationPolicy()
+        self.broker.connector = lambda ip, port, timeout: socket.create_connection(
+            ("127.0.0.1", self.fixture.server_port), timeout=timeout
+        )
+        with socket.create_connection((self.proxy_host, self.proxy_port), timeout=2) as client:
+            client.sendall(b"CONNECT fixture.test:443 HTTP/1.1\r\n\r\n")
+            self.assertIn(b"403", client.recv(256))
+        self.assertEqual(FixtureHandler.seen, [])
+
+    def test_https_absolute_get_is_not_plaintext_forwarded(self):
+        attempted = []
+        self.broker.connector = lambda *args: attempted.append(args)
+        connection = http.client.HTTPConnection(self.proxy_host, self.proxy_port,
+                                                timeout=2)
+        connection.request("GET", f"https://fixture.test:{self.fixture.server_port}/secret")
+        response = connection.getresponse()
+        self.assertEqual(response.status, 403)
+        response.read()
+        connection.close()
+        self.assertEqual(attempted, [])
+
+    def test_failed_peer_readback_closes_socket(self):
+        class BrokenPeer:
+            closed = False
+
+            def getpeername(self):
+                raise OSError("synthetic readback failure")
+
+            def close(self):
+                self.closed = True
+
+        upstream = BrokenPeer()
+        self.broker.connector = lambda ip, port, timeout: upstream
+        with socket.create_connection((self.proxy_host, self.proxy_port), timeout=2) as client:
+            client.sendall(
+                f"CONNECT fixture.test:{self.fixture.server_port} HTTP/1.1\r\n\r\n".encode()
+            )
+            self.assertIn(b"502", client.recv(256))
+        self.assertTrue(upstream.closed)
+
+    def test_oversized_headers_never_connect(self):
+        attempted = []
+        self.broker.connector = lambda *args: attempted.append(args)
+        connection = http.client.HTTPConnection(self.proxy_host, self.proxy_port,
+                                                timeout=2)
+        connection.request("GET", f"http://fixture.test:{self.fixture.server_port}/story",
+                           headers={"X-Padding": "x" * 5000})
+        response = connection.getresponse()
+        self.assertEqual(response.status, 431)
+        response.read()
+        connection.close()
+        self.assertEqual(attempted, [])
+
+    def test_oversized_response_is_not_partially_delivered(self):
+        self.broker.max_tunnel_bytes_each_direction = 256
+        status, body, _ = self._http("/large")
+        self.assertEqual(status, 502)
+        self.assertEqual(body, b"")
+
+    def test_malformed_absolute_url_is_finite_denial(self):
+        with socket.create_connection((self.proxy_host, self.proxy_port), timeout=2) as client:
+            client.sendall(b"GET http://[broken/ HTTP/1.1\r\nHost: ignored\r\n\r\n")
+            self.assertIn(b"403", client.recv(256))
+        self.assertEqual(FixtureHandler.seen, [])
+
+    def test_upstream_stall_returns_finite_timeout(self):
+        self.broker.total_deadline = time.monotonic() + 0.15
+        status, body, _ = self._http("/stall")
+        self.assertEqual((status, body), (503, b""))
+
+    def test_connect_tunnel_byte_limit_closes_before_forward(self):
+        self.broker.max_tunnel_bytes_each_direction = 32
+        with socket.create_connection((self.proxy_host, self.proxy_port), timeout=2) as client:
+            client.sendall(
+                f"CONNECT fixture.test:{self.fixture.server_port} HTTP/1.1\r\n\r\n".encode()
+            )
+            self.assertIn(b"200 Connection Established", client.recv(256))
+            client.sendall(b"GET /story HTTP/1.1\r\nHost: fixture.test\r\n\r\n")
+            try:
+                self.assertEqual(client.recv(256), b"")
+            except ConnectionResetError:
+                pass
+        self.assertEqual(FixtureHandler.seen, [])
+
+    def test_expired_deadline_never_connects(self):
+        self.broker.total_deadline = time.monotonic() - 1
+        attempted = []
+        self.broker.connector = lambda *args: attempted.append(args)
+        status, _, _ = self._http("/story")
+        self.assertEqual(status, 503)
+        self.assertEqual(attempted, [])
+
+
+if __name__ == "__main__":
+    unittest.main()
