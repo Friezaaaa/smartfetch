@@ -8,12 +8,11 @@ import time
 from urllib.parse import urlsplit
 
 from .policy import DestinationPolicy, PolicyError
+from .resolver import resolve_system
 
 
-def _system_resolver(host: str, port: int) -> list[str]:
-    return list(dict.fromkeys(item[4][0] for item in socket.getaddrinfo(
-        host, port, type=socket.SOCK_STREAM
-    )))
+def _system_resolver(host: str, port: int, *, deadline: float) -> list[str]:
+    return resolve_system(host, port, deadline=deadline)
 
 
 def _system_connector(ip: str, port: int, timeout: float) -> socket.socket:
@@ -30,6 +29,17 @@ class _ProxyServer(ThreadingHTTPServer):
         self.broker._count("handler_failures")
 
     def process_request(self, request, client_address):
+        if self.broker._closing.is_set():
+            self.shutdown_request(request)
+            return
+        if time.monotonic() >= self.broker.total_deadline:
+            try:
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\n"
+                                b"Content-Length: 0\r\nConnection: close\r\n\r\n")
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
         if not self.broker._slots.acquire(blocking=False):
             try:
                 request.sendall(b"HTTP/1.1 503 Service Unavailable\r\n"
@@ -38,9 +48,14 @@ class _ProxyServer(ThreadingHTTPServer):
                 pass
             self.shutdown_request(request)
             return
+        request.settimeout(min(0.25, max(0.01, self.broker.total_deadline - time.monotonic())))
+        with self.broker._lock:
+            self.broker._clients.add(request)
         try:
             super().process_request(request, client_address)
         except Exception:
+            with self.broker._lock:
+                self.broker._clients.discard(request)
             self.broker._slots.release()
             raise
 
@@ -53,6 +68,7 @@ class _ProxyServer(ThreadingHTTPServer):
         finally:
             with self.broker._lock:
                 self.broker._threads.discard(current)
+                self.broker._clients.discard(request)
             self.broker._slots.release()
 
 
@@ -90,9 +106,22 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         if header_bytes > broker.max_request_bytes:
             self._reply(431)
             return None
+        if not broker._reserve_request(header_bytes):
+            self._reply(429)
+            return None
         try:
+            def bounded_default_resolver(host, port):
+                try:
+                    return _system_resolver(host, port,
+                                            deadline=broker.total_deadline)
+                except RuntimeError as error:
+                    if str(error) == "resolver_cleanup_uncertain":
+                        broker._cleanup_uncertain = True
+                    raise
+
+            resolver = broker.resolver or bounded_default_resolver
             target, ip = broker.policy.resolve_target(
-                self.path, connect=connect, resolver=broker.resolver
+                self.path, connect=connect, resolver=resolver
             )
         except PolicyError:
             broker._count("denied")
@@ -131,6 +160,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         _, upstream = admitted
         self.broker._count("connects")
         try:
+            remaining = self.broker.total_deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            self.connection.settimeout(remaining)
             self.connection.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             streams = (self.connection, upstream)
             totals = [0, 0]
@@ -147,7 +180,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     totals[index] += len(chunk)
                     if totals[index] > self.broker.max_tunnel_bytes_each_direction:
                         return
-                    streams[1 - index].sendall(chunk)
+                    if not self.broker._reserve_bytes(len(chunk)):
+                        return
+                    remaining = self.broker.total_deadline - time.monotonic()
+                    if remaining <= 0:
+                        return
+                    destination = streams[1 - index]
+                    destination.settimeout(remaining)
+                    destination.sendall(chunk)
         except (OSError, ValueError):
             pass
         finally:
@@ -182,6 +222,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if len(request) > self.broker.max_request_bytes:
                 self._reply(431)
                 return
+            if not self.broker._reserve_bytes(len(request)):
+                self._reply(502)
+                return
+            remaining = self.broker.total_deadline - time.monotonic()
+            if remaining <= 0:
+                self._reply(503)
+                return
+            upstream.settimeout(remaining)
             upstream.sendall(request)
             response = bytearray()
             while not self.broker._closing.is_set():
@@ -197,12 +245,20 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 if len(response) > self.broker.max_tunnel_bytes_each_direction:
                     self._reply(502)
                     return
+                if not self.broker._reserve_bytes(len(chunk)):
+                    self._reply(502)
+                    return
         except TimeoutError:
             self._reply(503)
         except OSError:
             self._reply(502)
         else:
             try:
+                remaining = self.broker.total_deadline - time.monotonic()
+                if remaining <= 0:
+                    self._reply(503)
+                    return
+                self.connection.settimeout(remaining)
                 self.connection.sendall(response)
             except OSError:
                 pass
@@ -225,31 +281,55 @@ class Broker:
                  resolver=None, connector=None, *, total_deadline: float,
                  max_request_bytes: int = 8192,
                  max_tunnel_bytes_each_direction: int = 2_000_000,
-                 max_connections: int = 16):
+                 max_connections: int = 16, max_requests: int = 32,
+                 max_operation_bytes: int = 4_000_000):
         if (max_request_bytes < 256 or max_tunnel_bytes_each_direction < 1 or
-                max_connections < 1):
+                max_connections < 1 or max_requests < 1 or
+                max_operation_bytes < 1):
             raise ValueError("invalid broker limit")
         self.policy = policy or DestinationPolicy()
-        self.resolver = resolver or _system_resolver
+        self.resolver = resolver
         self.connector = connector or _system_connector
         self.total_deadline = total_deadline
         self.max_request_bytes = max_request_bytes
         self.max_tunnel_bytes_each_direction = max_tunnel_bytes_each_direction
+        self.max_requests = max_requests
+        self.max_operation_bytes = max_operation_bytes
         self._slots = threading.BoundedSemaphore(max_connections)
         self._lock = threading.Lock()
         self._closing = threading.Event()
         self._active = set()
+        self._clients = set()
         self._threads = set()
         self.allowed = 0
         self.denied = 0
         self.connects = 0
         self.handler_failures = 0
+        self._cleanup_uncertain = False
+        self.operation_requests = 0
+        self.operation_bytes = 0
         self._server = None
         self._serve_thread = None
 
     def _count(self, field: str):
         with self._lock:
             setattr(self, field, getattr(self, field) + 1)
+
+    def _reserve_request(self, size: int) -> bool:
+        with self._lock:
+            if (self.operation_requests >= self.max_requests or
+                    self.operation_bytes + size > self.max_operation_bytes):
+                return False
+            self.operation_requests += 1
+            self.operation_bytes += size
+            return True
+
+    def _reserve_bytes(self, size: int) -> bool:
+        with self._lock:
+            if self.operation_bytes + size > self.max_operation_bytes:
+                return False
+            self.operation_bytes += size
+            return True
 
     def _register(self, sock):
         with self._lock:
@@ -274,11 +354,12 @@ class Broker:
     def close(self):
         if self._server is None:
             return True
+        cleanup_deadline = min(self.total_deadline, time.monotonic() + 3.0)
         self._closing.set()
         with self._lock:
             active = tuple(self._active)
-            threads = tuple(self._threads)
-        for sock in active:
+            clients = tuple(self._clients)
+        for sock in active + clients:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
@@ -286,10 +367,15 @@ class Broker:
             sock.close()
         self._server.shutdown()
         self._server.server_close()
-        self._serve_thread.join(timeout=1)
-        for thread in threads:
-            thread.join(timeout=1)
+        self._serve_thread.join(timeout=max(0, cleanup_deadline - time.monotonic()))
+        while time.monotonic() < cleanup_deadline:
+            with self._lock:
+                threads = tuple(self._threads)
+            if not threads:
+                break
+            for thread in threads:
+                thread.join(timeout=max(0, cleanup_deadline - time.monotonic()))
         with self._lock:
             return (not self._serve_thread.is_alive() and
-                    not any(thread.is_alive() for thread in self._threads) and
-                    not self._active)
+                    not self._threads and not self._active and
+                    not self._clients and not self._cleanup_uncertain)

@@ -9,10 +9,12 @@ import shutil
 import socket
 import ssl
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from smartfetch.browser_prototype.broker import Broker, _ProxyHandler, _ProxyServer
 from smartfetch.browser_prototype.policy import DestinationPolicy
@@ -340,6 +342,146 @@ class BrokerTests(unittest.TestCase):
         status, _, _ = self._http("/story")
         self.assertEqual(status, 503)
         self.assertEqual(attempted, [])
+
+    def test_expired_deadline_replies_before_partial_headers(self):
+        self.broker.total_deadline = time.monotonic() - 1
+        client, request = socket.socketpair()
+        try:
+            self.broker._server.process_request(request, ("127.0.0.1", 0))
+            client.settimeout(1)
+            self.assertIn(b"503 Service Unavailable", client.recv(256))
+        finally:
+            client.close()
+            request.close()
+
+    def test_close_cancels_a_slow_header_client(self):
+        client = socket.create_connection((self.proxy_host, self.proxy_port), timeout=2)
+        try:
+            client.sendall(b"GET / HTTP/1.1\r\nX-Stall: ")
+            until = time.monotonic() + 1
+            while not self.broker._threads and time.monotonic() < until:
+                time.sleep(0.01)
+            self.assertTrue(self.broker._threads, "slow client was not admitted")
+            started = time.monotonic()
+            closed = self.broker.close()
+            self.assertTrue(closed, (
+                f"serve_alive={self.broker._serve_thread.is_alive()} "
+                f"handlers={len(self.broker._threads)} "
+                f"clients={len(self.broker._clients)} "
+                f"upstreams={len(self.broker._active)} "
+                f"elapsed={time.monotonic() - started:.3f}"
+            ))
+            self.assertLess(time.monotonic() - started, 0.8)
+        finally:
+            client.close()
+
+    def test_operation_request_budget_denies_next_destination(self):
+        self.broker.max_requests = 2
+        self.assertEqual(self._http("/one")[0], 200)
+        self.assertEqual(self._http("/two")[0], 200)
+        status, body, _ = self._http("/three")
+        self.assertEqual((status, body), (429, b""))
+        self.assertEqual([path for path, _, _ in FixtureHandler.seen],
+                         ["/one", "/two"])
+
+    def test_operation_byte_budget_spans_separate_connections(self):
+        self.broker.max_tunnel_bytes_each_direction = 4096
+        self.broker.max_operation_bytes = 3000
+        self.assertEqual(self._http("/large")[:2], (200, b"x" * 2048))
+        status, body, _ = self._http("/large")
+        self.assertEqual((status, body), (502, b""))
+        self.assertLessEqual(self.broker.operation_bytes, 3000)
+
+    def test_connect_forward_uses_remaining_deadline_not_admission_timeout(self):
+        upstream, peer = socket.socketpair()
+        sent = threading.Event()
+        observed = []
+
+        class RecordingSocket:
+            def getpeername(self):
+                return ("127.0.0.1", self_port)
+
+            def fileno(self):
+                return upstream.fileno()
+
+            def settimeout(self, value):
+                upstream.settimeout(value)
+
+            def recv(self, size):
+                return upstream.recv(size)
+
+            def sendall(self, data):
+                observed.append((upstream.gettimeout(),
+                                 self_broker.total_deadline - time.monotonic()))
+                sent.set()
+                upstream.sendall(data)
+
+            def close(self):
+                upstream.close()
+
+            def shutdown(self, how):
+                upstream.shutdown(how)
+
+        self_port = self.fixture.server_port
+        self_broker = self.broker
+        self.broker.connector = lambda *_args: RecordingSocket()
+        self.broker.total_deadline = time.monotonic() + 0.4
+        try:
+            with socket.create_connection((self.proxy_host, self.proxy_port), timeout=2) as client:
+                client.sendall(f"CONNECT fixture.test:{self_port} HTTP/1.1\r\n\r\n".encode())
+                self.assertIn(b"200 Connection Established", client.recv(256))
+                time.sleep(0.18)
+                client.sendall(b"x")
+                self.assertTrue(sent.wait(0.3))
+            timeout, remaining = observed[0]
+            self.assertLessEqual(timeout, remaining + 0.03)
+        finally:
+            peer.close()
+
+    def test_dns_subprocess_timeout_stops_work_before_its_late_side_effect(self):
+        from smartfetch.browser_prototype.resolver import run_bounded_child
+
+        with tempfile.TemporaryDirectory(prefix="smartfetch-dns-timeout-") as root:
+            marker = Path(root) / "late-marker"
+            code = ("import pathlib,sys,time; time.sleep(0.8); "
+                    "pathlib.Path(sys.argv[1]).write_text('escaped')")
+            started = time.monotonic()
+            with self.assertRaises(TimeoutError):
+                run_bounded_child(
+                    [sys.executable, "-I", "-c", code, str(marker)],
+                    deadline=started + 0.35,
+                )
+            self.assertLess(time.monotonic() - started, 0.6)
+            time.sleep(max(0, started + 1.0 - time.monotonic()))
+            self.assertFalse(marker.exists(), "timed-out resolver child kept running")
+
+    def test_default_dns_path_uses_bounded_child_not_parent_getaddrinfo(self):
+        from smartfetch.browser_prototype import resolver as child_resolver
+
+        original = child_resolver._RESOLVE_CODE
+        child_resolver._RESOLVE_CODE = "import sys; sys.stdout.write('[\"127.0.0.1\"]')"
+        self.broker.resolver = None
+        try:
+            self.assertEqual(self._http("/story")[:2], (200, b"synthetic-page"))
+        finally:
+            child_resolver._RESOLVE_CODE = original
+
+    def test_uncertain_dns_child_cleanup_prevents_clean_broker_close(self):
+        extra = Broker(
+            self.policy, resolver=None,
+            connector=self.broker.connector,
+            total_deadline=time.monotonic() + 2,
+        )
+        host, port = extra.start()
+        with patch("smartfetch.browser_prototype.broker._system_resolver",
+                   side_effect=RuntimeError("resolver_cleanup_uncertain")):
+            connection = http.client.HTTPConnection(host, port, timeout=2)
+            connection.request("GET", f"http://fixture.test:{self.fixture.server_port}/story")
+            response = connection.getresponse()
+            self.assertEqual((response.status, response.read()), (403, b""))
+            connection.close()
+        self.assertFalse(extra.close())
+        self.assertEqual(FixtureHandler.seen, [])
 
     def test_closed_client_during_finite_reply_does_not_raise(self):
         class ClosedClient:
