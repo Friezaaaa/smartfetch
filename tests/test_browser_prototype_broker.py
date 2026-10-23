@@ -339,20 +339,94 @@ class BrokerTests(unittest.TestCase):
         self.broker.total_deadline = time.monotonic() - 1
         attempted = []
         self.broker.connector = lambda *args: attempted.append(args)
-        status, _, _ = self._http("/story")
-        self.assertEqual(status, 503)
+        with socket.create_connection((self.proxy_host, self.proxy_port), timeout=2) as client:
+            client.settimeout(1)
+            try:
+                client.sendall(b"GET /story HTTP/1.1\r\nHost: fixture.test\r\n\r\n")
+                self.assertEqual(client.recv(256), b"")
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+                pass  # A pre-admission transport rejection may reset unread TCP bytes.
         self.assertEqual(attempted, [])
+        self.assertEqual(self.broker.allowed, 0)
 
-    def test_expired_deadline_replies_before_partial_headers(self):
+    def test_expired_deadline_closes_before_partial_headers(self):
         self.broker.total_deadline = time.monotonic() - 1
         client, request = socket.socketpair()
         try:
             self.broker._server.process_request(request, ("127.0.0.1", 0))
             client.settimeout(1)
-            self.assertIn(b"503 Service Unavailable", client.recv(256))
+            self.assertEqual(client.recv(256), b"")
         finally:
             client.close()
             request.close()
+
+    def test_raw_header_limit_is_enforced_before_stdlib_parsing(self):
+        self.broker.max_request_bytes = 256
+        attempted = []
+        self.broker.connector = lambda *args: attempted.append(args)
+        with socket.create_connection((self.proxy_host, self.proxy_port), timeout=2) as client:
+            prefix = b"GET http://fixture.test/ HTTP/1.1\r\nX-Large: "
+            client.sendall(prefix + b"a" * (256 - len(prefix)))
+            self.assertIn(b"431", client.recv(512))
+        self.assertEqual(attempted, [])
+        self.assertLessEqual(self.broker.operation_bytes, 256)
+
+    def test_unsupported_methods_consume_request_budget_before_dispatch(self):
+        self.broker.max_requests = 1
+        connection = http.client.HTTPConnection(self.proxy_host, self.proxy_port, timeout=2)
+        connection.request("POST", "http://fixture.test/", body=None)
+        response = connection.getresponse()
+        self.assertEqual((response.status, response.read()), (405, b""))
+        connection.close()
+        self.assertEqual(self.broker.operation_requests, 1)
+        self.assertEqual(self._http("/story")[:2], (429, b""))
+        self.assertEqual(FixtureHandler.seen, [])
+
+    def test_partial_headers_consume_aggregate_bytes_before_parsing_completes(self):
+        self.broker.max_operation_bytes = 256
+        with socket.create_connection((self.proxy_host, self.proxy_port), timeout=2) as client:
+            prefix = b"GET http://fixture.test/ HTTP/1.1\r\nX-Pending: "
+            client.sendall(prefix + b"x" * (256 - len(prefix)))
+            self.assertIn(b"429", client.recv(512))
+        self.assertLessEqual(self.broker.operation_bytes, 256)
+        self.assertEqual(FixtureHandler.seen, [])
+
+    def test_parsed_request_crossing_deadline_gets_finite_503(self):
+        original = _ProxyHandler._admit
+
+        def expire_then_admit(handler, *, connect):
+            handler.broker.total_deadline = time.monotonic() - 1
+            return original(handler, connect=connect)
+
+        with patch.object(_ProxyHandler, "_admit", expire_then_admit):
+            self.assertEqual(self._http("/story")[:2], (503, b""))
+        self.assertEqual(FixtureHandler.seen, [])
+
+    def test_unknown_method_has_constant_empty_response_and_counts_admission(self):
+        connection = http.client.HTTPConnection(self.proxy_host, self.proxy_port, timeout=2)
+        connection.request("PRIVATE_MARKER", "http://fixture.test/")
+        response = connection.getresponse()
+        self.assertEqual((response.status, response.read()), (405, b""))
+        connection.close()
+        self.assertEqual(self.broker.operation_requests, 1)
+        self.assertEqual(FixtureHandler.seen, [])
+
+    def test_trickled_headers_cannot_reset_the_header_deadline(self):
+        with socket.create_connection((self.proxy_host, self.proxy_port), timeout=2) as client:
+            started = time.monotonic()
+            for _ in range(6):
+                try:
+                    client.sendall(b"x")
+                except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+                    break
+                time.sleep(0.06)
+            client.settimeout(0.5)
+            try:
+                self.assertEqual(client.recv(256), b"")
+            except (ConnectionResetError, ConnectionAbortedError):
+                pass
+            self.assertLess(time.monotonic() - started, 0.8)
+        self.assertEqual(FixtureHandler.seen, [])
 
     def test_close_cancels_a_slow_header_client(self):
         client = socket.create_connection((self.proxy_host, self.proxy_port), timeout=2)

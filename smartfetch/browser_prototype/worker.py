@@ -77,10 +77,10 @@ def render_in_isolated_worker(url: str, *, socket_path: str,
 
     relay = WorkerRelay(socket_path, operation_id=operation_id,
                         deadline=deadline)
-    address = relay.start()
     failure = None
     result = None
     try:
+        address = relay.start()
         result = render_local(url, chromium=chromium,
                               proxy_host=address[0], proxy_port=address[1],
                               deadline=deadline, max_chars=max_chars)

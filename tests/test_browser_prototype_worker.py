@@ -16,6 +16,257 @@ from smartfetch.browser_prototype.policy import DestinationPolicy
 
 
 class FramedRelayTests(unittest.TestCase):
+    def test_relay_rejects_excess_sessions_before_creating_threads(self):
+        from smartfetch.browser_prototype.relay import _RelayServer
+
+        entered = threading.Event()
+        release = threading.Event()
+
+        class HoldingRelay(_RelayServer):
+            def _handle(self, client):
+                entered.set()
+                release.wait(1)
+
+        relay = HoldingRelay(deadline=time.monotonic() + 3, max_sessions=1,
+                             max_total_sessions=3)
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(4)
+        address = listener.getsockname()
+        relay._start(listener)
+        first = socket.create_connection(address, timeout=1)
+        second = None
+        try:
+            self.assertTrue(entered.wait(1))
+            second = socket.create_connection(address, timeout=1)
+            self.assertEqual(second.recv(1), b"")
+            self.assertEqual(len(relay._sessions), 1)
+            self.assertEqual(relay.admitted_sessions, 1)
+        finally:
+            release.set()
+            first.close()
+            if second is not None:
+                second.close()
+            self.assertTrue(relay.close())
+
+    def test_total_session_limit_still_applies_after_a_handler_exits(self):
+        from smartfetch.browser_prototype.relay import _RelayServer
+
+        handled = []
+
+        class ShortRelay(_RelayServer):
+            def _handle(self, client):
+                handled.append(1)
+
+        relay = ShortRelay(deadline=time.monotonic() + 3, max_sessions=2,
+                           max_total_sessions=1)
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(4)
+        address = listener.getsockname()
+        relay._start(listener)
+        try:
+            with socket.create_connection(address, timeout=1) as first:
+                self.assertEqual(first.recv(1), b"")
+            with socket.create_connection(address, timeout=1) as second:
+                self.assertEqual(second.recv(1), b"")
+            self.assertEqual(handled, [1])
+            self.assertEqual(relay.admitted_sessions, 1)
+        finally:
+            self.assertTrue(relay.close())
+
+    def test_relay_byte_budget_is_shared_across_sessions_and_directions(self):
+        from smartfetch.browser_prototype.relay import RelayError, _RelayServer
+
+        relay = _RelayServer(deadline=time.monotonic() + 1, max_bytes=10)
+        relay._reserve_bytes(6)
+        relay._reserve_bytes(4)
+        with self.assertRaises(RelayError) as caught:
+            relay._reserve_bytes(1)
+        self.assertEqual(caught.exception.code, "relay_budget")
+        self.assertEqual(relay.operation_bytes, 10)
+        self.assertTrue(relay._closing.is_set())
+
+    def test_duplex_cannot_forward_reverse_bytes_after_shared_budget_exhaustion(self):
+        from smartfetch.browser_prototype.relay import _RelayServer, _duplex, recv_frame, send_frame
+
+        deadline = time.monotonic() + 2
+        relay = _RelayServer(deadline=deadline, max_bytes=10)
+        plain, sender = socket.socketpair()
+        framed, receiver = socket.socketpair()
+        errors = []
+
+        def run():
+            try:
+                _duplex(plain, framed, deadline=deadline, reserve=relay._reserve_bytes,
+                        owner=relay)
+            except Exception as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        try:
+            sender.sendall(b"abcdef")
+            self.assertEqual(recv_frame(receiver, deadline=deadline), b"abcdef")
+            send_frame(receiver, b"x", deadline=deadline)
+            sender.settimeout(1)
+            self.assertEqual(sender.recv(1), b"")
+            self.assertEqual(relay.operation_bytes, 10)
+        finally:
+            for sock in (sender, receiver):
+                sock.close()
+            thread.join(timeout=max(0, deadline - time.monotonic()))
+            plain.close()
+            framed.close()
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+
+    def test_worker_relay_start_failure_closes_the_actual_listener(self):
+        from smartfetch.browser_prototype.relay import WorkerRelay
+
+        created = []
+        real_socket = socket.socket
+
+        def capture_socket(*args, **kwargs):
+            listener = real_socket(*args, **kwargs)
+            created.append(listener)
+            return listener
+
+        relay = WorkerRelay("unused", operation_id=b"f" * 16,
+                            deadline=time.monotonic() + 1)
+        with patch("smartfetch.browser_prototype.relay.socket.socket", capture_socket):
+            with patch("threading.Thread.start", side_effect=RuntimeError("synthetic")):
+                with self.assertRaises(RuntimeError):
+                    relay.start()
+        self.assertEqual(created[0].fileno(), -1)
+        self.assertIsNone(relay._listener)
+        self.assertIsNone(relay._thread)
+        self.assertTrue(relay.close())
+
+    def test_relay_thread_construction_failure_leaves_a_closable_relay(self):
+        from smartfetch.browser_prototype.relay import WorkerRelay
+
+        relay = WorkerRelay("unused", operation_id=b"f" * 16,
+                            deadline=time.monotonic() + 1)
+        with patch("threading.Thread", side_effect=RuntimeError("synthetic")):
+            with self.assertRaises(RuntimeError):
+                relay.start()
+        self.assertIsNone(relay._listener)
+        self.assertIsNone(relay._thread)
+        self.assertTrue(relay.close())
+
+    def test_cleanup_uncertainty_cannot_be_erased_by_session_release(self):
+        from smartfetch.browser_prototype.relay import RelayError, _RelayServer
+
+        class UncertainRelay(_RelayServer):
+            def _handle(self, client):
+                raise RelayError("relay_cleanup_uncertain")
+
+        relay = UncertainRelay(deadline=time.monotonic() + 1)
+        client, peer = socket.socketpair()
+        try:
+            relay._handle_and_release(client)
+            self.assertFalse(relay.close())
+        finally:
+            client.close()
+            peer.close()
+
+    def test_truncated_handshake_bytes_are_charged_before_validation(self):
+        from smartfetch.browser_prototype.relay import BridgeServer
+
+        relay = BridgeServer("unused", ("127.0.0.1", 1), operation_id=b"f" * 16,
+                             deadline=time.monotonic() + 1)
+        server, client = socket.socketpair()
+        try:
+            client.sendall(struct.pack("!I", 21) + b"partial")
+            client.shutdown(socket.SHUT_WR)
+            relay._handle_and_release(server)
+            self.assertEqual(relay.operation_bytes, 11)
+            self.assertEqual(relay.denied_handshakes, 1)
+        finally:
+            server.close()
+            client.close()
+
+    def test_handshake_cannot_read_beyond_remaining_operation_budget(self):
+        from smartfetch.browser_prototype.relay import BridgeServer
+
+        relay = BridgeServer("unused", ("127.0.0.1", 1), operation_id=b"f" * 16,
+                             deadline=time.monotonic() + 1)
+        relay.max_bytes = 8
+        server, client = socket.socketpair()
+        try:
+            client.sendall(struct.pack("!I", 21) + b"unvalidated-material")
+            relay._handle_and_release(server)
+            self.assertEqual(relay.operation_bytes, 8)
+            self.assertTrue(relay._closing.is_set())
+        finally:
+            server.close()
+            client.close()
+
+    def test_separate_handshakes_share_one_wire_byte_budget(self):
+        from smartfetch.browser_prototype.relay import BridgeServer
+
+        relay = BridgeServer("unused", ("127.0.0.1", 1), operation_id=b"f" * 16,
+                             deadline=time.monotonic() + 1)
+        relay.max_bytes = 30
+        for _ in range(2):
+            server, client = socket.socketpair()
+            try:
+                client.sendall(struct.pack("!I", 21) + b"x" * 21)
+                client.shutdown(socket.SHUT_WR)
+                relay._handle_and_release(server)
+            finally:
+                server.close()
+                client.close()
+        self.assertEqual(relay.operation_bytes, 30)
+        self.assertEqual(relay.denied_handshakes, 2)
+        self.assertTrue(relay._closing.is_set())
+
+    def test_duplex_second_thread_start_failure_reaps_the_first(self):
+        from smartfetch.browser_prototype.relay import RelayError, _duplex
+
+        plain, sender = socket.socketpair()
+        framed, receiver = socket.socketpair()
+        real_start = threading.Thread.start
+        started = []
+
+        def fail_second(thread):
+            if started:
+                raise RuntimeError("synthetic start failure")
+            started.append(thread)
+            real_start(thread)
+
+        try:
+            with patch("threading.Thread.start", fail_second):
+                with self.assertRaises(RelayError) as caught:
+                    _duplex(plain, framed, deadline=time.monotonic() + 1,
+                            reserve=lambda _size: None)
+            self.assertEqual(caught.exception.code, "relay_start")
+            self.assertFalse(started[0].is_alive())
+        finally:
+            for sock in (plain, sender, framed, receiver):
+                sock.close()
+            for thread in started:
+                thread.join(timeout=1)
+
+    def test_relay_read_observes_cancellation_without_waiting_for_deadline(self):
+        from smartfetch.browser_prototype.relay import RelayError, _recv_plain
+
+        reader, peer = socket.socketpair()
+        cancelled = threading.Event()
+        timer = threading.Timer(0.05, cancelled.set)
+        timer.start()
+        started = time.monotonic()
+        try:
+            with self.assertRaises(RelayError) as caught:
+                _recv_plain(reader, deadline=started + 2, cancelled=cancelled)
+            self.assertEqual(caught.exception.code, "relay_cancelled")
+            self.assertLess(time.monotonic() - started, 0.5)
+        finally:
+            timer.join(timeout=1)
+            reader.close()
+            peer.close()
+
     def test_closed_socket_during_send_is_a_finite_relay_error(self):
         from smartfetch.browser_prototype.relay import RelayError, send_frame
 

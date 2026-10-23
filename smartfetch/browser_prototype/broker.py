@@ -19,6 +19,51 @@ def _system_connector(ip: str, port: int, timeout: float) -> socket.socket:
     return socket.create_connection((ip, port), timeout=timeout)
 
 
+class _HeaderLimit(Exception):
+    def __init__(self, status):
+        self.status = status
+
+
+class _HeaderReader:
+    """Bound raw bytes and the whole header clock before stdlib parsing.
+
+    Read exactly through each newline so CONNECT payload never enters a
+    buffered reader. Budget admission happens before each socket byte.
+    """
+
+    def __init__(self, handler):
+        self.handler = handler
+        self.used = 0
+        self.deadline = min(handler.broker.total_deadline, time.monotonic() + 0.25)
+
+    def readline(self, size=-1):
+        broker = self.handler.broker
+        value = bytearray()
+        limit = broker.max_request_bytes if size < 0 else size
+        while len(value) < limit:
+            if self.used >= broker.max_request_bytes:
+                raise _HeaderLimit(431)
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError()
+            if not broker._reserve_bytes(1):
+                raise _HeaderLimit(429)
+            try:
+                self.handler.connection.settimeout(remaining)
+                chunk = self.handler.connection.recv(1)
+            except OSError:
+                broker._refund_byte()
+                raise
+            if not chunk:
+                broker._refund_byte()
+                break
+            self.used += 1
+            value.extend(chunk)
+            if chunk == b"\n":
+                break
+        return bytes(value)
+
+
 class _ProxyServer(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
@@ -33,11 +78,8 @@ class _ProxyServer(ThreadingHTTPServer):
             self.shutdown_request(request)
             return
         if time.monotonic() >= self.broker.total_deadline:
-            try:
-                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\n"
-                                b"Content-Length: 0\r\nConnection: close\r\n\r\n")
-            except OSError:
-                pass
+            # No HTTP request has been admitted. Closing unread TCP bytes can
+            # reset the connection, so no HTTP response is promised here.
             self.shutdown_request(request)
             return
         if not self.broker._slots.acquire(blocking=False):
@@ -75,6 +117,29 @@ class _ProxyServer(ThreadingHTTPServer):
 class _ProxyHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
+    def handle_one_request(self):
+        self.request_version = "HTTP/1.1"
+        self.requestline = ""
+        self.command = None
+        if time.monotonic() >= self.broker.total_deadline:
+            self._reply(503)
+            return
+        if not self.broker._reserve_request(0):
+            self._reply(429)
+            return
+        original = self.rfile
+        self.rfile = _HeaderReader(self)
+        try:
+            super().handle_one_request()
+        except _HeaderLimit as error:
+            self._reply(error.status)
+        finally:
+            self.rfile = original
+
+    def send_error(self, code, message=None, explain=None):
+        # Never reflect an unsupported method or parser error in an HTML body.
+        self._reply(405 if code == 501 else code)
+
     @property
     def broker(self):
         return self.server.broker
@@ -99,15 +164,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         broker = self.broker
         if broker._closing.is_set() or time.monotonic() >= broker.total_deadline:
             self._reply(503)
-            return None
-        header_bytes = len(self.raw_requestline) + sum(
-            len(name) + len(value) + 4 for name, value in self.headers.items()
-        )
-        if header_bytes > broker.max_request_bytes:
-            self._reply(431)
-            return None
-        if not broker._reserve_request(header_bytes):
-            self._reply(429)
             return None
         try:
             def bounded_default_resolver(host, port):
@@ -330,6 +386,10 @@ class Broker:
                 return False
             self.operation_bytes += size
             return True
+
+    def _refund_byte(self):
+        with self._lock:
+            self.operation_bytes -= 1
 
     def _register(self, sock):
         with self._lock:
