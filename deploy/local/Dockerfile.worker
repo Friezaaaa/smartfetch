@@ -1,0 +1,44 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+    chromium \
+    fonts-freefont-ttf \
+    ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# Wrap /usr/bin/chromium to pass --disable-setuid-sandbox so Chromium selects
+# unprivileged user namespaces instead of deprecated SUID sandboxing,
+# without needing --no-sandbox or modifying production Python files.
+RUN dpkg-divert --add --rename --divert /usr/bin/chromium.real /usr/bin/chromium \
+ && printf '#!/bin/sh\nexec /usr/bin/chromium.real --disable-setuid-sandbox "$@"\n' > /usr/bin/chromium \
+ && chmod 0755 /usr/bin/chromium
+
+RUN groupadd --gid 10001 smartfetch \
+ && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/smartfetch --shell /bin/bash smartfetch \
+ && mkdir -p /ipc \
+ && chown -R 10001:10001 /ipc \
+ && chmod 0700 /ipc
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN python -m pip install --no-cache-dir --upgrade pip==26.2.1 \
+ && python -m pip install --no-cache-dir -r requirements.txt
+
+COPY --chown=10001:10001 smartfetch ./smartfetch
+COPY --chown=10001:10001 tests ./tests
+
+USER 10001:10001
+
+ENV PATH="/usr/bin:/bin" \
+    HOME="/home/smartfetch" \
+    TMPDIR="/tmp" \
+    LANG="C.UTF-8" \
+    LC_ALL="C.UTF-8" \
+    PYTHONDONTWRITEBYTECODE=1
+
+CMD ["python", "tests/browser_prototype_linux_gate.py"]

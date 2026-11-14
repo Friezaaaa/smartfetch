@@ -1,0 +1,43 @@
+version: "3.8"
+
+volumes:
+  smartfetch_prototype_ipc:
+    name: smartfetch_prototype_ipc
+
+networks:
+  prototype_egress_net:
+    name: smartfetch_prototype_net
+    driver: bridge
+
+services:
+  prototype-broker:
+    build:
+      context: ../..
+      dockerfile: deploy/local/Dockerfile.broker
+    image: smartfetch-prototype-broker:local
+    user: "10001:10001"
+    volumes:
+      - smartfetch_prototype_ipc:/ipc
+    networks:
+      - prototype_egress_net
+    command: ["python", "tests/browser_prototype_linux_gate.py", "broker"]
+
+  prototype-worker:
+    build:
+      context: ../..
+      dockerfile: deploy/local/Dockerfile.worker
+    image: smartfetch-prototype-worker:local
+    user: "10001:10001"
+    network_mode: "none"
+    security_opt:
+      - seccomp:./seccomp-chrome.json
+    environment:
+      - PATH=/usr/bin:/bin
+      - HOME=/home/smartfetch
+      - TMPDIR=/tmp
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
+      - PYTHONDONTWRITEBYTECODE=1
+    volumes:
+      - smartfetch_prototype_ipc:/ipc
+    command: ["python", "tests/browser_prototype_linux_gate.py"]
