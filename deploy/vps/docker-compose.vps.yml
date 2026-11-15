@@ -60,7 +60,7 @@ services:
           cpus: "0.5"
           memory: 512M
     healthcheck:
-      test: ["CMD-SHELL", "curl -k -f --max-time 3 https://127.0.0.1:8443/health || exit 1"]
+      test: ["CMD-SHELL", "curl -k -f --cacert /etc/smartfetch/certs/ca.crt --cert /etc/smartfetch/certs/client.crt --key /etc/smartfetch/certs/client.key --max-time 3 https://127.0.0.1:8443/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3

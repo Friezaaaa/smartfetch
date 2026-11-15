@@ -10,6 +10,7 @@ unconfigured, unreachable, or unhealthy.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import base64
 import hashlib
 import hmac
 import io
@@ -17,6 +18,7 @@ import json
 import logging
 import os
 import secrets
+import tempfile
 import threading
 import time
 from typing import Any, Mapping
@@ -169,6 +171,35 @@ class CircuitBreakerState:
             return self._state
 
 
+def _materialize_cert_if_content(val: str | None, filename_hint: str) -> str | None:
+    """If certificate/key is inline PEM or base64, persist to secure temp file and return path."""
+    if not val:
+        return None
+    trimmed = val.strip()
+    if os.path.isfile(trimmed):
+        return trimmed
+
+    content: bytes | None = None
+    if "BEGIN " in trimmed:
+        content = trimmed.encode("utf-8")
+    elif trimmed.startswith("base64:"):
+        try:
+            content = base64.b64decode(trimmed[7:].strip())
+        except Exception:
+            return trimmed
+
+    if content is not None:
+        target_path = os.path.join(tempfile.gettempdir(), f"smartfetch_{filename_hint}")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        mode = 0o600
+        fd = os.open(target_path, flags, mode)
+        with os.fdopen(fd, "wb") as f:
+            f.write(content)
+        return target_path
+
+    return trimmed
+
+
 @dataclass(frozen=True)
 class RemoteBrowserConfig:
     """Configuration for connecting to the remote VPS browser worker."""
@@ -189,9 +220,18 @@ class RemoteBrowserConfig:
         environ = os.environ if env is None else env
         worker_url = environ.get("BROWSER_WORKER_URL", "").strip() or None
         hmac_key = environ.get("BROWSER_WORKER_HMAC_KEY", "").strip() or None
-        ca_cert = environ.get("BROWSER_WORKER_CA_CERT", "").strip() or None
-        client_cert = environ.get("BROWSER_WORKER_CLIENT_CERT", "").strip() or None
-        client_key = environ.get("BROWSER_WORKER_CLIENT_KEY", "").strip() or None
+        ca_cert = _materialize_cert_if_content(
+            environ.get("BROWSER_WORKER_CA_CERT", "").strip() or None,
+            "ca.crt",
+        )
+        client_cert = _materialize_cert_if_content(
+            environ.get("BROWSER_WORKER_CLIENT_CERT", "").strip() or None,
+            "client.crt",
+        )
+        client_key = _materialize_cert_if_content(
+            environ.get("BROWSER_WORKER_CLIENT_KEY", "").strip() or None,
+            "client.key",
+        )
 
         return cls(
             worker_url=worker_url,

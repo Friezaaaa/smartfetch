@@ -250,9 +250,13 @@ class DockerWorkerRunner(WorkerRunner):
             "--cpus",
             "1.0",
             "--pids-limit",
-            "64",
+            "256",
             "-v",
             volume_mount,
+        ]
+        if os.path.isfile(self.seccomp_profile):
+            cmd.append(f"--security-opt=seccomp={self.seccomp_profile}")
+        cmd.extend([
             self.docker_image,
             "python",
             "-m",
@@ -269,9 +273,7 @@ class DockerWorkerRunner(WorkerRunner):
             str(max_chars),
             "--output",
             container_output,
-        ]
-        if os.path.isfile(self.seccomp_profile):
-            cmd.insert(4, f"--security-opt=seccomp={self.seccomp_profile}")
+        ])
 
         proc = subprocess.run(
             cmd,
@@ -282,7 +284,10 @@ class DockerWorkerRunner(WorkerRunner):
         )
         output_file = job_dir / "worker_output.json"
         if proc.returncode != 0 or not output_file.is_file():
-            raise RuntimeError(f"Docker worker failed (exit {proc.returncode}): {proc.stderr}")
+            out_content = output_file.read_text(encoding="utf-8") if output_file.is_file() else "NO_FILE"
+            raise RuntimeError(
+                f"Docker worker failed (exit {proc.returncode}): output={out_content!r} stderr={proc.stderr!r} stdout={proc.stdout!r}"
+            )
         return json.loads(output_file.read_text(encoding="utf-8"))
 
 

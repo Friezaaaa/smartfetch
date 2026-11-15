@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.env
+*.key
+*.crt
+*.srl
+*.csr
+deploy/vps/certs/
+.railway/
