@@ -1,9 +1,10 @@
 """Fail-closed client for isolated VPS browser worker.
 
 Handles mutual TLS (mTLS), canonical HMAC-SHA256 request signing,
-timestamp/nonce validation, and a circuit breaker for remote rendering.
-Fails closed with structured diagnostics whenever the worker is unconfigured,
-unreachable, or unhealthy.
+timestamp/nonce validation, bounded response reading, and an infrastructure
+circuit breaker for remote rendering.
+Fails closed with typed RetrievalDiagnostics whenever the worker is
+unconfigured, unreachable, or unhealthy.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import hmac
+import io
 import json
 import logging
 import os
@@ -21,18 +23,21 @@ from typing import Any, Mapping
 from urllib.parse import urlsplit
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from .diagnostics import (
     RetrievalDiagnostics,
-    RetrievalFailure,
-    attach_diagnostics,
+    RetrievalFailureCode,
+    RetrievalPhase,
+    SAFE_FAILURE_CODES,
+    SAFE_PHASES,
     make_diagnostics,
 )
 from .security import DNSResolutionError, validate_public_url
 
 _LOGGER = logging.getLogger("smartfetch.remote_browser")
 
-# Canonical error codes for remote browser operations
+# Canonical error codes for remote browser contract
 ERROR_BROWSER_UNAVAILABLE = "browser_unavailable"
 ERROR_TIMEOUT = "timeout"
 ERROR_POLICY_REJECTION = "policy_rejection"
@@ -47,15 +52,63 @@ VALID_ERROR_CODES = frozenset({
     ERROR_INVALID_REQUEST,
 })
 
+# Response size boundary (protects Railway memory from unbounded worker payloads)
+MAX_RESPONSE_BYTES = 10_485_760  # 10 MB maximum
+DEFAULT_RESPONSE_LIMIT = 4_194_304  # 4 MB default
+
+
+def _map_to_safe_diagnostics(
+    url: str,
+    error_code: str,
+    phase: str,
+    upstream_status: int | None = None,
+) -> RetrievalDiagnostics:
+    """Map contract error codes and phases to typed SmartFetch RetrievalDiagnostics."""
+    safe_phase: RetrievalPhase
+    if phase in SAFE_PHASES:
+        safe_phase = phase  # type: ignore[assignment]
+    elif phase == "capacity":
+        safe_phase = "browser_start"
+    elif phase in ("auth", "connect", "tls"):
+        safe_phase = "connect"
+    elif phase in ("relay", "browser_navigate"):
+        safe_phase = "browser_navigate"
+    else:
+        safe_phase = "browser_extract"
+
+    safe_code: RetrievalFailureCode
+    if error_code == ERROR_TIMEOUT:
+        safe_code = "timeout"
+    elif error_code == ERROR_POLICY_REJECTION:
+        safe_code = "dns" if safe_phase == "dns" else "policy_rejection"
+    elif error_code in (ERROR_BROWSER_UNAVAILABLE, ERROR_RENDER_FAILED):
+        safe_code = "browser_failure"
+    elif upstream_status in {401, 403, 407, 429}:
+        safe_code = "blocked_response"
+    elif upstream_status is not None and upstream_status >= 400:
+        safe_code = "upstream_status"
+    else:
+        safe_code = "browser_failure"
+
+    return make_diagnostics(
+        url,
+        "browser",
+        safe_phase,
+        safe_code,
+        browser_attempted=True,
+        upstream_status=upstream_status,
+    )
+
 
 class RemoteBrowserError(RuntimeError):
-    """Structured error raised on remote browser rendering failures."""
+    """Structured error carrying typed SmartFetch diagnostics on remote rendering failures."""
 
     def __init__(
         self,
         code: str,
         message: str,
         *,
+        url: str = "",
         phase: str = "browser_start",
         upstream_status: int | None = None,
         diagnostics: dict[str, Any] | None = None,
@@ -64,13 +117,19 @@ class RemoteBrowserError(RuntimeError):
         self.message = message
         self.phase = phase
         self.upstream_status = upstream_status
-        self.diagnostics = diagnostics or {}
+        self.diagnostics_payload = diagnostics or {}
+        self.retrieval_diagnostics: RetrievalDiagnostics = _map_to_safe_diagnostics(
+            url,
+            self.code,
+            self.phase,
+            upstream_status,
+        )
         super().__init__(f"[{self.code}] {self.message}")
 
 
 @dataclass
 class CircuitBreakerState:
-    """Thread-safe circuit breaker tracking consecutive worker failures."""
+    """Thread-safe circuit breaker tracking consecutive worker infrastructure failures."""
 
     failure_threshold: int = 3
     recovery_timeout: float = 30.0
@@ -95,10 +154,11 @@ class CircuitBreakerState:
             self._state = "CLOSED"
 
     def record_failure(self) -> None:
+        """Record an infrastructure transport failure. In HALF_OPEN, single failure trips to OPEN."""
         with self._lock:
             self._consecutive_failures += 1
             self._last_failure_time = time.monotonic()
-            if self._consecutive_failures >= self.failure_threshold:
+            if self._state == "HALF_OPEN" or self._consecutive_failures >= self.failure_threshold:
                 self._state = "OPEN"
 
     @property
@@ -122,6 +182,7 @@ class RemoteBrowserConfig:
     render_timeout: float = 18.0
     failure_threshold: int = 3
     recovery_timeout: float = 30.0
+    max_response_bytes: int = DEFAULT_RESPONSE_LIMIT
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> RemoteBrowserConfig:
@@ -142,11 +203,44 @@ class RemoteBrowserConfig:
             render_timeout=float(environ.get("BROWSER_WORKER_RENDER_TIMEOUT", "18.0")),
             failure_threshold=int(environ.get("BROWSER_WORKER_FAILURE_THRESHOLD", "3")),
             recovery_timeout=float(environ.get("BROWSER_WORKER_RECOVERY_TIMEOUT", "30.0")),
+            max_response_bytes=min(
+                MAX_RESPONSE_BYTES,
+                int(environ.get("BROWSER_WORKER_MAX_RESPONSE_BYTES", str(DEFAULT_RESPONSE_LIMIT))),
+            ),
         )
 
     @property
     def is_configured(self) -> bool:
         return bool(self.worker_url and self.hmac_key)
+
+    def validate_tls_paths(self) -> None:
+        """Fail closed if TLS cert paths are configured but non-existent on disk."""
+        if self.ca_cert_path and not os.path.isfile(self.ca_cert_path):
+            raise RemoteBrowserError(
+                ERROR_BROWSER_UNAVAILABLE,
+                f"Configured CA certificate not found: {self.ca_cert_path}",
+                phase="tls",
+            )
+        if (self.client_cert_path or self.client_key_path) and not (
+            self.client_cert_path and self.client_key_path
+        ):
+            raise RemoteBrowserError(
+                ERROR_BROWSER_UNAVAILABLE,
+                "Both BROWSER_WORKER_CLIENT_CERT and BROWSER_WORKER_CLIENT_KEY must be provided",
+                phase="tls",
+            )
+        if self.client_cert_path and not os.path.isfile(self.client_cert_path):
+            raise RemoteBrowserError(
+                ERROR_BROWSER_UNAVAILABLE,
+                f"Configured client cert not found: {self.client_cert_path}",
+                phase="tls",
+            )
+        if self.client_key_path and not os.path.isfile(self.client_key_path):
+            raise RemoteBrowserError(
+                ERROR_BROWSER_UNAVAILABLE,
+                f"Configured client key not found: {self.client_key_path}",
+                phase="tls",
+            )
 
 
 def compute_canonical_string(
@@ -214,7 +308,6 @@ def verify_signature(
     except ValueError:
         return False
 
-    # Check clock skew
     if abs(time.time() - ts) > max_skew_seconds:
         return False
 
@@ -243,8 +336,14 @@ class RemoteBrowserClient:
             failure_threshold=self.config.failure_threshold,
             recovery_timeout=self.config.recovery_timeout,
         )
-        self._session = session or requests.Session()
-        self._session.trust_env = False
+        if session is not None:
+            self._session = session
+        else:
+            self._session = requests.Session()
+            self._session.trust_env = False
+            adapter = HTTPAdapter(pool_connections=16, pool_maxsize=32)
+            self._session.mount("https://", adapter)
+            self._session.mount("http://", adapter)
 
     @property
     def is_available(self) -> bool:
@@ -260,28 +359,15 @@ class RemoteBrowserClient:
         timeout: float = 15.0,
         max_chars: int = 20000,
         request_id: str | None = None,
+        _url_validator=validate_public_url,
     ) -> dict[str, Any]:
-        """Render a target URL on the isolated worker, failing closed on any boundary error.
-
-        Returns a dictionary conforming to SmartFetch's render contract:
-        {
-            "success": True,
-            "requested_url": str,
-            "final_url": str,
-            "status_code": int,
-            "render_method": "browser",
-            "elapsed_ms": int,
-            "content": str,
-            "html": str,
-            "markdown": str,
-            ...
-        }
-        """
+        """Render a target URL on the isolated worker, failing closed on boundary error."""
         # 1. Fail closed if not configured
         if not self.config.is_configured:
             raise RemoteBrowserError(
                 ERROR_BROWSER_UNAVAILABLE,
                 "Remote browser worker is not configured",
+                url=url,
                 phase="validate",
             )
 
@@ -290,26 +376,32 @@ class RemoteBrowserClient:
             raise RemoteBrowserError(
                 ERROR_BROWSER_UNAVAILABLE,
                 "Remote browser worker circuit breaker is OPEN",
+                url=url,
                 phase="capacity",
             )
 
-        # 3. Validate target URL defensively before sending over the wire
+        # 3. Fail closed if mTLS paths are misconfigured
+        self.config.validate_tls_paths()
+
+        # 4. Validate target URL defensively before sending over the wire
         try:
-            safe_url = validate_public_url(url)
+            safe_url = _url_validator(url.strip())
         except DNSResolutionError as exc:
             raise RemoteBrowserError(
                 ERROR_POLICY_REJECTION,
                 f"DNS resolution failed: {exc}",
+                url=url,
                 phase="dns",
             ) from exc
         except ValueError as exc:
             raise RemoteBrowserError(
                 ERROR_POLICY_REJECTION,
                 f"URL policy rejection: {exc}",
+                url=url,
                 phase="validate",
             ) from exc
 
-        # 4. Construct request payload
+        # 5. Construct request payload
         render_timeout = min(timeout, self.config.render_timeout)
         payload = {
             "url": safe_url,
@@ -330,11 +422,7 @@ class RemoteBrowserClient:
             request_id=request_id,
         )
 
-        # 5. Configure TLS verification and client certificate if provided
-        verify: bool | str = True
-        if self.config.ca_cert_path and os.path.isfile(self.config.ca_cert_path):
-            verify = self.config.ca_cert_path
-
+        verify: bool | str = self.config.ca_cert_path if self.config.ca_cert_path else True
         cert = None
         if self.config.client_cert_path and self.config.client_key_path:
             cert = (self.config.client_cert_path, self.config.client_key_path)
@@ -348,12 +436,14 @@ class RemoteBrowserClient:
                 timeout=(self.config.connect_timeout, render_timeout + 3.0),
                 verify=verify,
                 cert=cert,
+                stream=True,
             )
         except requests.exceptions.Timeout as exc:
             self.circuit_breaker.record_failure()
             raise RemoteBrowserError(
                 ERROR_TIMEOUT,
                 f"Remote browser request timed out after {render_timeout}s",
+                url=safe_url,
                 phase="browser_navigate",
             ) from exc
         except requests.exceptions.SSLError as exc:
@@ -361,6 +451,7 @@ class RemoteBrowserClient:
             raise RemoteBrowserError(
                 ERROR_BROWSER_UNAVAILABLE,
                 f"mTLS handshake failure with browser worker: {exc}",
+                url=safe_url,
                 phase="tls",
             ) from exc
         except requests.exceptions.ConnectionError as exc:
@@ -368,6 +459,7 @@ class RemoteBrowserClient:
             raise RemoteBrowserError(
                 ERROR_BROWSER_UNAVAILABLE,
                 f"Connection error contacting browser worker: {exc}",
+                url=safe_url,
                 phase="connect",
             ) from exc
         except Exception as exc:
@@ -375,60 +467,102 @@ class RemoteBrowserClient:
             raise RemoteBrowserError(
                 ERROR_RENDER_FAILED,
                 f"Unexpected transport failure: {exc}",
+                url=safe_url,
                 phase="browser_start",
             ) from exc
 
         elapsed_ms = round((time.monotonic() - started) * 1000)
 
-        # 6. Parse response envelope
-        return self._handle_response(response, elapsed_ms, safe_url)
+        # 6. Parse response envelope with size boundary
+        return self._handle_response(response, elapsed_ms, safe_url, _url_validator)
 
     def _handle_response(
         self,
         response: requests.Response,
         elapsed_ms: int,
         requested_url: str,
+        url_validator,
     ) -> dict[str, Any]:
         try:
-            data = response.json()
-        except ValueError:
-            self.circuit_breaker.record_failure()
+            content_length = response.headers.get("Content-Length")
+            if content_length and int(content_length) > self.config.max_response_bytes:
+                raise RemoteBrowserError(
+                    ERROR_RENDER_FAILED,
+                    f"Response exceeds maximum allowed size ({content_length} bytes)",
+                    url=requested_url,
+                    phase="response",
+                )
+
+            # Read bounded body (response.raw or response.content)
+            if hasattr(response, "raw") and response.raw is not None:
+                raw_bytes = response.raw.read(self.config.max_response_bytes + 1)
+            else:
+                raw_bytes = response.content
+
+            if len(raw_bytes) > self.config.max_response_bytes:
+                raise RemoteBrowserError(
+                    ERROR_RENDER_FAILED,
+                    f"Response exceeded maximum allowed bytes ({self.config.max_response_bytes})",
+                    url=requested_url,
+                    phase="response",
+                )
+
+            data = json.loads(raw_bytes.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            if isinstance(exc, RemoteBrowserError):
+                raise
+            if response.status_code >= 500:
+                self.circuit_breaker.record_failure()
             raise RemoteBrowserError(
                 ERROR_RENDER_FAILED,
                 f"Worker returned non-JSON response (HTTP {response.status_code})",
+                url=requested_url,
                 phase="response",
                 upstream_status=response.status_code,
-            )
+            ) from exc
 
         if not isinstance(data, dict):
-            self.circuit_breaker.record_failure()
+            if response.status_code >= 500:
+                self.circuit_breaker.record_failure()
             raise RemoteBrowserError(
                 ERROR_RENDER_FAILED,
                 "Worker returned invalid JSON envelope",
+                url=requested_url,
                 phase="response",
             )
 
-        # If HTTP response status is successful (200) and payload says success
         if response.status_code == 200 and data.get("success") is True:
             self.circuit_breaker.record_success()
+
+            # Verify redirected final_url is also a safe public target
+            final_url = data.get("final_url", requested_url)
+            try:
+                url_validator(final_url)
+            except Exception as exc:
+                raise RemoteBrowserError(
+                    ERROR_POLICY_REJECTION,
+                    f"Final redirected URL policy rejection: {exc}",
+                    url=requested_url,
+                    phase="redirect",
+                ) from exc
+
             data.setdefault("elapsed_ms", elapsed_ms)
             data.setdefault("requested_url", requested_url)
             data.setdefault("render_method", "browser")
             return data
 
-        # Map error response
         error_code = data.get("error_code")
         error_msg = data.get("error", f"Remote worker error (HTTP {response.status_code})")
         phase = data.get("phase", "response")
         upstream_status = data.get("upstream_status")
 
-        # Record circuit breaker failure only for server/infrastructure failures
-        if response.status_code >= 500 or error_code in (ERROR_BROWSER_UNAVAILABLE, ERROR_RENDER_FAILED):
+        if response.status_code >= 500 or error_code == ERROR_BROWSER_UNAVAILABLE:
             self.circuit_breaker.record_failure()
 
         raise RemoteBrowserError(
             error_code if error_code in VALID_ERROR_CODES else ERROR_RENDER_FAILED,
             error_msg,
+            url=requested_url,
             phase=phase,
             upstream_status=upstream_status,
             diagnostics=data.get("diagnostics"),
