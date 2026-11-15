@@ -40,11 +40,11 @@ trap cleanup EXIT
 echo "--> Waiting for broker readiness signal (/ipc/ready.json)..."
 READY=0
 for _ in $(seq 1 75); do
-  if docker run --rm -v smartfetch_prototype_ipc:/ipc busybox test -s /ipc/ready.json 2>/dev/null; then
+  if docker exec sf-prototype-broker /usr/bin/test -s /ipc/ready.json 2>/dev/null; then
     READY=1
     break
   fi
-  if ! docker ps -q --no-trunc | grep -q "${BROKER_ID}"; then
+  if ! docker ps -q --filter "name=sf-prototype-broker" --filter "status=running" | grep -q .; then
     echo "ERROR: Broker container exited before ready signal. Logs:"
     docker logs sf-prototype-broker
     exit 1

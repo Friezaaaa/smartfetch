@@ -6,7 +6,7 @@ param(
     [string]$Mode = "full"
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent $ScriptDir
@@ -37,16 +37,16 @@ try {
     Write-Host "--> Waiting for broker readiness signal (/ipc/ready.json)..." -ForegroundColor Yellow
     $Ready = $false
     for ($i = 0; $i -lt 75; $i++) {
-        $check = docker run --rm -v smartfetch_prototype_ipc:/ipc busybox sh -c "test -s /ipc/ready.json && echo ready" 2>$null
-        if ($check -match "ready") {
-            $Ready = $true
-            break
-        }
-        $running = docker ps -q --no-trunc | Select-String $BrokerId
+        $running = (docker ps -q --filter "name=sf-prototype-broker" --filter "status=running")
         if (-not $running) {
             Write-Host "ERROR: Broker container exited prematurely. Logs:" -ForegroundColor Red
             docker logs sf-prototype-broker
             exit 1
+        }
+        $null = docker exec sf-prototype-broker /usr/bin/test -s /ipc/ready.json 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $Ready = $true
+            break
         }
         Start-Sleep -Milliseconds 200
     }
