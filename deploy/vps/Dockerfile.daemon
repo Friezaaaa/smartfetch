@@ -14,9 +14,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Create unprivileged smartfetch user and group (UID/GID 10001)
-RUN groupadd --gid 10001 smartfetch \
- && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/smartfetch --shell /bin/bash smartfetch \
- && mkdir -p /ipc /etc/smartfetch/certs \
+RUN echo "smartfetch:x:10001:10001::/home/smartfetch:/bin/bash" >> /etc/passwd \
+ && echo "smartfetch:x:10001:" >> /etc/group \
+ && mkdir -p /ipc /home/smartfetch /etc/smartfetch/certs \
  && chown -R 10001:10001 /ipc /home/smartfetch /etc/smartfetch
 
 WORKDIR /app

@@ -18,7 +18,9 @@ cd "${OUT_DIR}"
 echo "--> Generating Dedicated SmartFetch Root CA..."
 openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
   -keyout ca.key -out ca.crt \
-  -subj "/CN=SmartFetch Internal Root CA/O=SmartFetch/OU=Security"
+  -subj "/CN=SmartFetch Internal Root CA/O=SmartFetch/OU=Security" \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign"
 
 chmod 0600 ca.key
 chmod 0644 ca.crt

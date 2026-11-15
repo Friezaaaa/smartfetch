@@ -239,15 +239,68 @@ Execute this verification matrix against a newly deployed VPS worker to ensure a
 | **T7** | Valid Page Render | Request URL: `https://example.com` | `200 OK` with `status: "success"`, title & text | End-to-end rendering functionality |
 | **T8** | Concurrency Saturation | Send 5 simultaneous long-running jobs | 4 processed, 5th receives `429 Too Many Requests` | Capacity & resource bounding |
 
-### Automated Verification Script
-Run the verification test using the Python test suite:
+### Automated Verification Gate
+Execute the comprehensive end-to-end verification gate covering all 6 production requirements (healthcheck, HMAC/skew, mTLS enforcement, SSRF policy, headless rendering, and circuit breaker fail-closed behavior):
 ```bash
-python -m unittest tests/test_remote_browser.py tests/test_browser_daemon.py
+python scripts/verify_vps_deployment.py
+```
+
+Run the containerized test suite:
+```bash
+docker compose -f deploy/local/docker-compose.prototype.yml run --rm prototype-worker \
+  python -m unittest tests/test_remote_browser.py tests/test_browser_daemon.py tests/test_remote_browser_integration.py
 ```
 
 ---
 
-## 7. Operational Runbook & Disaster Recovery
+## 7. Railway Production Integration
+
+SmartFetch production runs on Railway to handle the MCP server, API, x402 payments, and client request orchestration. With Phase 4, `smartfetch/browser_fetch.py` is wired to automatically route all browser rendering tasks to the remote VPS worker daemon when configured.
+
+### Integration Architecture
+```
+[User / MCP Client]
+        │
+        ▼
+[Railway Instance: SmartFetch MCP Server] (Production)
+   - Handles API, HTTP, x402 payments, text extract
+   - RemoteBrowserClient (smartfetch/remote_browser.py)
+   - browser_fetch() dispatches via HMAC-SHA256 + mTLS
+        │ (Mutual TLS + HMAC over HTTPS :8443)
+        ▼
+[VPS Isolated Daemon] (smartfetch-browser-daemon)
+   - Listens on 0.0.0.0:8443 (Debian 12, non-root UID 10001)
+   - Enforces mTLS & HMAC signature verification
+   - Enforces DestinationPolicy (SSRF protection)
+        │ (Unix Domain Socket via smartfetch_vps_ipc volume)
+        ▼
+[VPS Worker Container] (smartfetch-browser-worker)
+   - network_mode: none (zero network devices except loopback)
+   - UID/GID 10001:10001, seccomp-chrome.json sandbox
+   - Chromium headless execution via IPC relay
+```
+
+### Railway Environment Configuration
+Configure the following variables in Railway (`deploy/railway/railway.env.example`):
+```bash
+BROWSER_WORKER_URL=https://worker.yourdomain.com:8443
+BROWSER_WORKER_HMAC_KEY=<64_hex_char_shared_secret>
+BROWSER_WORKER_CA_CERT=/etc/smartfetch/certs/ca.crt
+BROWSER_WORKER_CLIENT_CERT=/etc/smartfetch/certs/client.crt
+BROWSER_WORKER_CLIENT_KEY=/etc/smartfetch/certs/client.key
+BROWSER_WORKER_REQUIRED=true
+BROWSER_WORKER_RENDER_TIMEOUT=30.0
+BROWSER_WORKER_CONNECT_TIMEOUT=5.0
+```
+
+### Fail-Closed Assurance
+1. When `BROWSER_WORKER_REQUIRED=true`, if the VPS worker is unreachable, fails mTLS, or trips the circuit breaker, the request immediately fails closed with `RetrievalFailure(diagnostic_code="browser_failure")`.
+2. Existing MCP tools (`fetch_webpage`, `webpage_to_markdown`, `extract_webpage_text`, `render_webpage`) retain 100% contract compatibility.
+3. Production server files (`server.py`, `mcp_server.py`, `core.py`, `railway.json`) remain clean and unmodified.
+
+---
+
+## 8. Operational Runbook & Disaster Recovery
 
 ### Ephemeral Worker Cleanup
 If an unhandled exception or process termination leaves orphan worker containers:

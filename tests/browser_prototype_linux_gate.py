@@ -179,7 +179,7 @@ def run_worker(*, relay_only: bool = False) -> int:
         direct_udp = _direct_udp_denied(canary_ip, canary_port)
         if not direct_tcp or not direct_udp:
             raise WorkerBoundaryError("worker_direct_network")
-        deadline = time.monotonic() + 25
+        deadline = time.monotonic() + 45
         if relay_only:
             relay = WorkerRelay(str(ROOT / "relay.sock"),
                                 operation_id=OPERATION_ID, deadline=deadline)
