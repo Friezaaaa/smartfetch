@@ -1,0 +1,67 @@
+# Production Docker Compose for SmartFetch Isolated VPS Browser Worker
+
+volumes:
+  smartfetch_vps_ipc:
+    name: smartfetch_vps_ipc
+
+networks:
+  vps_egress_net:
+    name: smartfetch_vps_net
+    driver: bridge
+
+services:
+  # 1. Ephemeral Worker Image Builder (used by docker compose build)
+  browser-worker:
+    build:
+      context: ../..
+      dockerfile: deploy/vps/Dockerfile.worker
+    image: smartfetch-browser-worker:prod
+    profiles:
+      - build-only
+
+  # 2. Production Browser Worker Daemon
+  browser-daemon:
+    build:
+      context: ../..
+      dockerfile: deploy/vps/Dockerfile.daemon
+    image: smartfetch-browser-daemon:prod
+    container_name: sf-browser-daemon
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    group_add:
+      - "${DOCKER_GID:-999}"
+    environment:
+      - BROWSER_WORKER_HOST=0.0.0.0
+      - BROWSER_WORKER_PORT=8443
+      - BROWSER_WORKER_HMAC_KEY=${BROWSER_WORKER_HMAC_KEY:?Error: BROWSER_WORKER_HMAC_KEY must be set}
+      - BROWSER_WORKER_MAX_CONCURRENT=${BROWSER_WORKER_MAX_CONCURRENT:-4}
+      - BROWSER_WORKER_IPC_DIR=/ipc
+      - BROWSER_WORKER_IPC_VOLUME=smartfetch_vps_ipc
+      - BROWSER_WORKER_MODE=docker
+      - BROWSER_WORKER_DOCKER_IMAGE=smartfetch-browser-worker:prod
+      - BROWSER_WORKER_SECCOMP=/etc/smartfetch/seccomp-chrome.json
+      - BROWSER_WORKER_SSL_CERT=/etc/smartfetch/certs/server.crt
+      - BROWSER_WORKER_SSL_KEY=/etc/smartfetch/certs/server.key
+      - BROWSER_WORKER_SSL_CA=/etc/smartfetch/certs/ca.crt
+    volumes:
+      - smartfetch_vps_ipc:/ipc
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./certs:/etc/smartfetch/certs:ro
+      - ./seccomp-chrome.json:/etc/smartfetch/seccomp-chrome.json:ro
+    networks:
+      - vps_egress_net
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2048M
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "curl -k -f --max-time 3 https://127.0.0.1:8443/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

@@ -1,0 +1,23 @@
+[Unit]
+Description=SmartFetch VPS Browser Worker Daemon
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/smartfetch
+EnvironmentFile=/opt/smartfetch/.env
+ExecStart=/usr/bin/docker compose -f /opt/smartfetch/deploy/vps/docker-compose.vps.yml up
+ExecStop=/usr/bin/docker compose -f /opt/smartfetch/deploy/vps/docker-compose.vps.yml down
+Restart=always
+RestartSec=5
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+# Hard process limits on the host
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target

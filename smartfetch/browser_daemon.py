@@ -78,6 +78,7 @@ class BrowserDaemonConfig:
     hmac_key: str | None = None
     max_concurrent: int = 4
     ipc_dir: str = "/ipc"
+    ipc_volume: str | None = None
     chromium_path: str = "/usr/bin/chromium"
     worker_mode: str = "direct"  # direct, subprocess, docker
     docker_image: str = "smartfetch-prototype-worker:local"
@@ -97,6 +98,7 @@ class BrowserDaemonConfig:
             hmac_key=environ.get("BROWSER_WORKER_HMAC_KEY", "").strip() or None,
             max_concurrent=int(environ.get("BROWSER_WORKER_MAX_CONCURRENT", "4")),
             ipc_dir=environ.get("BROWSER_WORKER_IPC_DIR", "/ipc").strip(),
+            ipc_volume=environ.get("BROWSER_WORKER_IPC_VOLUME", "").strip() or None,
             chromium_path=environ.get("BROWSER_WORKER_CHROMIUM_PATH", "/usr/bin/chromium").strip(),
             worker_mode=environ.get("BROWSER_WORKER_MODE", "direct").strip(),
             docker_image=environ.get("BROWSER_WORKER_DOCKER_IMAGE", "smartfetch-prototype-worker:local").strip(),
@@ -204,9 +206,11 @@ class DockerWorkerRunner(WorkerRunner):
         self,
         docker_image: str = "smartfetch-prototype-worker:local",
         seccomp_profile: str = "/etc/smartfetch/seccomp-chrome.json",
+        ipc_volume: str | None = None,
     ):
         self.docker_image = docker_image
         self.seccomp_profile = seccomp_profile
+        self.ipc_volume = ipc_volume
 
     def run(
         self,
@@ -219,7 +223,18 @@ class DockerWorkerRunner(WorkerRunner):
         timeout_seconds: float,
     ) -> dict[str, Any]:
         job_dir = Path(socket_path).parent.resolve()
+        job_name = job_dir.name
         container_name = f"sf-worker-{secrets.token_hex(6)}"
+
+        if self.ipc_volume:
+            volume_mount = f"{self.ipc_volume}:/ipc:rw"
+            container_socket = f"/ipc/{job_name}/relay.sock"
+            container_output = f"/ipc/{job_name}/worker_output.json"
+        else:
+            volume_mount = f"{job_dir}:/ipc:rw"
+            container_socket = "/ipc/relay.sock"
+            container_output = "/ipc/worker_output.json"
+
         cmd = [
             "docker",
             "run",
@@ -237,7 +252,7 @@ class DockerWorkerRunner(WorkerRunner):
             "--pids-limit",
             "64",
             "-v",
-            f"{job_dir}:/ipc:rw",
+            volume_mount,
             self.docker_image,
             "python",
             "-m",
@@ -245,7 +260,7 @@ class DockerWorkerRunner(WorkerRunner):
             "--url",
             url,
             "--socket",
-            "/ipc/relay.sock",
+            container_socket,
             "--operation-id",
             operation_id.hex(),
             "--deadline-seconds",
@@ -253,7 +268,7 @@ class DockerWorkerRunner(WorkerRunner):
             "--max-chars",
             str(max_chars),
             "--output",
-            "/ipc/worker_output.json",
+            container_output,
         ]
         if os.path.isfile(self.seccomp_profile):
             cmd.insert(4, f"--security-opt=seccomp={self.seccomp_profile}")
@@ -556,7 +571,7 @@ def create_daemon(
 
     if runner is None:
         if cfg.worker_mode == "docker":
-            runner = DockerWorkerRunner(cfg.docker_image, cfg.seccomp_profile)
+            runner = DockerWorkerRunner(cfg.docker_image, cfg.seccomp_profile, ipc_volume=cfg.ipc_volume)
         elif cfg.worker_mode == "subprocess":
             runner = SubprocessWorkerRunner(cfg.chromium_path)
         else:

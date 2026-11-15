@@ -1,0 +1,53 @@
+# Production VPS Isolated Browser Worker Dockerfile
+FROM python:3.12-slim
+
+ENV PATH="/usr/local/bin:/usr/bin:/bin" \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+    chromium \
+    chromium-sandbox \
+    fonts-freefont-ttf \
+    passwd \
+    login \
+    util-linux \
+ && rm -rf /var/lib/apt/lists/*
+
+# Wrap /usr/bin/chromium to pass --disable-setuid-sandbox so Chromium selects
+# unprivileged user namespaces instead of deprecated SUID sandboxing,
+# without needing --no-sandbox or weakening container security.
+RUN dpkg-divert --add --rename --divert /usr/bin/chromium.real /usr/bin/chromium \
+ && printf '#!/bin/sh\nexec /usr/bin/chromium.real --disable-setuid-sandbox "$@"\n' > /usr/bin/chromium \
+ && chmod 0755 /usr/bin/chromium
+
+# Add dedicated smartfetch UID 10001:10001
+RUN echo "smartfetch:x:10001:10001::/home/smartfetch:/bin/bash" >> /etc/passwd \
+ && echo "smartfetch:x:10001:" >> /etc/group \
+ && mkdir -p /home/smartfetch /ipc \
+ && chown -R 10001:10001 /home/smartfetch /ipc \
+ && chmod 0700 /ipc
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN python -m pip install --no-cache-dir --upgrade pip==26.2.1 \
+ && python -m pip install --no-cache-dir -r requirements.txt
+
+COPY --chown=10001:10001 smartfetch ./smartfetch
+
+# Enforce strict fail-closed 6-variable allowlist at container boundary
+RUN printf '#!/bin/sh\nexec env -i PATH=/usr/local/bin:/usr/bin:/bin HOME="${HOME:-/home/smartfetch}" TMPDIR="${TMPDIR:-/tmp}" LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 "$@"\n' > /usr/local/bin/worker-entrypoint.sh \
+ && chmod 0755 /usr/local/bin/worker-entrypoint.sh
+
+USER 10001:10001
+
+ENV PATH="/usr/local/bin:/usr/bin:/bin" \
+    HOME="/home/smartfetch" \
+    TMPDIR="/tmp" \
+    LANG="C.UTF-8" \
+    LC_ALL="C.UTF-8" \
+    PYTHONDONTWRITEBYTECODE=1
+
+ENTRYPOINT ["/usr/local/bin/worker-entrypoint.sh"]
+CMD ["python", "-m", "smartfetch.browser_worker", "--help"]
