@@ -348,7 +348,7 @@ def render_local(url: str, *, chromium: str, proxy_host: str, proxy_port: int,
             "success": True, "requested_url": url, "final_url": final_url,
             "status_code": status, "render_method": "browser",
             "elapsed_ms": round((time.monotonic() - started) * 1000),
-            "fallback_reason": "forced", **extracted,
+            "fallback_reason": "forced", "html": html, **extracted,
         }, max_chars)
     except PrototypeFailure as error:
         failure = error

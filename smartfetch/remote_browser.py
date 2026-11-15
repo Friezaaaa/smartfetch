@@ -359,7 +359,7 @@ class RemoteBrowserClient:
         timeout: float = 15.0,
         max_chars: int = 20000,
         request_id: str | None = None,
-        _url_validator=validate_public_url,
+        _url_validator=None,
     ) -> dict[str, Any]:
         """Render a target URL on the isolated worker, failing closed on boundary error."""
         # 1. Fail closed if not configured
@@ -384,8 +384,9 @@ class RemoteBrowserClient:
         self.config.validate_tls_paths()
 
         # 4. Validate target URL defensively before sending over the wire
+        url_validator = _url_validator if _url_validator is not None else validate_public_url
         try:
-            safe_url = _url_validator(url.strip())
+            safe_url = url_validator(url.strip())
         except DNSResolutionError as exc:
             raise RemoteBrowserError(
                 ERROR_POLICY_REJECTION,
@@ -474,7 +475,7 @@ class RemoteBrowserClient:
         elapsed_ms = round((time.monotonic() - started) * 1000)
 
         # 6. Parse response envelope with size boundary
-        return self._handle_response(response, elapsed_ms, safe_url, _url_validator)
+        return self._handle_response(response, elapsed_ms, safe_url, url_validator)
 
     def _handle_response(
         self,
