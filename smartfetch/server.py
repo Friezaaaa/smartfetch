@@ -41,13 +41,31 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
     """Build the production SmartFetch application with x402 payment protection and isolated browser routing."""
     settings = load_x402_settings(v111_environ) if payment_settings is None else payment_settings
 
-    async def _run_mcp_fetch(url: str, force_browser: bool, max_chars: int) -> dict:
+    async def _run_mcp_fetch(
+        url: str,
+        force_browser: bool,
+        max_chars: int,
+        *,
+        format: str = "markdown",
+        render_mode: str = "auto",
+        no_cache: bool = False,
+    ) -> dict:
         remote_cfg = RemoteBrowserConfig.from_env()
         if not remote_cfg.is_configured:
             raise RuntimeError("Browser rendering is unavailable: remote browser worker is not configured")
         loop = asyncio.get_running_loop()
         should_force = force_browser or os.getenv("BROWSER_WORKER_REQUIRED", "false").lower() in ("1", "true", "yes")
-        result = await loop.run_in_executor(None, smart_fetch, url, should_force, max_chars)
+        result = await loop.run_in_executor(
+            None,
+            lambda: smart_fetch(
+                url,
+                should_force,
+                max_chars,
+                format=format,
+                render_mode=render_mode,
+                no_cache=no_cache,
+            ),
+        )
         result["request_id"] = secrets.token_hex(8)
         result["service_version"] = SERVICE_VERSION
         return result
@@ -118,10 +136,20 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         if not isinstance(url, str) or not url.strip():
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_url", "error": "URL must be a non-empty string"})
         force_browser = bool(body.get("force_browser", False))
+        render_mode = str(body.get("render_mode", "auto"))
+        fmt = str(body.get("format", "markdown"))
+        no_cache = bool(body.get("no_cache", False)) or request.headers.get("cache-control") == "no-cache"
         max_chars = int(body.get("max_chars", 20000))
         max_chars = max(1000, min(50000, max_chars))
         try:
-            result = await _run_mcp_fetch(url.strip(), force_browser, max_chars)
+            result = await _run_mcp_fetch(
+                url.strip(),
+                force_browser,
+                max_chars,
+                format=fmt,
+                render_mode=render_mode,
+                no_cache=no_cache,
+            )
             return JSONResponse(status_code=200, content=result)
         except Exception as exc:
             return JSONResponse(status_code=502, content={"success": False, "error_code": "fetch_failed", "error": str(exc)})
