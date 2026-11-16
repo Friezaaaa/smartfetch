@@ -76,7 +76,7 @@ class BrowserDaemonConfig:
     host: str = "0.0.0.0"
     port: int = 8443
     hmac_key: str | None = None
-    max_concurrent: int = 4
+    max_concurrent: int = 2
     ipc_dir: str = "/ipc"
     ipc_volume: str | None = None
     chromium_path: str = "/usr/bin/chromium"
@@ -96,7 +96,7 @@ class BrowserDaemonConfig:
             host=environ.get("BROWSER_WORKER_HOST", "0.0.0.0").strip(),
             port=int(environ.get("BROWSER_WORKER_PORT", "8443")),
             hmac_key=environ.get("BROWSER_WORKER_HMAC_KEY", "").strip() or None,
-            max_concurrent=int(environ.get("BROWSER_WORKER_MAX_CONCURRENT", "4")),
+            max_concurrent=int(environ.get("BROWSER_WORKER_MAX_CONCURRENT", "2")),
             ipc_dir=environ.get("BROWSER_WORKER_IPC_DIR", "/ipc").strip(),
             ipc_volume=environ.get("BROWSER_WORKER_IPC_VOLUME", "").strip() or None,
             chromium_path=environ.get("BROWSER_WORKER_CHROMIUM_PATH", "/usr/bin/chromium").strip(),
@@ -275,13 +275,17 @@ class DockerWorkerRunner(WorkerRunner):
             container_output,
         ])
 
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout_seconds + 5.0,
-            text=True,
-        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout_seconds + 5.0,
+                text=True,
+            )
+        finally:
+            # Guarantee container removal even on timeout, cancellation, or crash
+            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
         output_file = job_dir / "worker_output.json"
         if proc.returncode != 0 or not output_file.is_file():
             out_content = output_file.read_text(encoding="utf-8") if output_file.is_file() else "NO_FILE"

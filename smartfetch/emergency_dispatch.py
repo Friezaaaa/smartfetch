@@ -25,6 +25,12 @@ _FETCH_METHOD_GUIDANCE = (
     b'"payment_discovery":"/.well-known/x402",'
     b'"retrieval_available":false,"mode":"emergency_fail_closed"}'
 )
+_FETCH_METHOD_GUIDANCE_OPERATIONAL = (
+    b'{"error":"method_not_allowed","message":"Use POST /fetch.",'
+    b'"openapi":"/openapi.json","documentation":"/docs",'
+    b'"payment_discovery":"/.well-known/x402",'
+    b'"retrieval_available":true,"mode":"isolated_browser"}'
+)
 
 
 def _compact(payload: dict) -> bytes:
@@ -66,14 +72,14 @@ async def _send_json(send, status: int, body: bytes, *, unavailable: bool = Fals
     await send({"type": "http.response.body", "body": body})
 
 
-async def _send_fetch_method_guidance(send, method: str):
-    body = b"" if method == "HEAD" else _FETCH_METHOD_GUIDANCE
+async def _send_fetch_method_guidance(send, method: str, *, operational: bool = False):
+    body = b"" if method == "HEAD" else (_FETCH_METHOD_GUIDANCE_OPERATIONAL if operational else _FETCH_METHOD_GUIDANCE)
     headers = [
         (b"content-type", b"application/json"),
         (b"content-length", str(len(body)).encode("ascii")),
         (b"cache-control", b"no-store"),
         (b"allow", b"POST"),
-        (b"x-smartfetch-availability", b"unavailable"),
+        (b"x-smartfetch-availability", b"available" if operational else b"unavailable"),
     ]
     await send({"type": "http.response.start", "status": 405, "headers": headers})
     await send({"type": "http.response.body", "body": body})
@@ -102,7 +108,9 @@ class EmergencyDispatch:
                 await _send_json(send, 503, _UNAVAILABLE["service_unhealthy"], unavailable=True)
                 return
             if path == "/fetch" and method in ("GET", "HEAD"):
-                await _send_fetch_method_guidance(send, method)
+                from .remote_browser import RemoteBrowserConfig
+                operational = RemoteBrowserConfig.from_env().is_configured
+                await _send_fetch_method_guidance(send, method, operational=operational)
                 return
             body = b"" if method == "HEAD" else _METHOD_NOT_ALLOWED
             await _send_json(send, 405, body, allow=True)
@@ -150,6 +158,11 @@ class EmergencyDispatch:
             return
         if terminal_unhealthy:
             await _send_json(send, 503, _UNAVAILABLE["service_unhealthy"], unavailable=True)
+            return
+        from .remote_browser import RemoteBrowserConfig
+        remote_cfg = RemoteBrowserConfig.from_env()
+        if remote_cfg.is_configured:
+            await self.app(scope, receive, send)
             return
         code = "browser_unavailable" if call.browser else "retrieval_unavailable"
         await _send_json(send, 503, _UNAVAILABLE[code], unavailable=True)

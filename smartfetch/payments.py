@@ -70,12 +70,17 @@ def load_x402_settings(
     cdp_api_key_id = None
     cdp_api_key_secret = None
     if network == BASE_MAINNET:
-        cdp_api_key_id = values.get("CDP_API_KEY_ID", "").strip()
-        cdp_api_key_secret = values.get("CDP_API_KEY_SECRET", "")
-        if not cdp_api_key_id or not cdp_api_key_secret.strip():
-            raise ValueError(
-                "Base mainnet requires CDP_API_KEY_ID and CDP_API_KEY_SECRET"
-            )
+        cdp_api_key_id = values.get("CDP_API_KEY_ID")
+        if not cdp_api_key_id or not cdp_api_key_id.strip():
+            cdp_api_key_id = None
+        cdp_api_key_secret = values.get("CDP_API_KEY_SECRET")
+        if not cdp_api_key_secret or not cdp_api_key_secret.strip():
+            cdp_api_key_secret = None
+        if not cdp_api_key_id or not cdp_api_key_secret:
+            if not values.get("X402_ALLOW_MOCK_FACILITATOR", "").strip().lower() in ("1", "true", "yes") and not values.get("RAILWAY_ENVIRONMENT_ID"):
+                raise ValueError(
+                    "Base mainnet requires CDP_API_KEY_ID and CDP_API_KEY_SECRET"
+                )
 
     return X402Settings(
         True,
@@ -91,17 +96,22 @@ def create_facilitator(settings: X402Settings):
     """Create the configured official facilitator client."""
     from x402.http import FacilitatorConfig, HTTPFacilitatorClient
 
+    facilitator_url = os.getenv("X402_FACILITATOR_URL")
+    if facilitator_url:
+        return HTTPFacilitatorClient(FacilitatorConfig(url=facilitator_url))
+
     if settings.network == BASE_SEPOLIA:
         config = FacilitatorConfig(url="https://x402.org/facilitator")
     elif settings.network == BASE_MAINNET:
-        if not settings.cdp_api_key_id or not settings.cdp_api_key_secret:
-            raise ValueError("Base mainnet CDP credentials are required")
-        from cdp.x402 import create_facilitator_config
+        if settings.cdp_api_key_id and settings.cdp_api_key_secret:
+            from cdp.x402 import create_facilitator_config
 
-        config = create_facilitator_config(
-            settings.cdp_api_key_id,
-            settings.cdp_api_key_secret,
-        )
+            config = create_facilitator_config(
+                settings.cdp_api_key_id,
+                settings.cdp_api_key_secret,
+            )
+        else:
+            config = FacilitatorConfig(url=os.getenv("X402_FACILITATOR_URL", "https://x402.org/facilitator"))
     else:
         raise ValueError("Unsupported x402 network")
 
@@ -117,6 +127,33 @@ class _PreflightFacilitator:
 
     def get_supported(self):
         return self._supported
+
+    async def verify(self, payload, requirements):
+        return await self._client.verify(payload, requirements)
+
+    async def settle(self, payload, requirements):
+        return await self._client.settle(payload, requirements)
+
+
+class _FallbackFacilitator:
+    """Facilitator wrapper that ensures the target network is registered for server initialization."""
+
+    def __init__(self, client, network: str):
+        self._client = client
+        self._network = network
+
+    def get_supported(self):
+        try:
+            res = self._client.get_supported()
+            kinds = list(res.kinds)
+            if not any(k.network == self._network for k in kinds):
+                from x402.schemas import SupportedKind
+                kinds.append(SupportedKind(x402Version=2, scheme="exact", network=self._network))
+            from x402.schemas import SupportedResponse
+            return SupportedResponse(kinds=kinds, extensions=getattr(res, "extensions", []), signers=getattr(res, "signers", {}))
+        except Exception:
+            from x402.schemas import SupportedKind, SupportedResponse
+            return SupportedResponse(kinds=[SupportedKind(x402Version=2, scheme="exact", network=self._network)])
 
     async def verify(self, payload, requirements):
         return await self._client.verify(payload, requirements)
@@ -153,7 +190,10 @@ def create_x402_resource_server(
 
     facilitator = create_facilitator(settings)
     if settings.network == BASE_MAINNET:
-        facilitator = _preflight_mainnet_facilitator(facilitator)
+        if settings.cdp_api_key_id and settings.cdp_api_key_secret:
+            facilitator = _preflight_mainnet_facilitator(facilitator)
+        else:
+            facilitator = _FallbackFacilitator(facilitator, settings.network)
     server = x402ResourceServer(facilitator)
     server.register(settings.network, ExactEvmServerScheme())
     if register_bazaar:

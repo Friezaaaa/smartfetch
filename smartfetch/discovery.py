@@ -125,6 +125,8 @@ def x402_manifest(urls, settings, v111_accepts=None):
             "price": settings.price,
             "network": settings.network,
             "asset": "USDC",
+            "payTo": settings.pay_to,
+            "pay_to": settings.pay_to,
         },
         "endpoints": {
             "mcp": {

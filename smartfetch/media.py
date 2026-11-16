@@ -31,8 +31,7 @@ from urllib.parse import urljoin, urlsplit
 import weakref
 
 import httpx
-from PIL import Image
-from pypdf import PdfReader
+# PIL.Image and pypdf.PdfReader are lazily imported when processing image/pdf media
 
 from .core import smart_fetch
 from .security import validate_public_url
@@ -563,6 +562,7 @@ _IMAGE_FORMAT_MIME = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/w
 def inspect_image(path: Path, declared_mime: str) -> ImageInfo:
     _require_file_size(path, "image")
     try:
+        from PIL import Image
         with _open_local_file(path) as source:
             with Image.open(source) as image:
                 image_format = image.format
@@ -597,6 +597,7 @@ def inspect_pdf(path: Path, declared_mime: str) -> PdfInfo:
     if _content_type(declared_mime) != "application/pdf":
         raise MediaFailure("unsupported_media_type")
     try:
+        from pypdf import PdfReader
         with _open_local_file(path) as source:
             if source.read(5) != b"%PDF-":
                 raise MediaFailure("unsupported_media_type")
