@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import ipaddress
 import os
 import socket
@@ -6,21 +7,55 @@ from urllib.parse import urlparse
 ALLOW_PRIVATE = os.getenv('ALLOW_PRIVATE_NETWORK') == '1'
 ALLOWED_PORTS = {80, 443}
 BLOCKED_HOST_SUFFIXES = (
-    '.internal', '.local', '.localhost', '.home', '.lan',
+    '.internal', '.local', '.localhost', '.home', '.lan', '.corp', '.private',
 )
 BLOCKED_HOSTS = {
     'localhost',
     'metadata.google.internal',
     'metadata',
+    'instance-data',
+    '169.254.169.254',
 }
+
+
+def is_private_allowed() -> bool:
+    return ALLOW_PRIVATE or os.getenv('ALLOW_PRIVATE_NETWORK') == '1'
 
 
 class DNSResolutionError(ValueError):
     """Public-URL validation failed because hostname resolution failed."""
 
 
+@dataclass(frozen=True, slots=True)
+class PinnedTarget:
+    url: str
+    hostname: str
+    port: int
+    scheme: str
+    addresses: tuple[str, ...]
+
+
+def is_ip_allowed(ip_text: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(ip_text)
+    except ValueError:
+        return False
+    if getattr(ip, 'ipv4_mapped', None) is not None:
+        return False
+    return ip.is_global
+
+
 def _check_ip(ip_text: str):
-    ip = ipaddress.ip_address(ip_text)
+    if is_private_allowed():
+        return
+    try:
+        ip = ipaddress.ip_address(ip_text)
+    except ValueError as exc:
+        raise ValueError(f'Invalid IP address: {ip_text}') from exc
+
+    if getattr(ip, 'ipv4_mapped', None) is not None:
+        raise ValueError('Private/local/network-metadata targets are blocked')
+
     if not ip.is_global:
         raise ValueError('Private/local/network-metadata targets are blocked')
 
@@ -41,10 +76,10 @@ def validate_public_url(url: str) -> str:
         raise ValueError('URLs containing credentials are not allowed')
 
     port = parsed.port
-    if port is not None and port not in ALLOWED_PORTS and not ALLOW_PRIVATE:
+    if port is not None and port not in ALLOWED_PORTS and not is_private_allowed():
         raise ValueError('Only standard web ports 80 and 443 are allowed')
 
-    if ALLOW_PRIVATE:
+    if is_private_allowed():
         return url
 
     host = parsed.hostname.lower().rstrip('.')
@@ -82,3 +117,82 @@ def validate_public_url(url: str) -> str:
         _check_ip(addr)
 
     return url
+
+
+def resolve_and_pin_public_url(url: str) -> PinnedTarget:
+    validated_url = validate_public_url(url)
+    parsed = urlparse(validated_url)
+    scheme = parsed.scheme.lower()
+    hostname = parsed.hostname.lower().rstrip('.')
+    port = parsed.port or (443 if scheme == 'https' else 80)
+
+    if is_private_allowed():
+        return PinnedTarget(
+            url=validated_url,
+            hostname=hostname,
+            port=port,
+            scheme=scheme,
+            addresses=(hostname,),
+        )
+
+    try:
+        infos = socket.getaddrinfo(
+            hostname,
+            port,
+            family=socket.AF_UNSPEC,
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror as exc:
+        raise DNSResolutionError(f'Could not resolve hostname: {hostname}') from exc
+
+    addresses: list[str] = []
+    for item in infos:
+        addr = ipaddress.ip_address(item[4][0]).compressed
+        _check_ip(addr)
+        if addr not in addresses:
+            addresses.append(addr)
+
+    if not addresses:
+        raise DNSResolutionError(f'Could not resolve hostname: {hostname}')
+
+    return PinnedTarget(
+        url=validated_url,
+        hostname=hostname,
+        port=port,
+        scheme=scheme,
+        addresses=tuple(addresses),
+    )
+
+
+_DNS_REBINDING_PROTECTION_INSTALLED = False
+
+
+def install_dns_rebinding_protection():
+    """Patches urllib3 socket creation to verify resolved IPs against SSRF policy at connect time."""
+    global _DNS_REBINDING_PROTECTION_INSTALLED
+    if _DNS_REBINDING_PROTECTION_INSTALLED:
+        return
+    try:
+        import urllib3.util.connection as uc
+        _orig_create_conn = uc.create_connection
+
+        def secure_create_connection(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None, socket_options=None):
+            host, port = address
+            if not is_private_allowed():
+                try:
+                    _check_ip(host)
+                except ValueError as exc:
+                    if 'Private' in str(exc) or 'network-metadata' in str(exc):
+                        raise
+                    try:
+                        infos = socket.getaddrinfo(host, port, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
+                        for info in infos:
+                            _check_ip(info[4][0])
+                    except socket.gaierror:
+                        pass
+            return _orig_create_conn(address, timeout=timeout, source_address=source_address, socket_options=socket_options)
+
+        uc.create_connection = secure_create_connection
+        _DNS_REBINDING_PROTECTION_INSTALLED = True
+    except (ImportError, AttributeError):
+        pass

@@ -10,10 +10,20 @@ from .diagnostics import (
     diagnostics_for_exception,
     make_diagnostics,
 )
-from .security import DNSResolutionError, validate_public_url
+from .security import (
+    DNSResolutionError,
+    install_dns_rebinding_protection,
+    validate_public_url,
+)
 
-MAX_BYTES = int(os.getenv('MAX_RESPONSE_BYTES', '3000000'))
-TIMEOUT = float(os.getenv('FETCH_TIMEOUT_SECONDS', '12'))
+# Install socket-level verification for DNS rebinding protection
+install_dns_rebinding_protection()
+
+MAX_BYTES = int(os.getenv('MAX_RESPONSE_BYTES', '10485760'))
+CONNECT_TIMEOUT = float(os.getenv('FETCH_CONNECT_TIMEOUT_SECONDS', '3.0'))
+READ_TIMEOUT = float(os.getenv('FETCH_READ_TIMEOUT_SECONDS', '5.0'))
+FETCH_TIMEOUT = float(os.getenv('FETCH_TIMEOUT_SECONDS', '10.0'))
+TIMEOUT = (CONNECT_TIMEOUT, READ_TIMEOUT)
 MAX_REDIRECTS = 5
 TRANSIENT_STATUS_CODES = {502, 503, 504}
 
@@ -71,6 +81,7 @@ def _annotate_and_raise(error: BaseException, diagnostics) -> None:
 
 
 def http_fetch(url: str, *, _attempt_state=None) -> dict:
+    started_at = time.perf_counter()
     try:
         current = validate_public_url(url)
     except Exception as error:
@@ -83,7 +94,19 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
         ))
 
     retry_attempted = False
+    seen_urls = {current}
     for _ in range(MAX_REDIRECTS + 1):
+        if time.perf_counter() - started_at > FETCH_TIMEOUT:
+            error = requests.Timeout(f'Fetch exceeded total timeout of {FETCH_TIMEOUT}s')
+            _annotate_and_raise(error, make_diagnostics(
+                url,
+                'http',
+                'connect',
+                'timeout',
+                http_attempted=True,
+                http_retry_attempted=retry_attempted,
+            ))
+
         try:
             response, retried = _request_with_retry(current)
             retry_attempted = retry_attempted or retried
@@ -116,8 +139,20 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
                     http_retry_attempted=retry_attempted,
                     upstream_status=response.status_code,
                 ))
+            next_url = urljoin(current, location)
+            if next_url in seen_urls:
+                error = RuntimeError(f'Redirect loop detected: {next_url}')
+                _annotate_and_raise(error, make_diagnostics(
+                    url,
+                    'http',
+                    'redirect',
+                    'policy_rejection',
+                    http_attempted=True,
+                    http_retry_attempted=retry_attempted,
+                    upstream_status=response.status_code,
+                ))
             try:
-                current = validate_public_url(urljoin(current, location))
+                current = validate_public_url(next_url)
             except Exception as error:
                 is_dns = isinstance(error, DNSResolutionError)
                 _annotate_and_raise(error, make_diagnostics(
@@ -129,6 +164,7 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
                     http_retry_attempted=retry_attempted,
                     upstream_status=response.status_code,
                 ))
+            seen_urls.add(current)
             continue
 
         if response.status_code >= 400:
