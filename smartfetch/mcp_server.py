@@ -119,7 +119,8 @@ def create_smartfetch_mcp(
     if settings.enabled:
         resource_server, accepts = _initialize_payment(settings)
 
-    # Handlers for each of the 4 tools
+    # Handlers for each of the 4 tools: fetch_webpage is the flagship tool,
+    # and the remaining three tools delegate internally to fetch_webpage.
     async def fetch_webpage(
         url: str,
         max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS)] = MCP_DEFAULT_MAX_CHARS,
@@ -136,7 +137,7 @@ def create_smartfetch_mcp(
     ) -> dict[str, Any]:
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string")
-        result = await fetch_handler(url.strip(), force_browser, max_chars)
+        result = await fetch_webpage(url.strip(), max_chars=max_chars, force_browser=force_browser)
         md_text = result.get("markdown", "") or result.get("content", "")
         return {
             "success": True,
@@ -156,7 +157,7 @@ def create_smartfetch_mcp(
     ) -> dict[str, Any]:
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string")
-        result = await fetch_handler(url.strip(), force_browser, max_chars)
+        result = await fetch_webpage(url.strip(), max_chars=max_chars, force_browser=force_browser)
         text_content = result.get("content", "")
         return {
             "success": True,
@@ -175,7 +176,7 @@ def create_smartfetch_mcp(
     ) -> dict[str, Any]:
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string")
-        result = await fetch_handler(url.strip(), True, max_chars)
+        result = await fetch_webpage(url.strip(), max_chars=max_chars, force_browser=True)
         html_text = result.get("html", "") or result.get("content", "")
         return {
             "success": True,
