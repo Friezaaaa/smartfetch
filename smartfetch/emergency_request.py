@@ -5,7 +5,17 @@ import json
 from typing import Literal
 
 from jsonschema import Draft202012Validator, FormatChecker
-from mcp.types import InitializeRequest, InitializedNotification, JSONRPCMessage, ListToolsRequest, PingRequest
+from mcp.types import (
+    CancelledNotification,
+    InitializeRequest,
+    InitializedNotification,
+    JSONRPCMessage,
+    ListPromptsRequest,
+    ListResourcesRequest,
+    ListResourceTemplatesRequest,
+    ListToolsRequest,
+    PingRequest,
+)
 from pydantic import ValidationError
 
 from .bazaar import FETCH_INPUT_SCHEMA, RENDER_INPUT_SCHEMA
@@ -20,8 +30,12 @@ LEGACY_TOOLS = (
 FREE_MCP_METHODS = (
     "initialize",
     "notifications/initialized",
+    "notifications/cancelled",
     "ping",
     "tools/list",
+    "prompts/list",
+    "resources/list",
+    "resources/templates/list",
 )
 _FETCH_VALIDATOR = Draft202012Validator(FETCH_INPUT_SCHEMA, format_checker=FormatChecker())
 _RENDER_VALIDATOR = Draft202012Validator(RENDER_INPUT_SCHEMA, format_checker=FormatChecker())
@@ -47,8 +61,12 @@ _MCP_RENDER_VALIDATOR = Draft202012Validator(MCP_RENDER_ARGUMENT_SCHEMA)
 _FREE_MCP_MODELS = {
     "initialize": InitializeRequest,
     "notifications/initialized": InitializedNotification,
+    "notifications/cancelled": CancelledNotification,
     "ping": PingRequest,
     "tools/list": ListToolsRequest,
+    "prompts/list": ListPromptsRequest,
+    "resources/list": ListResourcesRequest,
+    "resources/templates/list": ListResourceTemplatesRequest,
 }
 
 
@@ -70,7 +88,16 @@ class ValidatedCall:
 
 @dataclass(frozen=True)
 class FreeMCPMethod:
-    method: Literal["initialize", "notifications/initialized", "ping", "tools/list"]
+    method: Literal[
+        "initialize",
+        "notifications/initialized",
+        "notifications/cancelled",
+        "ping",
+        "tools/list",
+        "prompts/list",
+        "resources/list",
+        "resources/templates/list",
+    ]
     jsonrpc_id: str | int | None
 
 
@@ -135,7 +162,7 @@ def classify_mcp(
     method = payload.get("method")
     if payload.get("jsonrpc") != "2.0" or type(method) is not str or not method:
         raise EmergencyRequestError(400, "invalid_request")
-    if method == "notifications/initialized":
+    if method in ("notifications/initialized", "notifications/cancelled"):
         if "id" in payload:
             raise EmergencyRequestError(400, "invalid_request")
         _validate_free_mcp_params(payload, method)

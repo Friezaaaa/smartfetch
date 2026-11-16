@@ -185,6 +185,60 @@ class TestMCPAcceptHeaderNormalization(unittest.TestCase):
             # MCP SDK rejects non-matching Accept with 406
             self.assertEqual(r.status_code, 406)
 
+    def test_read_only_mcp_discovery_and_lifecycle_methods(self):
+        """Standard MCP methods (prompts/list, resources/list, resources/templates/list, ping, notifications/cancelled) are allowed."""
+        init_payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "test-agent", "version": "1.0"},
+            },
+        }
+        with TestClient(self.app) as client:
+            client.post("/mcp", json=init_payload)
+            client.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+            # prompts/list
+            r_prompts = client.post("/mcp", json={"jsonrpc": "2.0", "id": 10, "method": "prompts/list"})
+            self.assertEqual(r_prompts.status_code, 200)
+            self.assertEqual(r_prompts.json().get("result", {}).get("prompts"), [])
+
+            # resources/list
+            r_resources = client.post("/mcp", json={"jsonrpc": "2.0", "id": 11, "method": "resources/list"})
+            self.assertEqual(r_resources.status_code, 200)
+            self.assertEqual(r_resources.json().get("result", {}).get("resources"), [])
+
+            # resources/templates/list
+            r_templates = client.post("/mcp", json={"jsonrpc": "2.0", "id": 12, "method": "resources/templates/list"})
+            self.assertEqual(r_templates.status_code, 200)
+            self.assertEqual(r_templates.json().get("result", {}).get("resourceTemplates"), [])
+
+            # ping
+            r_ping = client.post("/mcp", json={"jsonrpc": "2.0", "id": 13, "method": "ping"})
+            self.assertEqual(r_ping.status_code, 200)
+            self.assertEqual(r_ping.json().get("result"), {})
+
+            # notifications/cancelled
+            r_cancelled = client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": "test-req-1"}},
+            )
+            self.assertEqual(r_cancelled.status_code, 202)
+
+    def test_unknown_arbitrary_method_rejected_with_32601(self):
+        """Arbitrary unknown methods still return JSON-RPC -32601 Method not available."""
+        with TestClient(self.app) as client:
+            r = client.post("/mcp", json={"jsonrpc": "2.0", "id": "unknown-1", "method": "foo/bar"})
+            self.assertEqual(r.status_code, 200)
+            data = r.json()
+            self.assertEqual(data.get("id"), "unknown-1")
+            self.assertIn("error", data)
+            self.assertEqual(data["error"]["code"], -32601)
+            self.assertEqual(data["error"]["message"], "Method not available")
+
 
 if __name__ == "__main__":
     unittest.main()
