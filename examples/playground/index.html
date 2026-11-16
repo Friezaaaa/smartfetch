@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SmartFetch Developer Playground &amp; x402 Tester</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #131b2e;
+      --card-border: #23304c;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --accent: #38bdf8;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --code-bg: #070a10;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 24px 16px;
+    }
+    .container { max-width: 1200px; margin: 0 auto; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--card-border);
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    h1 { font-size: 1.6rem; color: #fff; display: flex; align-items: center; gap: 8px; }
+    .badge {
+      font-size: 0.75rem;
+      padding: 3px 8px;
+      border-radius: 9999px;
+      background: rgba(59, 130, 246, 0.2);
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+    }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+    @media(min-width: 900px) {
+      .grid { grid-template-columns: 460px 1fr; }
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+    h2 { font-size: 1.15rem; color: var(--accent); margin-bottom: 16px; }
+    .form-group { margin-bottom: 16px; }
+    label { display: block; font-size: 0.85rem; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; }
+    input[type="text"], input[type="number"], select {
+      width: 100%;
+      background: var(--code-bg);
+      border: 1px solid var(--card-border);
+      color: #fff;
+      padding: 10px 12px;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input[type="text"]:focus, select:focus { border-color: var(--primary); }
+    .slider-container { display: flex; align-items: center; gap: 12px; }
+    input[type="range"] { flex: 1; accent-color: var(--primary); }
+    .checkbox-group { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; }
+    .btn-group { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
+    button {
+      padding: 12px 18px;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: background 0.2s, opacity 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-secondary { background: #1e293b; color: #cbd5e1; border: 1px solid #334155; }
+    .btn-secondary:hover { background: #334155; color: #fff; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .alert {
+      padding: 12px 14px;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      margin-bottom: 16px;
+      display: none;
+    }
+    .alert-warning { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
+    .alert-danger { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
+    .alert-success { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
+    .alert-info { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); }
+    .tabs { display: flex; border-bottom: 1px solid var(--card-border); gap: 8px; margin-bottom: 16px; overflow-x: auto; }
+    .tab {
+      padding: 8px 14px;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 0.9rem;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+    }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 14px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.85rem;
+      color: #7dd3fc;
+      overflow-x: auto;
+      max-height: 480px;
+    }
+    .preview-frame {
+      width: 100%;
+      height: 480px;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      background: #ffffff;
+    }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.8rem;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+    .status-200 { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+    .status-402 { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+    .status-err { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+    .tx-link { color: var(--accent); text-decoration: underline; word-break: break-all; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <header>
+      <div>
+        <h1>SmartFetch Playground <span class="badge">x402 &amp; Isolated Browser</span></h1>
+        <p style="color: var(--text-muted); font-size: 0.85rem;">Interactive test console for SmartFetch production gateway with Base Mainnet EIP-712 micropayments.</p>
+      </div>
+      <div id="walletBadge" style="display: flex; align-items: center; gap: 8px;">
+        <span id="walletAddress" style="font-family: monospace; font-size: 0.85rem; color: var(--text-muted);">No wallet connected</span>
+      </div>
+    </header>
+
+    <div class="grid">
+      <!-- Left Column: Controls & Configuration -->
+      <div>
+        <div class="card">
+          <h2>1. Request Parameters</h2>
+          
+          <div class="form-group">
+            <label for="gatewayUrl">Gateway URL</label>
+            <input type="text" id="gatewayUrl" value="https://smartfetch-production-ea53.up.railway.app">
+          </div>
+
+          <div class="form-group">
+            <label for="targetUrl">Target Webpage / PDF URL</label>
+            <input type="text" id="targetUrl" value="https://quotes.toscrape.com/js/">
+            <div id="ssrfWarning" class="alert alert-warning" style="margin-top: 8px;">
+              &#9888; <strong>Security Warning:</strong> Internal addresses, localhost, private IP subnets, and metadata endpoints (e.g. 169.254.169.254) are forbidden by the SSRF defense layer.
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="maxCharsSlider">Max Characters: <span id="maxCharsVal" style="color: var(--accent);">20000</span></label>
+            <div class="slider-container">
+              <input type="range" id="maxCharsSlider" min="1000" max="50000" step="1000" value="20000">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="renderMode">Rendering Mode</label>
+            <select id="renderMode">
+              <option value="auto" selected>auto (HTTP first, fallback to isolated browser)</option>
+              <option value="browser">browser (force isolated Chromium on VPS)</option>
+              <option value="http_only">http_only (fast HTTP stream without browser)</option>
+            </select>
+          </div>
+
+          <div class="form-group checkbox-group">
+            <input type="checkbox" id="noCache">
+            <label for="noCache" style="margin-bottom: 0; cursor: pointer;">Bypass Server Cache (no_cache: true)</label>
+          </div>
+
+          <div class="form-group checkbox-group">
+            <input type="checkbox" id="includeHtml" checked>
+            <label for="includeHtml" style="margin-bottom: 0; cursor: pointer;">Include Bounded HTML (include_html: true)</label>
+          </div>
+
+          <div id="executionStatus" class="alert" style="margin-top: 14px;"></div>
+
+          <div class="btn-group">
+            <button id="inspectBtn" class="btn-secondary" onclick="inspectHealthAnd402()">
+              &#128269; Inspect Live 402 &amp; Health (Free)
+            </button>
+            <button id="paidBtn" class="btn-primary" onclick="connectAndFetchPaid()">
+              &#9889; Connect Wallet &amp; Fetch ($0.005 USDC)
+            </button>
+          </div>
+        </div>
+
+        <!-- Code Generator Panel -->
+        <div class="card" style="margin-top: 20px;">
+          <h2>Client Snippets</h2>
+          <div class="tabs" id="codeTabs">
+            <button class="tab active" onclick="switchCodeTab('curl')">cURL</button>
+            <button class="tab" onclick="switchCodeTab('python')">Python (x402)</button>
+            <button class="tab" onclick="switchCodeTab('typescript')">TypeScript (viem)</button>
+            <button class="tab" onclick="switchCodeTab('mcp')">MCP Config</button>
+          </div>
+          <pre id="snippetCurl" class="snippet-content" style="display: block;"></pre>
+          <pre id="snippetPython" class="snippet-content" style="display: none;"></pre>
+          <pre id="snippetTypescript" class="snippet-content" style="display: none;"></pre>
+          <pre id="snippetMcp" class="snippet-content" style="display: none;"></pre>
+        </div>
+      </div>
+
+      <!-- Right Column: Results & Previews -->
+      <div>
+        <div class="card" style="min-height: 600px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+            <h2>Response Inspector</h2>
+            <div id="responseStatusBadge"></div>
+          </div>
+
+          <div class="tabs" id="outputTabs">
+            <button class="tab active" onclick="switchOutputTab('markdown')">Markdown</button>
+            <button class="tab" onclick="switchOutputTab('text')">Plain Text</button>
+            <button class="tab" onclick="switchOutputTab('html')">Sandboxed HTML</button>
+            <button class="tab" onclick="switchOutputTab('meta')">Metadata &amp; JSON</button>
+          </div>
+
+          <div id="tabMarkdown" class="tab-content active">
+            <pre id="markdownOutput" style="white-space: pre-wrap;">Execute a request to view retrieved Markdown.</pre>
+          </div>
+
+          <div id="tabText" class="tab-content">
+            <div id="textMetrics" style="margin-bottom: 8px; color: var(--text-muted); font-size: 0.85rem;"></div>
+            <pre id="textOutput" style="white-space: pre-wrap;">Execute a request to view extracted plain text.</pre>
+          </div>
+
+          <div id="tabHtml" class="tab-content">
+            <!-- Strictly sandboxed iframe preventing same-origin or top navigation -->
+            <iframe id="previewIframe" class="preview-frame" sandbox="allow-scripts" srcdoc="<p style='color:#64748b;font-family:sans-serif;padding:16px;'>Sandboxed preview will appear here.</p>"></iframe>
+          </div>
+
+          <div id="tabMeta" class="tab-content">
+            <pre id="metaOutput">Execute a request to view full structured metadata and response JSON.</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const BASE_CHAIN_ID = 8453;
+  const BASE_CHAIN_HEX = "0x2105";
+
+  let buyerAccount = null;
+  let cached402Challenge = null;
+
+  // Elements
+  const gatewayUrlInput = document.getElementById('gatewayUrl');
+  const targetUrlInput = document.getElementById('targetUrl');
+  const maxCharsSlider = document.getElementById('maxCharsSlider');
+  const maxCharsVal = document.getElementById('maxCharsVal');
+  const renderModeSelect = document.getElementById('renderMode');
+  const noCacheCheckbox = document.getElementById('noCache');
+  const includeHtmlCheckbox = document.getElementById('includeHtml');
+  const ssrfWarning = document.getElementById('ssrfWarning');
+  const executionStatus = document.getElementById('executionStatus');
+
+  // Input Listeners
+  maxCharsSlider.addEventListener('input', () => {
+    maxCharsVal.textContent = maxCharsSlider.value;
+    updateSnippets();
+  });
+  targetUrlInput.addEventListener('input', () => {
+    validateSSRF(targetUrlInput.value.trim());
+    updateSnippets();
+  });
+  gatewayUrlInput.addEventListener('input', updateSnippets);
+  renderModeSelect.addEventListener('change', updateSnippets);
+  noCacheCheckbox.addEventListener('change', updateSnippets);
+  includeHtmlCheckbox.addEventListener('change', updateSnippets);
+
+  function validateSSRF(url) {
+    const isPrivate = /^(https?:\/\/)?(localhost|127\.|0\.|169\.254\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|::1)/i.test(url);
+    ssrfWarning.style.display = isPrivate ? 'block' : 'none';
+  }
+
+  function showStatus(html, type) {
+    executionStatus.style.display = 'block';
+    executionStatus.className = 'alert alert-' + type;
+    executionStatus.innerHTML = html;
+  }
+
+  function setBadge(statusCode, text) {
+    const b = document.getElementById('responseStatusBadge');
+    if (!statusCode) { b.innerHTML = ''; return; }
+    let cls = 'status-200';
+    if (statusCode === 402) cls = 'status-402';
+    else if (statusCode >= 400) cls = 'status-err';
+    b.innerHTML = `<span class="status-pill ${cls}">${statusCode} ${text || ''}</span>`;
+  }
+
+  // Free "Inspect Live 402 & Health"
+  async function inspectHealthAnd402() {
+    const gateway = gatewayUrlInput.value.trim().replace(/\/+$/, '');
+    const target = targetUrlInput.value.trim();
+    showStatus("Connecting to gateway /health and fetching unauthenticated 402 challenge...", "info");
+
+    try {
+      // 1. Health check
+      const hResp = await fetch(`${gateway}/health`);
+      const hData = await hResp.json();
+
+      // 2. Unauthenticated POST /fetch to capture 402
+      const fetchResp = await fetch(`${gateway}/fetch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: target, max_chars: parseInt(maxCharsSlider.value, 10) })
+      });
+
+      setBadge(fetchResp.status, fetchResp.statusText);
+
+      const reqHeader = fetchResp.headers.get('payment-required') || fetchResp.headers.get('PAYMENT-REQUIRED');
+      let challenge = null;
+      if (reqHeader) {
+        try {
+          challenge = JSON.parse(decodeURIComponent(escape(atob(reqHeader))));
+          cached402Challenge = challenge;
+        } catch(e) { console.error("Error decoding 402 header:", e); }
+      }
+
+      const bodyData = await fetchResp.json().catch(() => null);
+
+      showStatus(`&#10004; <strong>Gateway Online (mode: ${hData.mode || 'isolated_browser'})</strong><br>Received 402 Challenge: <strong>$0.005 USDC on Base Mainnet</strong>.`, "warning");
+
+      document.getElementById('metaOutput').textContent = JSON.stringify({
+        health: hData,
+        statusCode: fetchResp.status,
+        headers: Object.fromEntries(fetchResp.headers.entries()),
+        decodedChallenge: challenge,
+        body: bodyData
+      }, null, 2);
+
+      document.getElementById('markdownOutput').textContent = "Received HTTP 402 Payment Required.\n\nInspect the decoded challenge in the 'Metadata & JSON' tab.";
+      document.getElementById('textOutput').textContent = "HTTP 402 Payment Required.";
+      document.getElementById('previewIframe').srcdoc = "<p style='padding:20px;font-family:sans-serif;color:#d97706;'>HTTP 402 Payment Required. Sign in MetaMask to render webpage.</p>";
+      switchOutputTab('meta');
+    } catch(err) {
+      showStatus(`&#10060; Request failed: ${err.message}`, "danger");
+      setBadge(500, "Error");
+    }
+  }
+
+  // Web3 Wallet Connect & Paid Fetch
+  async function connectAndFetchPaid() {
+    if (!window.ethereum) {
+      alert("No Web3 wallet (MetaMask / Coinbase Wallet) detected in this browser.");
+      return;
+    }
+
+    const gateway = gatewayUrlInput.value.trim().replace(/\/+$/, '');
+    const target = targetUrlInput.value.trim();
+    const btn = document.getElementById('paidBtn');
+    btn.disabled = true;
+
+    try {
+      showStatus("Connecting to MetaMask / Web3 Wallet...", "info");
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      buyerAccount = accounts[0];
+      document.getElementById('walletAddress').textContent = buyerAccount.slice(0, 6) + '...' + buyerAccount.slice(-4);
+
+      // Verify Base Mainnet
+      const chainIdHex = await window.ethereum.request({ method: 'eth_chainId' });
+      if (parseInt(chainIdHex, 16) !== BASE_CHAIN_ID) {
+        try {
+          await window.ethereum.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: BASE_CHAIN_HEX }]
+          });
+        } catch(e) {
+          alert("Please switch your wallet network to Base Mainnet (Chain ID 8453).");
+          btn.disabled = false;
+          return;
+        }
+      }
+
+      // 1. Fetch challenge if not cached
+      showStatus("Obtaining live 402 payment requirements from gateway...", "info");
+      const initialResp = await fetch(`${gateway}/fetch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: target })
+      });
+
+      const reqHeader = initialResp.headers.get('payment-required') || initialResp.headers.get('PAYMENT-REQUIRED');
+      let challenge = null;
+      if (reqHeader) {
+        challenge = JSON.parse(decodeURIComponent(escape(atob(reqHeader))));
+        cached402Challenge = challenge;
+      }
+
+      const accepted = (challenge && challenge.accepts && challenge.accepts[0]) || {
+        scheme: "exact",
+        network: "eip155:8453",
+        asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        amount: "5000",
+        payTo: "0xE29Fcb6ef1534d5F138E48a8A71370BE7770A786",
+        maxTimeoutSeconds: 300,
+        extra: { name: "USD Coin", version: "2" }
+      };
+
+      // 2. Generate random 32-byte nonce & EIP-712 typed data
+      const nonceArr = new Uint8Array(32);
+      crypto.getRandomValues(nonceArr);
+      const nonce = "0x" + Array.from(nonceArr).map(b => b.toString(16).padStart(2, '0')).join('');
+      const validBefore = String(Math.floor(Date.now() / 1000) + 7200);
+
+      const typedData = {
+        types: {
+          EIP712Domain: [
+            { name: "name", type: "string" },
+            { name: "version", type: "string" },
+            { name: "chainId", type: "uint256" },
+            { name: "verifyingContract", type: "address" }
+          ],
+          TransferWithAuthorization: [
+            { name: "from", type: "address" },
+            { name: "to", type: "address" },
+            { name: "value", type: "uint256" },
+            { name: "validAfter", type: "uint256" },
+            { name: "validBefore", type: "uint256" },
+            { name: "nonce", type: "bytes32" }
+          ]
+        },
+        primaryType: "TransferWithAuthorization",
+        domain: {
+          name: (accepted.extra && accepted.extra.name) || "USD Coin",
+          version: (accepted.extra && accepted.extra.version) || "2",
+          chainId: BASE_CHAIN_ID,
+          verifyingContract: accepted.asset
+        },
+        message: {
+          from: buyerAccount,
+          to: accepted.payTo,
+          value: accepted.amount,
+          validAfter: "0",
+          validBefore: validBefore,
+          nonce: nonce
+        }
+      };
+
+      showStatus("<strong>Waiting for MetaMask approval...</strong><br>Sign the EIP-712 transfer authorization for $0.005 USDC.", "info");
+
+      const signature = await window.ethereum.request({
+        method: 'eth_signTypedData_v4',
+        params: [buyerAccount, JSON.stringify(typedData)]
+      });
+
+      // 3. Construct x402 V2 PaymentPayload envelope
+      const envelope = {
+        x402Version: 2,
+        payload: {
+          authorization: {
+            from: buyerAccount,
+            to: accepted.payTo,
+            value: accepted.amount,
+            validAfter: "0",
+            validBefore: validBefore,
+            nonce: nonce
+          },
+          signature: signature
+        },
+        accepted: accepted,
+        resource: (challenge && challenge.resource) || {
+          url: `${gateway}/fetch`,
+          description: "SmartFetch Web Reader",
+          mimeType: "application/json",
+          serviceName: "SmartFetch"
+        }
+      };
+
+      const sigBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(envelope))));
+
+      showStatus("<strong>Signature approved!</strong> Dispatching paid request to SmartFetch gateway &amp; isolated VPS worker...", "info");
+
+      const reqBody = {
+        url: target,
+        max_chars: parseInt(maxCharsSlider.value, 10),
+        render_mode: renderModeSelect.value,
+        no_cache: noCacheCheckbox.checked,
+        include_html: includeHtmlCheckbox.checked
+      };
+      if (renderModeSelect.value === 'browser') {
+        reqBody.force_browser = true;
+      }
+
+      const paidResp = await fetch(`${gateway}/fetch`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'PAYMENT-SIGNATURE': sigBase64
+        },
+        body: JSON.stringify(reqBody)
+      });
+
+      setBadge(paidResp.status, paidResp.statusText);
+
+      const respData = await paidResp.json().catch(() => null);
+      const prHeader = paidResp.headers.get('payment-response') || paidResp.headers.get('PAYMENT-RESPONSE');
+      let settlement = null;
+      if (prHeader) {
+        try {
+          settlement = JSON.parse(decodeURIComponent(escape(atob(prHeader))));
+        } catch(e) { console.error("Error decoding payment-response header:", e); }
+      }
+
+      if (paidResp.status === 200 && respData && respData.success) {
+        const txHash = (settlement && settlement.transaction) || null;
+        let txHtml = "";
+        if (txHash && txHash.startsWith("0x")) {
+          txHtml = `<br>Tx Hash: <a class="tx-link" href="https://basescan.org/tx/${txHash}" target="_blank">${txHash}</a>`;
+        }
+        showStatus(`&#10004; <strong>Success!</strong> Payment verified &amp; settled on Base Mainnet. Rendered via: <code>${respData.render_method || 'http'}</code> in ${respData.elapsed_ms || 0}ms.${txHtml}`, "success");
+
+        // Populate Tabs
+        document.getElementById('markdownOutput').textContent = respData.markdown || respData.content || "No Markdown returned.";
+        document.getElementById('textOutput').textContent = respData.content || "";
+        document.getElementById('textMetrics').textContent = `Words: ${respData.word_count || 0} | Chars: ${respData.returned_content_chars || (respData.content ? respData.content.length : 0)} ${respData.page_count ? '| PDF Pages: ' + respData.page_count : ''}`;
+
+        if (respData.html) {
+          document.getElementById('previewIframe').srcdoc = respData.html;
+        } else {
+          document.getElementById('previewIframe').srcdoc = `<pre style="font-family:sans-serif;padding:20px;">${escapeHtml(respData.content || '')}</pre>`;
+        }
+
+        document.getElementById('metaOutput').textContent = JSON.stringify({
+          status: paidResp.status,
+          settlement: settlement,
+          result: respData
+        }, null, 2);
+
+        switchOutputTab('markdown');
+      } else {
+        showStatus(`&#10060; Retrieval failed (HTTP ${paidResp.status}): ${JSON.stringify(respData)}`, "danger");
+        document.getElementById('metaOutput').textContent = JSON.stringify({ status: paidResp.status, body: respData }, null, 2);
+        switchOutputTab('meta');
+      }
+    } catch(err) {
+      showStatus(`&#10060; Signing or execution failed: ${err.message}`, "danger");
+      console.error(err);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function escapeHtml(str) {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // Tab Switching
+  function switchOutputTab(name) {
+    const tabs = ['markdown', 'text', 'html', 'meta'];
+    tabs.forEach(t => {
+      document.querySelector(`#outputTabs button[onclick*="${t}"]`).classList.toggle('active', t === name);
+      document.getElementById(`tab${t.charAt(0).toUpperCase() + t.slice(1)}`).classList.toggle('active', t === name);
+    });
+  }
+
+  function switchCodeTab(name) {
+    const tabs = ['curl', 'python', 'typescript', 'mcp'];
+    tabs.forEach(t => {
+      document.querySelector(`#codeTabs button[onclick*="${t}"]`).classList.toggle('active', t === name);
+      document.getElementById(`snippet${t.charAt(0).toUpperCase() + t.slice(1)}`).style.display = t === name ? 'block' : 'none';
+    });
+  }
+
+  // Snippet Generator
+  function updateSnippets() {
+    const gateway = gatewayUrlInput.value.trim().replace(/\/+$/, '');
+    const target = targetUrlInput.value.trim();
+    const maxChars = parseInt(maxCharsSlider.value, 10);
+    const renderMode = renderModeSelect.value;
+    const noCache = noCacheCheckbox.checked;
+    const includeHtml = includeHtmlCheckbox.checked;
+
+    // cURL
+    document.getElementById('snippetCurl').textContent = 
+`curl -X POST "${gateway}/fetch" \\
+  -H "Content-Type: application/json" \\
+  -H "PAYMENT-SIGNATURE: <BASE64_X402_ENVELOPE>" \\
+  -d '{
+    "url": "${target}",
+    "max_chars": ${maxChars},
+    "render_mode": "${renderMode}",
+    "no_cache": ${noCache},
+    "include_html": ${includeHtml}
+  }'`;
+
+    // Python (x402)
+    document.getElementById('snippetPython').textContent = 
+`import httpx
+from x402.client import x402Client
+
+client = x402Client()
+response = client.post(
+    "${gateway}/fetch",
+    json={
+        "url": "${target}",
+        "max_chars": ${maxChars},
+        "render_mode": "${renderMode}",
+        "no_cache": ${noCache},
+        "include_html": ${includeHtml}
+    }
+)
+print("Title:", response.json().get("title"))
+print("Content:", response.json().get("content")[:500])`;
+
+    // TypeScript (viem)
+    document.getElementById('snippetTypescript').textContent = 
+`import { createWalletClient, custom } from 'viem';
+import { base } from 'viem/chains';
+
+const client = createWalletClient({ chain: base, transport: custom(window.ethereum) });
+// 1. Fetch challenge from ${gateway}/fetch
+// 2. Sign EIP-712 TransferWithAuthorization
+// 3. Retry with PAYMENT-SIGNATURE: <base64_payload>`;
+
+    // MCP Config
+    document.getElementById('snippetMcp').textContent = 
+JSON.stringify({
+  mcpServers: {
+    smartfetch: {
+      url: `${gateway}/mcp`,
+      headers: {
+        "Accept": "application/json"
+      }
+    }
+  }
+}, null, 2);
+  }
+
+  // Initial setup
+  updateSnippets();
+</script>
+</body>
+</html>

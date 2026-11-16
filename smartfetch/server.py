@@ -38,9 +38,17 @@ from .mcp_server import MCP_PATH, MCP_TOOL, MCP_TOOLS, MCP_TRANSPORT, create_sma
 from .payments import install_x402, load_x402_settings
 from .remote_browser import RemoteBrowserConfig
 from .request_bounds import BoundedRequestMiddleware
+from starlette.middleware.cors import CORSMiddleware
 
 
 _UNHEALTHY_BODY = b'{"success":false,"error_code":"service_unhealthy","error":"Service temporarily unavailable"}'
+
+
+class SmartFetchCORSMiddleware(CORSMiddleware):
+    """Wraps CORSMiddleware with attribute delegation to keep application state accessible."""
+
+    def __getattr__(self, name):
+        return getattr(self.app, name)
 
 
 class MCPAcceptNormalization:
@@ -320,7 +328,28 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
     if settings.enabled and remote_cfg.is_configured:
         install_x402(application, settings)
 
-    return BoundedRequestMiddleware(EmergencyDispatch(MCPAcceptNormalization(application)))
+    cors_wrapped = SmartFetchCORSMiddleware(
+        EmergencyDispatch(MCPAcceptNormalization(application)),
+        allow_origins=["*"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=[
+            "Content-Type",
+            "Accept",
+            "Cache-Control",
+            "PAYMENT-SIGNATURE",
+            "X-PAYMENT",
+            "Mcp-Session-Id",
+            "Last-Event-ID",
+        ],
+        expose_headers=[
+            "PAYMENT-REQUIRED",
+            "PAYMENT-RESPONSE",
+            "X-Request-Id",
+            "X-SmartFetch-Availability",
+            "Mcp-Session-Id",
+        ],
+    )
+    return BoundedRequestMiddleware(cors_wrapped)
 
 
 app = create_app()
