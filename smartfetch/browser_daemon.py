@@ -325,6 +325,278 @@ class DockerWorkerRunner(WorkerRunner):
         return json.loads(output_file.read_text(encoding="utf-8"))
 
 
+@dataclass
+class _WarmWorkerSlot:
+    slot_id: int
+    container_name: str | None = None
+    ctrl_sock_path: str | None = None
+    is_busy: bool = False
+
+
+class DockerWarmPoolRunner(WorkerRunner):
+    """Manages persistent warm worker containers with exclusive concurrency slots."""
+
+    def __init__(
+        self,
+        docker_image: str = "smartfetch-prototype-worker:local",
+        seccomp_profile: str = "/etc/smartfetch/seccomp-chrome.json",
+        ipc_dir: str = "/ipc",
+        ipc_volume: str | None = None,
+        max_concurrent: int = 2,
+    ):
+        self.docker_image = docker_image
+        self.seccomp_profile = seccomp_profile
+        self.ipc_dir = ipc_dir
+        self.ipc_volume = ipc_volume
+        self.max_concurrent = max(1, max_concurrent)
+
+        self.warm_workers_dir = Path(self.ipc_dir) / "warm-workers"
+        self._slots = [_WarmWorkerSlot(slot_id=i) for i in range(self.max_concurrent)]
+        self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
+        self._closed = False
+
+        self._cleanup_orphans()
+
+    def _cleanup_orphans(self) -> None:
+        try:
+            self.warm_workers_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(self.warm_workers_dir, 0o777)
+                if hasattr(os, "chown") and os.geteuid() == 0:
+                    os.chown(self.warm_workers_dir, 10001, 10001)
+            except OSError:
+                pass
+            for p in self.warm_workers_dir.glob("*.ctrl.sock"):
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        except Exception:
+            pass
+
+        try:
+            res = subprocess.run(
+                ["docker", "ps", "-a", "--filter", "name=sf-warm-worker-", "--format", "{{.Names}}"],
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                for name in res.stdout.splitlines():
+                    name = name.strip()
+                    if name:
+                        subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=5.0)
+        except Exception:
+            pass
+
+    def _recycle_slot(self, slot: _WarmWorkerSlot) -> None:
+        if slot.container_name:
+            try:
+                subprocess.run(["docker", "rm", "-f", slot.container_name], capture_output=True, timeout=5.0)
+            except Exception:
+                pass
+            slot.container_name = None
+        if slot.ctrl_sock_path:
+            try:
+                Path(slot.ctrl_sock_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+            slot.ctrl_sock_path = None
+
+    def _connect_to_control_socket(self, sock_path: str, deadline: float) -> socket.socket:
+        af_unix = getattr(socket, "AF_UNIX", None)
+        if af_unix is None:
+            raise RuntimeError("AF_UNIX not supported on this platform")
+        last_err = None
+        while time.monotonic() < deadline:
+            if not os.path.exists(sock_path):
+                time.sleep(0.05)
+                continue
+            try:
+                sock = socket.socket(af_unix, socket.SOCK_STREAM)
+                sock.settimeout(min(2.0, max(0.1, deadline - time.monotonic())))
+                sock.connect(sock_path)
+                return sock
+            except (OSError, ConnectionRefusedError) as exc:
+                sock.close()
+                last_err = exc
+                time.sleep(0.05)
+        raise TimeoutError(f"Timed out connecting to control socket {sock_path}: {last_err}")
+
+    def _send_job_and_recv(self, sock: socket.socket, payload: dict[str, Any], deadline: float) -> dict[str, Any]:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Deadline exceeded before sending job to worker")
+        sock.settimeout(remaining)
+        req_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
+        sock.sendall(req_bytes)
+
+        buf = bytearray()
+        while time.monotonic() < deadline:
+            rem = deadline - time.monotonic()
+            if rem <= 0:
+                raise TimeoutError("Deadline exceeded waiting for worker response")
+            sock.settimeout(rem)
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buf.extend(chunk)
+            if b"\n" in buf:
+                break
+        if not buf:
+            raise RuntimeError("Worker control socket closed without response")
+        line = buf.split(b"\n", 1)[0].decode("utf-8").strip()
+        return json.loads(line)
+
+    def _start_container_for_slot(self, slot: _WarmWorkerSlot, deadline: float) -> str:
+        container_id = f"sf-warm-worker-{slot.slot_id}-{secrets.token_hex(4)}"
+        host_ctrl = self.warm_workers_dir / f"{container_id}.ctrl.sock"
+        container_ctrl = f"/ipc/warm-workers/{container_id}.ctrl.sock"
+
+        if host_ctrl.exists():
+            try:
+                host_ctrl.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        if self.ipc_volume:
+            volume_mount = f"{self.ipc_volume}:/ipc:rw"
+        else:
+            volume_mount = f"{self.ipc_dir}:/ipc:rw"
+
+        cmd = [
+            "docker",
+            "run",
+            "-d",
+            "--rm",
+            "--name",
+            container_id,
+            "--network",
+            "none",
+            "--user",
+            "10001:10001",
+            "--memory",
+            "768m",
+            "--cpus",
+            "1.0",
+            "--pids-limit",
+            "256",
+            "-v",
+            volume_mount,
+        ]
+        if os.path.isfile(self.seccomp_profile):
+            cmd.append(f"--security-opt=seccomp={self.seccomp_profile}")
+        cmd.extend([
+            self.docker_image,
+            "python",
+            "-m",
+            "smartfetch.browser_worker",
+            "--warm-server",
+            "--control-socket",
+            container_ctrl,
+        ])
+
+        rem = deadline - time.monotonic()
+        if rem <= 0:
+            raise TimeoutError("Deadline exceeded before starting warm container")
+
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=min(10.0, max(1.0, rem)),
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"Failed to start warm container: {proc.stderr}")
+
+        slot.container_name = container_id
+        slot.ctrl_sock_path = str(host_ctrl)
+
+        sock = self._connect_to_control_socket(str(host_ctrl), deadline=deadline)
+        sock.close()
+        return str(host_ctrl)
+
+    def run(
+        self,
+        url: str,
+        *,
+        socket_path: str,
+        operation_id: bytes,
+        deadline: float,
+        max_chars: int,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        with self._condition:
+            while True:
+                if self._closed:
+                    raise RuntimeError("DockerWarmPoolRunner is closed")
+                rem = deadline - time.monotonic()
+                if rem <= 0:
+                    raise TimeoutError("Deadline exceeded waiting for an idle warm worker slot")
+                slot = next((s for s in self._slots if not s.is_busy), None)
+                if slot is not None:
+                    slot.is_busy = True
+                    break
+                self._condition.wait(timeout=min(0.2, rem))
+
+        should_recycle = False
+        try:
+            if slot.container_name is None or slot.ctrl_sock_path is None or not Path(slot.ctrl_sock_path).exists():
+                self._recycle_slot(slot)
+                ctrl_sock = self._start_container_for_slot(slot, deadline=deadline)
+            else:
+                ctrl_sock = slot.ctrl_sock_path
+
+            job_parent = Path(socket_path).parent.name
+            if job_parent and job_parent != ".":
+                container_socket_path = f"/ipc/{job_parent}/{Path(socket_path).name}"
+            else:
+                container_socket_path = f"/ipc/{Path(socket_path).name}"
+
+            sock = self._connect_to_control_socket(ctrl_sock, deadline=deadline)
+            try:
+                job_payload = {
+                    "url": url,
+                    "socket_path": container_socket_path,
+                    "operation_id": operation_id.hex(),
+                    "deadline_seconds": max(1.0, deadline - time.monotonic()),
+                    "max_chars": max_chars,
+                }
+                resp = self._send_job_and_recv(sock, job_payload, deadline=deadline)
+            finally:
+                sock.close()
+
+            if not resp.get("ok"):
+                should_recycle = True
+                err_msg = resp.get("error", "Worker render failed")
+                raise RuntimeError(err_msg)
+
+            if resp.get("recycle_recommended"):
+                should_recycle = True
+
+            return resp["result"]
+        except Exception:
+            should_recycle = True
+            raise
+        finally:
+            if should_recycle:
+                self._recycle_slot(slot)
+            with self._condition:
+                slot.is_busy = False
+                self._condition.notify_all()
+
+    def close(self) -> None:
+        with self._condition:
+            self._closed = True
+            slots = list(self._slots)
+            self._condition.notify_all()
+        for slot in slots:
+            self._recycle_slot(slot)
+        self._cleanup_orphans()
+
+
 class BrowserWorkerHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the browser worker daemon."""
 
@@ -594,6 +866,14 @@ class BrowserDaemonServer(ThreadingHTTPServer):
     def active_count(self) -> int:
         return self._active_jobs
 
+    def server_close(self) -> None:
+        try:
+            if hasattr(self.runner, "close") and callable(self.runner.close):
+                self.runner.close()
+        except Exception as exc:
+            _LOGGER.warning("Error closing worker runner: %s", exc)
+        super().server_close()
+
 
 # Alias for caller ergonomics
 BrowserWorkerDaemon = BrowserDaemonServer
@@ -611,6 +891,14 @@ def create_daemon(
     if runner is None:
         if cfg.worker_mode == "docker":
             runner = DockerWorkerRunner(cfg.docker_image, cfg.seccomp_profile, ipc_volume=cfg.ipc_volume)
+        elif cfg.worker_mode == "docker_warm":
+            runner = DockerWarmPoolRunner(
+                docker_image=cfg.docker_image,
+                seccomp_profile=cfg.seccomp_profile,
+                ipc_dir=cfg.ipc_dir,
+                ipc_volume=cfg.ipc_volume,
+                max_concurrent=cfg.max_concurrent,
+            )
         elif cfg.worker_mode == "subprocess":
             runner = SubprocessWorkerRunner(cfg.chromium_path)
         elif cfg.worker_mode in ("warm_pool", "pool"):

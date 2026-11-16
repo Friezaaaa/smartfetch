@@ -91,7 +91,7 @@ class V18MCPBazaarMetadataTests(unittest.TestCase):
                         'type': 'string',
                         'format': 'uri',
                         'pattern': '^https?://',
-                        'description': 'Public HTTP or HTTPS URL to retrieve.',
+                        'description': 'Public HTTP or HTTPS webpage or PDF URL to retrieve.',
                     },
                     'max_chars': {
                         'type': 'integer',
@@ -135,7 +135,7 @@ class V18MCPBazaarMetadataTests(unittest.TestCase):
                 sort_keys=True,
                 separators=(',', ':'),
             ).encode('utf-8')).hexdigest(),
-            '1242309f47ddf83e2056d4a4eceb16e2a90a7b10f2240cf4bb70b046d89eed6d',
+            '04642bfacd7467984ac99fc5dfe91f94c6ce344523d9227591948a6f64bc19be',
         )
 
 

@@ -472,3 +472,132 @@ class WorkerRelay(_RelayServer):
             with self._lock:
                 self._sockets.discard(ipc)
             ipc.close()
+
+
+class DynamicWorkerRelay(_RelayServer):
+    """Worker loopback proxy for persistent warm container whose active job socket changes per request."""
+
+    def __init__(
+        self,
+        *,
+        deadline: float = float("inf"),
+        max_bytes: int = 10_000_000,
+        max_sessions: int = 16,
+        max_total_sessions: int = 100_000,
+    ):
+        super().__init__(
+            deadline=deadline,
+            max_bytes=max_bytes,
+            max_sessions=max_sessions,
+            max_total_sessions=max_total_sessions,
+        )
+        self._active_job: tuple[str, bytes, float] | None = None
+        self._job_lock = threading.Lock()
+        self._active_upstreams: set[socket.socket] = set()
+
+    def start(self) -> tuple[str, int]:
+        if self._listener is not None:
+            raise RuntimeError("relay_already_started")
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(self.max_sessions)
+            self._start(listener)
+        except Exception:
+            listener.close()
+            raise
+        return listener.getsockname()
+
+    def set_active_job(self, socket_path: str, operation_id: bytes, deadline: float) -> None:
+        if len(operation_id) != 16:
+            raise ValueError("invalid_relay_boundary")
+        self.clear_active_job()
+        with self._job_lock:
+            self._active_job = (socket_path, operation_id, deadline)
+        with self._lock:
+            self.operation_bytes = 0
+            self.admitted_sessions = 0
+
+    def clear_active_job(self) -> None:
+        with self._job_lock:
+            self._active_job = None
+            upstreams = list(self._active_upstreams)
+            self._active_upstreams.clear()
+        for sock in upstreams:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    def _handle(self, client):
+        with self._job_lock:
+            job = self._active_job
+        if job is None:
+            try:
+                client.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            client.close()
+            return
+
+        socket_path, operation_id, job_deadline = job
+        remaining = job_deadline - time.monotonic()
+        if remaining <= 0:
+            try:
+                client.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            client.close()
+            return
+
+        af_unix = getattr(socket, "AF_UNIX", None)
+        if af_unix is None:
+            try:
+                client.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            client.close()
+            raise RelayError("relay_af_unix_unavailable")
+
+        ipc = socket.socket(af_unix, socket.SOCK_STREAM)
+        with self._job_lock:
+            if self._active_job is None:
+                ipc.close()
+                try:
+                    client.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                client.close()
+                return
+            self._active_upstreams.add(ipc)
+        with self._lock:
+            self._sockets.add(ipc)
+        try:
+            ipc.settimeout(remaining)
+            ipc.connect(socket_path)
+            self._reserve_bytes(len(b"SFBR1" + operation_id) + 4)
+            send_frame(ipc, b"SFBR1" + operation_id, deadline=job_deadline)
+            _duplex(
+                client,
+                ipc,
+                deadline=job_deadline,
+                reserve=self._reserve_bytes,
+                owner=self,
+            )
+        finally:
+            with self._job_lock:
+                self._active_upstreams.discard(ipc)
+            with self._lock:
+                self._sockets.discard(ipc)
+            try:
+                ipc.close()
+            except OSError:
+                pass
+
+    def close(self) -> bool:
+        self.clear_active_job()
+        return super().close()

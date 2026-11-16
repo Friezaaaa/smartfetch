@@ -1,18 +1,25 @@
 """Audit script: In-depth verification of VPS security layer (mTLS, HMAC, Replay, SSRF)."""
 
 import os
+import sys
 import time
 import secrets
 import requests
 from pathlib import Path
+
+# Ensure repo root is on sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from smartfetch.remote_browser import sign_request
 
-VPS_URL = "https://159.89.40.174:8443"
+VPS_URL = os.getenv("BROWSER_WORKER_URL", "https://159.89.40.174:8443")
 CERTS_DIR = Path(__file__).resolve().parent.parent / "deploy" / "vps" / "certs"
 CA_CERT = str(CERTS_DIR / "ca.crt")
 CLIENT_CERT = str(CERTS_DIR / "client.crt")
 CLIENT_KEY = str(CERTS_DIR / "client.key")
-HMAC_KEY = "e00cfe83b1cb7f42c7bd64f949c80e949451cc1299b7d2affc31278ce299ac78"
+if "BROWSER_WORKER_HMAC_KEY" not in os.environ:
+    raise RuntimeError("BROWSER_WORKER_HMAC_KEY environment variable is required")
+HMAC_KEY = os.environ["BROWSER_WORKER_HMAC_KEY"]
 
 def audit_vps_security():
     print(f"=== Auditing DigitalOcean VPS Security: {VPS_URL} ===")

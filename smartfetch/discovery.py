@@ -16,6 +16,9 @@ from .bazaar import (
     FETCH_OUTPUT_EXAMPLE,
     FETCH_OUTPUT_SCHEMA,
     FETCH_TAGS,
+    MARKDOWN_DESCRIPTION,
+    RENDER_DESCRIPTION,
+    TEXT_DESCRIPTION,
     fetch_discovery_extension,
 )
 from .config import SERVICE_NAME, SERVICE_VERSION
@@ -200,19 +203,19 @@ def agent_card_document(urls, settings=None):
         "capabilities": [
             {
                 "name": "fetch_webpage",
-                "description": "Fetch webpage content and structure using isolated headless browser.",
+                "description": FETCH_DESCRIPTION,
             },
             {
                 "name": "webpage_to_markdown",
-                "description": "Convert webpage content to Markdown using isolated headless browser.",
+                "description": MARKDOWN_DESCRIPTION,
             },
             {
                 "name": "extract_webpage_text",
-                "description": "Extract plain text from webpage using isolated headless browser.",
+                "description": TEXT_DESCRIPTION,
             },
             {
                 "name": "render_webpage",
-                "description": "Render webpage with headless Chromium in isolated VPS worker.",
+                "description": RENDER_DESCRIPTION,
             },
         ],
         "contact": {
@@ -809,12 +812,12 @@ def docs_html(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SmartFetch V{SERVICE_VERSION} discovery</title>
-  <meta name="description" content="Public webpage reader, scraper, text extractor, Markdown converter, and browser renderer for AI agents.">
+  <meta name="description" content="Public webpage reader, scraper, text extractor, Markdown converter, PDF reader, and browser renderer for AI agents.">
 </head>
 <body>
   <main>
     <h1>SmartFetch</h1>
-    <p>SmartFetch is a webpage reader and fetch service for AI agents. It can scrape a public URL, extract clean text, convert a website to Markdown, preserve links and metadata, and use automatic browser rendering for JavaScript-heavy pages.</p>
+    <p>SmartFetch is a webpage reader and fetch service for AI agents. It can scrape a public URL, fetch and extract local PDFs, extract clean text, convert content to Markdown, preserve links and metadata, and use automatic browser rendering for JavaScript-heavy pages.</p>
     <p>Legacy <code>POST /fetch</code> and the four existing MCP tools use x402 <code>{payment['scheme']}</code> payments at <strong>{payment['price']}</strong> on <code>{payment['network']}</code> with asset <code>{payment['asset']}</code>.{v111_price_note} Discovery, health, metadata, MCP initialize, and MCP tools/list remain free.</p>
     <h2>Public endpoints</h2>
     <ul>
@@ -827,10 +830,10 @@ def docs_html(
     </ul>
     <h2>MCP tools</h2>
     <dl>
-      <dt><code>fetch_webpage</code></dt><dd>Return the full SmartFetch text, Markdown, links, and metadata result.</dd>
-      <dt><code>webpage_to_markdown</code></dt><dd>Return clean Markdown and core retrieval metadata without duplicate full text.</dd>
-      <dt><code>extract_webpage_text</code></dt><dd>Return clean readable text and core retrieval metadata without Markdown.</dd>
-      <dt><code>render_webpage</code></dt><dd>Force browser rendering and return the full SmartFetch result.</dd>
+      <dt><code>fetch_webpage</code></dt><dd>Primary webpage and PDF retrieval tool returning clean text, Markdown, links, and metadata with automatic browser fallback.</dd>
+      <dt><code>webpage_to_markdown</code></dt><dd>Token-efficient converter returning clean Markdown and core metadata from a webpage or PDF.</dd>
+      <dt><code>extract_webpage_text</code></dt><dd>Token-efficient extractor returning clean plain text and core metadata from a webpage or PDF.</dd>
+      <dt><code>render_webpage</code></dt><dd>Forced headless Chromium browser renderer for JavaScript SPAs returning post-JS rendered HTML DOM and extracted content.</dd>
     </dl>
     <h2>Paying client examples</h2>
     <p>The examples list tools for free, enforce a $0.005 maximum payment, then perform the x402 challenge, payment, retry, and settlement flow. Running them can spend real Base-mainnet USDC.</p>
@@ -909,7 +912,7 @@ def llms_text(
     )
     return f"""# SmartFetch
 
-SmartFetch reads, fetches, scrapes, and extracts public webpages for AI agents. It returns clean text, Markdown, links, and metadata, with browser rendering for JavaScript-heavy websites.
+SmartFetch reads, fetches, scrapes, and extracts public webpages and PDFs for AI agents. It returns clean text, Markdown, links, and metadata, with browser rendering for JavaScript-heavy websites.
 
 Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['price']} per execution with x402 {payment['scheme']} on {payment['network']} and asset {payment['asset']}.{v111_price_note}
 
@@ -929,10 +932,10 @@ Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['pric
 - Execution workflow: Discover tool -> inspect price ($0.005 USDC) -> authorize payment -> execute fetch -> receive browser-rendered content.
 
 ## MCP tools
-- fetch_webpage: full SmartFetch result
-- webpage_to_markdown: Markdown plus core metadata
-- extract_webpage_text: clean text plus core metadata
-- render_webpage: forced browser rendering plus the full result
+- fetch_webpage: primary webpage and PDF retrieval tool with automatic browser fallback
+- webpage_to_markdown: clean Markdown and core metadata from a webpage or PDF
+- extract_webpage_text: clean plain text and core metadata from a webpage or PDF
+- render_webpage: forced browser renderer returning rendered HTML DOM and extracted content
 
 ## Paying MCP client examples
 - [Python MCP example]({PYTHON_EXAMPLE_URL})

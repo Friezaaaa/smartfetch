@@ -68,9 +68,9 @@ class TestMCPToolMigration(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(call_result.isError)
         self.assertTrue(call_result.structuredContent["success"])
         self.assertIn("<html>", call_result.structuredContent["html"])
-        # render_webpage enforces force_browser=True
+        # render_webpage enforces force_browser=True and include_html=True
         self.mock_fetch_handler.assert_called_once_with(
-            "https://example.com/blog", True, 15000
+            "https://example.com/blog", True, 15000, include_html=True
         )
 
     def test_all_four_tools_registered_in_fastmcp(self):

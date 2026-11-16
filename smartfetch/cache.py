@@ -42,13 +42,21 @@ def normalize_cache_url(url: str) -> str:
     return urlunparse((scheme, netloc, path, parsed.params, query, ""))
 
 
-def build_cache_key(url: str, format: str = "markdown", render_mode: str = "auto") -> str:
+def build_cache_key(
+    url: str,
+    format: str = "markdown",
+    render_mode: str = "auto",
+    include_html: bool = False,
+) -> str:
     """Builds a normalized SHA-256 cache key scoped by URL, format, and render mode."""
     canonical_url = normalize_cache_url(url)
     url_digest = hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()[:24]
     fmt = (format or "markdown").lower()
     mode = (render_mode or "auto").lower()
-    return f"sf:{url_digest}:{fmt}:{mode}"
+    base = f"sf:{url_digest}:{fmt}:{mode}"
+    if include_html:
+        return f"{base}:html"
+    return base
 
 
 class ResultCacheProvider(ABC):

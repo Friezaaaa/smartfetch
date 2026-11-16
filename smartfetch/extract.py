@@ -1,9 +1,11 @@
 import hashlib
+import io
 import re
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from markdownify import markdownify as to_markdown
+import pypdf
 
 NOISE_TAGS = ['script','style','noscript','iframe','svg','canvas','template','form']
 NOISE_SELECTORS = [
@@ -108,4 +110,78 @@ def extract_content(html: str, page_url: str) -> dict:
         'word_count': len(text.split()),
         'content_hash': hashlib.sha256(text.encode('utf-8')).hexdigest(),
         'low_quality': low_quality,
+    }
+
+
+def extract_pdf(
+    raw_bytes: bytes,
+    page_url: str,
+    *,
+    max_pages: int = 50,
+    max_extracted_chars: int = 100_000,
+) -> dict:
+    """Extracts text, metadata, and structured Markdown from raw PDF bytes."""
+    if not isinstance(raw_bytes, (bytes, bytearray)) or not raw_bytes.startswith(b'%PDF-'):
+        raise ValueError("Invalid PDF data: missing %PDF- header")
+
+    reader = pypdf.PdfReader(io.BytesIO(raw_bytes), strict=False)
+
+    if reader.is_encrypted:
+        decrypted = False
+        try:
+            # Attempt empty-password decrypt for unauthenticated read
+            res = reader.decrypt("")
+            if res:
+                decrypted = True
+        except Exception:
+            decrypted = False
+        if not decrypted:
+            raise ValueError("PDF is password-protected and cannot be decrypted without a password")
+
+    page_count = len(reader.pages)
+    pages_to_extract = min(page_count, max_pages)
+
+    markdown_parts = []
+    content_parts = []
+    total_chars = 0
+    pages_extracted = 0
+
+    for idx in range(pages_to_extract):
+        page = reader.pages[idx]
+        page_text = page.extract_text() or ""
+        page_norm = _norm(page_text)
+        if page_norm:
+            markdown_parts.append(f"## Page {idx + 1}\n\n{page_norm}")
+            content_parts.append(page_norm)
+            total_chars += len(page_norm)
+        pages_extracted += 1
+        if total_chars >= max_extracted_chars:
+            break
+
+    content = "\n\n".join(content_parts).strip()
+    markdown = "\n\n".join(markdown_parts).strip()
+
+    title = ""
+    if reader.metadata and reader.metadata.title:
+        title = _norm(str(reader.metadata.title))
+    if not title:
+        parsed_path = urlparse(page_url).path
+        filename = parsed_path.split("/")[-1] if parsed_path else ""
+        if filename:
+            if filename.lower().endswith(".pdf"):
+                filename = filename[:-4]
+            title = filename.replace("-", " ").replace("_", " ").strip().title()
+
+    low_quality = len(content) < 20
+
+    return {
+        'title': title,
+        'content': content,
+        'markdown': markdown,
+        'links': [],
+        'word_count': len(content.split()),
+        'content_hash': hashlib.sha256(content.encode('utf-8')).hexdigest(),
+        'low_quality': low_quality,
+        'page_count': page_count,
+        'pages_extracted': pages_extracted,
     }

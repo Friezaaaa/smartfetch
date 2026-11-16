@@ -34,10 +34,9 @@ class LiveVPSDeploymentGateTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.worker_url = os.getenv("BROWSER_WORKER_URL", "https://159.89.40.174:8443").rstrip("/")
-        cls.hmac_key = os.getenv(
-            "BROWSER_WORKER_HMAC_KEY",
-            "e00cfe83b1cb7f42c7bd64f949c80e949451cc1299b7d2affc31278ce299ac78",
-        )
+        cls.hmac_key = os.getenv("BROWSER_WORKER_HMAC_KEY")
+        if not cls.hmac_key:
+            raise unittest.SkipTest("BROWSER_WORKER_HMAC_KEY not set; skipping live gate test")
         certs_dir = Path(os.getenv("BROWSER_WORKER_CERTS_DIR", str(DEFAULT_CERTS_DIR)))
         cls.ca_cert = str(certs_dir / "ca.crt")
         cls.client_cert = str(certs_dir / "client.crt")

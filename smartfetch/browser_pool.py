@@ -105,6 +105,7 @@ class WarmChromiumInstance:
             self.chromium_path,
             "--headless=new",
             "--disable-gpu",
+            "--disable-dev-shm-usage",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-background-networking",
@@ -121,6 +122,7 @@ class WarmChromiumInstance:
         ]
         if self.proxy_host and self.proxy_port:
             flags.insert(1, f"--proxy-server=http://{self.proxy_host}:{self.proxy_port}")
+            flags.insert(2, "--proxy-bypass-list=<-loopback>")
 
         # Start child process
         self.proc = subprocess.Popen(
@@ -210,6 +212,7 @@ class WarmChromiumInstance:
         *,
         deadline: float,
         max_chars: int = 20000,
+        wait_ready: bool = False,
     ) -> dict[str, Any]:
         """Renders the given URL in a dedicated ephemeral BrowserContext."""
         if not self.ws_endpoint:
@@ -291,8 +294,39 @@ class WarmChromiumInstance:
             page_send("Page.enable")
             page_send("Page.navigate", {"url": url})
 
-            # Wait briefly for document rendering or navigation completion
-            time.sleep(0.5)
+            status_code = 200
+            if wait_ready:
+                while time.monotonic() < deadline:
+                    time.sleep(0.1)
+                    try:
+                        ready_eval = page_send(
+                            "Runtime.evaluate",
+                            {"expression": "document.readyState", "returnByValue": True},
+                        )
+                        ready = ready_eval.get("result", {}).get("value")
+                        if ready in {"interactive", "complete"}:
+                            break
+                    except Exception:
+                        pass
+                time.sleep(0.3)
+                try:
+                    status_eval = page_send(
+                        "Runtime.evaluate",
+                        {
+                            "expression": '(performance.getEntriesByType("navigation")[0] && performance.getEntriesByType("navigation")[0].responseStatus) || 200',
+                            "returnByValue": True,
+                        },
+                    )
+                    raw_status = status_eval.get("result", {}).get("value", 200)
+                    status_code = int(raw_status or 200)
+                except Exception:
+                    status_code = 200
+
+                if status_code >= 400:
+                    raise RuntimeError(f"Browser navigation returned HTTP {status_code}")
+            else:
+                # Wait briefly for document rendering or navigation completion
+                time.sleep(0.5)
 
             # 5. Extract rendered HTML and document metadata
             html_eval = page_send(
@@ -316,17 +350,21 @@ class WarmChromiumInstance:
                 self.metrics.total_latency_ms += elapsed_ms
                 self.metrics.last_job_at = time.monotonic()
 
-            return shape_output({
+            payload = {
                 "success": True,
                 "requested_url": url,
                 "final_url": final_url,
-                "status_code": 200,
+                "status_code": status_code,
                 "render_method": "browser",
                 "retrieval_tier": "browser",
                 "cache_hit": False,
                 "elapsed_ms": elapsed_ms,
                 **extracted,
-            }, max_chars)
+            }
+            if wait_ready:
+                payload["html"] = raw_html
+
+            return shape_output(payload, max_chars)
 
         except Exception as exc:
             self._tainted = True

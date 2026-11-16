@@ -123,14 +123,19 @@ class V17MCPDiscoveryTests(unittest.TestCase):
         )
         tool = listed['result']['tools'][0]
         self.assertEqual(tool['name'], 'fetch_webpage')
-        self.assertIn('fetch, scrape, or extract', tool['description'].lower())
+        self.assertIn('primary webpage and pdf retrieval tool', tool['description'].lower())
         self.assertEqual(tool['_meta']['availability'], 'unavailable')
         self.assertFalse(tool['_meta']['payment_challenge_enabled'])
         self.assertEqual(tool['inputSchema'], {
             'properties': {
-                'url': {'title': 'Url', 'type': 'string'},
+                'url': {
+                    'description': 'Public HTTP or HTTPS URL of a webpage or PDF to retrieve.',
+                    'title': 'Url',
+                    'type': 'string',
+                },
                 'max_chars': {
                     'default': 20000,
+                    'description': 'Maximum characters returned for content and Markdown.',
                     'maximum': 50000,
                     'minimum': 1000,
                     'title': 'Max Chars',
@@ -138,6 +143,7 @@ class V17MCPDiscoveryTests(unittest.TestCase):
                 },
                 'force_browser': {
                     'default': False,
+                    'description': 'Start with browser rendering instead of fast HTTP retrieval.',
                     'title': 'Force Browser',
                     'type': 'boolean',
                 },

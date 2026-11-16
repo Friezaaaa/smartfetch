@@ -9,6 +9,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from .access_logging import uvicorn_log_config
+from .bazaar import (
+    FETCH_DESCRIPTION,
+    MARKDOWN_DESCRIPTION,
+    RENDER_DESCRIPTION,
+    TEXT_DESCRIPTION,
+)
 from .config import HOST, PORT, SERVICE_NAME, SERVICE_VERSION
 from .core import smart_fetch
 from .discovery import (
@@ -37,6 +43,35 @@ from .request_bounds import BoundedRequestMiddleware
 _UNHEALTHY_BODY = b'{"success":false,"error_code":"service_unhealthy","error":"Service temporarily unavailable"}'
 
 
+class MCPAcceptNormalization:
+    """Normalizes missing or single-media-type Accept headers on POST /mcp to satisfy FastMCP Streamable HTTP transport."""
+
+    def __init__(self, app):
+        self.app = app
+
+    def __getattr__(self, name):
+        return getattr(self.app, name)
+
+    async def __call__(self, scope, receive, send):
+        if (
+            scope.get("type") == "http"
+            and scope.get("method") == "POST"
+            and scope.get("path") == "/mcp"
+        ):
+            headers = list(scope.get("headers", []))
+            accept_values = [v for k, v in headers if k.lower() == b"accept"]
+            raw_accept = b", ".join(accept_values).decode("latin1", "replace").strip().lower()
+            unique_types = {t.split(";")[0].strip() for t in raw_accept.split(",") if t.strip()}
+
+            if not unique_types or unique_types in ({"*/*"}, {"application/json"}, {"text/event-stream"}):
+                filtered_headers = [(k, v) for k, v in headers if k.lower() != b"accept"]
+                filtered_headers.append((b"accept", b"application/json, text/event-stream"))
+                scope = dict(scope)
+                scope["headers"] = filtered_headers
+
+        return await self.app(scope, receive, send)
+
+
 def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
     """Build the production SmartFetch application with x402 payment protection and isolated browser routing."""
     settings = load_x402_settings(v111_environ) if payment_settings is None else payment_settings
@@ -49,9 +84,10 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         format: str = "markdown",
         render_mode: str = "auto",
         no_cache: bool = False,
+        include_html: bool = False,
     ) -> dict:
         loop = asyncio.get_running_loop()
-        should_force = force_browser or os.getenv("BROWSER_WORKER_REQUIRED", "false").lower() in ("1", "true", "yes")
+        should_force = force_browser
         result = await loop.run_in_executor(
             None,
             lambda: smart_fetch(
@@ -61,6 +97,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 format=format,
                 render_mode=render_mode,
                 no_cache=no_cache,
+                include_html=include_html,
             ),
         )
         result["request_id"] = secrets.token_hex(8)
@@ -219,10 +256,10 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             "transport": "streamable-http",
             "url": urls["mcp"],
             "tools": [
-                {"name": "fetch_webpage", "description": "Fetch webpage content and structure using isolated browser."},
-                {"name": "webpage_to_markdown", "description": "Convert webpage content to Markdown using isolated browser."},
-                {"name": "extract_webpage_text", "description": "Extract plain text from webpage using isolated browser."},
-                {"name": "render_webpage", "description": "Render webpage with headless Chromium in isolated VPS worker."},
+                {"name": "fetch_webpage", "description": FETCH_DESCRIPTION},
+                {"name": "webpage_to_markdown", "description": MARKDOWN_DESCRIPTION},
+                {"name": "extract_webpage_text", "description": TEXT_DESCRIPTION},
+                {"name": "render_webpage", "description": RENDER_DESCRIPTION},
             ],
         }
 
@@ -283,7 +320,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
     if settings.enabled and remote_cfg.is_configured:
         install_x402(application, settings)
 
-    return BoundedRequestMiddleware(EmergencyDispatch(application))
+    return BoundedRequestMiddleware(EmergencyDispatch(MCPAcceptNormalization(application)))
 
 
 app = create_app()

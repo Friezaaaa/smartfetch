@@ -1,7 +1,7 @@
 import os
 import socket
 import time
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -188,7 +188,12 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
             ))
 
         content_type = response.headers.get('Content-Type', '').lower()
-        if not any(x in content_type for x in ('text/html', 'application/xhtml+xml', 'text/plain')):
+        parsed_path = urlparse(current).path.lower()
+        is_pdf_content_type = 'application/pdf' in content_type
+        is_octet_pdf = 'application/octet-stream' in content_type and parsed_path.endswith('.pdf')
+        is_pdf_candidate = is_pdf_content_type or is_octet_pdf
+
+        if not (any(x in content_type for x in ('text/html', 'application/xhtml+xml', 'text/plain')) or is_pdf_candidate):
             response.close()
             error = RuntimeError(
                 f'Unsupported content-type: {content_type or "unknown"}'
@@ -252,6 +257,28 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
             response.close()
 
         raw = b''.join(chunks)
+
+        if is_pdf_candidate:
+            if not raw.startswith(b'%PDF-'):
+                error = RuntimeError('Invalid PDF content: missing %PDF- header')
+                _annotate_and_raise(error, make_diagnostics(
+                    url,
+                    'http',
+                    'response',
+                    'invalid_content',
+                    http_attempted=True,
+                    http_retry_attempted=retry_attempted,
+                ))
+            if isinstance(_attempt_state, dict):
+                _attempt_state['retry_attempted'] = retry_attempted
+            return {
+                'raw_bytes': raw,
+                'final_url': current,
+                'status_code': response.status_code,
+                'content_type': 'application/pdf',
+                'is_pdf': True,
+            }
+
         encoding = response.encoding or 'utf-8'
         try:
             html = raw.decode(encoding, errors='replace')

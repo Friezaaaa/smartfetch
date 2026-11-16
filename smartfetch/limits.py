@@ -37,7 +37,19 @@ def shape_output(result: dict, max_chars: int) -> dict:
     shaped['content'] = content
     shaped['markdown'] = markdown
     shaped['links'] = links
-    shaped['truncated'] = bool(c_truncated or m_truncated or len(result.get('links', [])) > MAX_LINKS)
+
+    h_truncated = False
+    if 'html' in result and isinstance(result['html'], str):
+        full_html = result['html']
+        html, h_truncated = _truncate(full_html, max_chars)
+        shaped['html'] = html
+
+    shaped['truncated'] = bool(
+        c_truncated
+        or m_truncated
+        or h_truncated
+        or len(result.get('links', [])) > MAX_LINKS
+    )
     shaped['original_content_chars'] = len(full_content)
     shaped['original_markdown_chars'] = len(full_markdown)
     shaped['returned_content_chars'] = len(content)

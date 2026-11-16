@@ -6,9 +6,12 @@ from .config import SERVICE_VERSION
 
 
 FETCH_DESCRIPTION = (
-    "Read, fetch, scrape, or extract any public webpage or URL for AI agents. "
-    "Returns clean text, Markdown, links, and metadata, with automatic browser "
-    "rendering for JavaScript-heavy pages."
+    "Primary webpage and PDF retrieval tool. Use by default to fetch any public "
+    "HTTP/HTTPS webpage or PDF and return clean text, Markdown, links, and metadata. "
+    "Uses fast HTTP first and automatically falls back to an isolated headless "
+    "browser for JavaScript-rendered pages. (Use webpage_to_markdown or "
+    "extract_webpage_text for token-saving single-format output, or render_webpage "
+    "when you need raw rendered HTML DOM.)"
 )
 FETCH_TAGS = [
     "web-reader",
@@ -18,16 +21,20 @@ FETCH_TAGS = [
     "agents",
 ]
 MARKDOWN_DESCRIPTION = (
-    "Convert a public webpage or URL into clean Markdown for AI agents, "
-    "with core retrieval metadata."
+    "Token-efficient converter that returns ONLY clean Markdown and core metadata "
+    "from a public webpage or PDF (omits duplicate plain text, links array, and "
+    "raw HTML). Use when you only need Markdown."
 )
 TEXT_DESCRIPTION = (
-    "Extract clean readable text from a public webpage or URL for AI agents, "
-    "with core retrieval metadata."
+    "Token-efficient extractor that returns ONLY clean plain text and core metadata "
+    "from a public webpage or PDF (omits Markdown formatting, links array, and "
+    "raw HTML). Use when you only need plain readable text."
 )
 RENDER_DESCRIPTION = (
-    "Browser-render a public JavaScript-heavy webpage or URL, then return "
-    "clean text, Markdown, links, and metadata."
+    "Forced headless Chromium browser renderer for JavaScript-heavy SPAs and "
+    "dynamic webpages. Always executes Tier 3 isolated browser rendering and "
+    "returns the post-JS rendered HTML DOM alongside extracted text, Markdown, "
+    "links, and metadata. Do not use for PDFs or static pages (use fetch_webpage instead)."
 )
 FETCH_INPUT_EXAMPLE = {
     "url": "https://example.com/article",
@@ -41,7 +48,7 @@ FETCH_INPUT_SCHEMA = {
             "type": "string",
             "format": "uri",
             "pattern": "^https?://",
-            "description": "Public HTTP or HTTPS URL to retrieve.",
+            "description": "Public HTTP or HTTPS webpage or PDF URL to retrieve.",
         },
         "max_chars": {
             "type": "integer",
@@ -156,6 +163,8 @@ FETCH_OUTPUT_SCHEMA = {
         "max_chars": {"type": "integer", "minimum": 1000},
         "request_id": {"type": "string"},
         "service_version": {"type": "string"},
+        "content_type": {"type": "string"},
+        "page_count": {"type": "integer", "minimum": 1},
     },
     "required": [
         "success",
@@ -196,12 +205,17 @@ MCP_COMMON_OUTPUT_FIELDS = (
     "max_chars",
     "request_id",
     "service_version",
+    "content_type",
+    "page_count",
 )
 
 
 def _input_without_force_browser():
     schema = deepcopy(FETCH_INPUT_SCHEMA)
     schema["properties"].pop("force_browser")
+    schema["properties"]["url"]["description"] = (
+        "Public HTTP or HTTPS webpage URL for forced browser rendering."
+    )
     example = deepcopy(FETCH_INPUT_EXAMPLE)
     example.pop("force_browser")
     return schema, example
@@ -233,8 +247,20 @@ def _projected_output(primary_field):
 RENDER_INPUT_SCHEMA, RENDER_INPUT_EXAMPLE = _input_without_force_browser()
 MARKDOWN_OUTPUT_SCHEMA, MARKDOWN_OUTPUT_EXAMPLE = _projected_output("markdown")
 TEXT_OUTPUT_SCHEMA, TEXT_OUTPUT_EXAMPLE = _projected_output("content")
+
+RENDER_OUTPUT_SCHEMA = deepcopy(FETCH_OUTPUT_SCHEMA)
+RENDER_OUTPUT_SCHEMA["properties"]["html"] = {"type": "string"}
+RENDER_OUTPUT_SCHEMA["required"] = list(FETCH_OUTPUT_SCHEMA["required"]) + ["html"]
+
 RENDER_OUTPUT_EXAMPLE = deepcopy(FETCH_OUTPUT_EXAMPLE)
 RENDER_OUTPUT_EXAMPLE["render_method"] = "browser"
+RENDER_OUTPUT_EXAMPLE["html"] = (
+    "<!DOCTYPE html><html><head><title>SmartFetch local API test</title></head>"
+    "<body><h1>SmartFetch local API test</h1>"
+    "<p>This is useful article content for validating the production API layer.</p>"
+    "<p>Second paragraph with a <a href=\"https://example.com/next\">useful link</a>.</p>"
+    "</body></html>"
+)
 
 
 def fetch_discovery_extension():

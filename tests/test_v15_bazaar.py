@@ -112,7 +112,7 @@ class V16BazaarDiscoveryTests(unittest.TestCase):
                 sort_keys=True,
                 separators=(',', ':'),
             ).encode('utf-8')).hexdigest(),
-            '6f08e7d505fc6f40e0f964662830b0c8a8f5e7c25f1240d9a7ee500f716ef84d',
+            'c5c3768444dfd5870c1e665b83877aba214fe1e31bbfdf01e7b7d6d2d7925ca0',
         )
 
         output_example = bazaar['info']['output']['example']
@@ -144,7 +144,7 @@ class V16BazaarDiscoveryTests(unittest.TestCase):
                 sort_keys=True,
                 separators=(',', ':'),
             ).encode('utf-8')).hexdigest(),
-            '1242309f47ddf83e2056d4a4eceb16e2a90a7b10f2240cf4bb70b046d89eed6d',
+            '04642bfacd7467984ac99fc5dfe91f94c6ce344523d9227591948a6f64bc19be',
         )
 
         serialized = json.dumps(bazaar, sort_keys=True)

@@ -26,6 +26,7 @@ from .bazaar import (
     RENDER_INPUT_EXAMPLE,
     RENDER_INPUT_SCHEMA,
     RENDER_OUTPUT_EXAMPLE,
+    RENDER_OUTPUT_SCHEMA,
     TEXT_DESCRIPTION,
     TEXT_OUTPUT_EXAMPLE,
     TEXT_OUTPUT_SCHEMA,
@@ -51,7 +52,7 @@ MCP_DEFAULT_MAX_CHARS = 20000
 MCP_MIN_CHARS = 1000
 MCP_MAX_CHARS = 50000
 
-FetchHandler = Callable[[str, bool, int], Awaitable[dict[str, Any]]]
+FetchHandler = Callable[..., Awaitable[dict[str, Any]]]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -120,76 +121,112 @@ def create_smartfetch_mcp(
         resource_server, accepts = _initialize_payment(settings)
 
     # Handlers for each of the 4 tools: fetch_webpage is the flagship tool,
-    # and the remaining three tools delegate internally to fetch_webpage.
+    # and the remaining three tools delegate internally to fetch_handler.
     async def fetch_webpage(
-        url: str,
-        max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS)] = MCP_DEFAULT_MAX_CHARS,
-        force_browser: bool = False,
+        url: Annotated[str, Field(description="Public HTTP or HTTPS URL of a webpage or PDF to retrieve.")],
+        max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS, description="Maximum characters returned for content and Markdown.")] = MCP_DEFAULT_MAX_CHARS,
+        force_browser: Annotated[bool, Field(description="Start with browser rendering instead of fast HTTP retrieval.")] = False,
     ) -> dict[str, Any]:
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string")
         return await fetch_handler(url.strip(), force_browser, max_chars)
 
     async def webpage_to_markdown(
-        url: str,
-        max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS)] = MCP_DEFAULT_MAX_CHARS,
-        force_browser: bool = False,
+        url: Annotated[str, Field(description="Public HTTP or HTTPS URL of a webpage or PDF to retrieve as Markdown.")],
+        max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS, description="Maximum characters returned for Markdown.")] = MCP_DEFAULT_MAX_CHARS,
+        force_browser: Annotated[bool, Field(description="Start with browser rendering instead of fast HTTP retrieval.")] = False,
     ) -> dict[str, Any]:
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string")
-        result = await fetch_webpage(url.strip(), max_chars=max_chars, force_browser=force_browser)
+        result = await fetch_handler(url.strip(), force_browser, max_chars)
         md_text = result.get("markdown", "") or result.get("content", "")
-        return {
-            "success": True,
-            "requested_url": url,
-            "final_url": result.get("final_url", url),
+        payload: dict[str, Any] = {
+            "success": bool(result.get("success", True)),
+            "requested_url": result.get("requested_url", url.strip()),
+            "final_url": result.get("final_url", url.strip()),
             "status_code": result.get("status_code", 200),
-            "render_method": result.get("render_method", "browser"),
+            "render_method": result.get("render_method", "browser" if force_browser else "http"),
             "elapsed_ms": result.get("elapsed_ms", 0),
             "title": result.get("title", ""),
             "markdown": md_text,
+            "truncated": bool(result.get("truncated", False)),
+            "max_chars": result.get("max_chars", max_chars),
+            "request_id": result.get("request_id", ""),
+            "service_version": result.get("service_version", SERVICE_VERSION),
         }
+        for opt_key in ("fallback_reason", "content_type", "page_count"):
+            if opt_key in result and result[opt_key] is not None:
+                payload[opt_key] = result[opt_key]
+        return payload
 
     async def extract_webpage_text(
-        url: str,
-        max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS)] = MCP_DEFAULT_MAX_CHARS,
-        force_browser: bool = False,
+        url: Annotated[str, Field(description="Public HTTP or HTTPS URL of a webpage or PDF to extract plain text from.")],
+        max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS, description="Maximum characters returned for content.")] = MCP_DEFAULT_MAX_CHARS,
+        force_browser: Annotated[bool, Field(description="Start with browser rendering instead of fast HTTP retrieval.")] = False,
     ) -> dict[str, Any]:
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string")
-        result = await fetch_webpage(url.strip(), max_chars=max_chars, force_browser=force_browser)
+        result = await fetch_handler(url.strip(), force_browser, max_chars)
         text_content = result.get("content", "")
-        return {
-            "success": True,
-            "requested_url": url,
-            "final_url": result.get("final_url", url),
+        payload: dict[str, Any] = {
+            "success": bool(result.get("success", True)),
+            "requested_url": result.get("requested_url", url.strip()),
+            "final_url": result.get("final_url", url.strip()),
             "status_code": result.get("status_code", 200),
-            "render_method": result.get("render_method", "browser"),
+            "render_method": result.get("render_method", "browser" if force_browser else "http"),
             "elapsed_ms": result.get("elapsed_ms", 0),
             "title": result.get("title", ""),
             "content": text_content,
+            "truncated": bool(result.get("truncated", False)),
+            "max_chars": result.get("max_chars", max_chars),
+            "request_id": result.get("request_id", ""),
+            "service_version": result.get("service_version", SERVICE_VERSION),
         }
+        for opt_key in ("fallback_reason", "content_type", "page_count"):
+            if opt_key in result and result[opt_key] is not None:
+                payload[opt_key] = result[opt_key]
+        return payload
 
     async def render_webpage(
-        url: str,
-        max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS)] = MCP_DEFAULT_MAX_CHARS,
+        url: Annotated[str, Field(description="Public HTTP or HTTPS webpage URL for forced headless browser rendering.")],
+        max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS, description="Maximum characters returned for content, Markdown, and HTML.")] = MCP_DEFAULT_MAX_CHARS,
     ) -> dict[str, Any]:
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string")
-        result = await fetch_webpage(url.strip(), max_chars=max_chars, force_browser=True)
-        html_text = result.get("html", "") or result.get("content", "")
-        return {
-            "success": True,
-            "requested_url": url,
-            "final_url": result.get("final_url", url),
+        result = await fetch_handler(url.strip(), True, max_chars, include_html=True)
+        content = result.get("content", "")
+        markdown = result.get("markdown", "")
+        html_text = result.get("html", "")
+        links = result.get("links", [])
+        payload: dict[str, Any] = {
+            "success": bool(result.get("success", True)),
+            "requested_url": result.get("requested_url", url.strip()),
+            "final_url": result.get("final_url", url.strip()),
             "status_code": result.get("status_code", 200),
             "render_method": "browser",
             "elapsed_ms": result.get("elapsed_ms", 0),
             "title": result.get("title", ""),
+            "content": content,
+            "markdown": markdown,
+            "links": links,
+            "word_count": result.get("word_count", len(content.split())),
+            "content_hash": result.get("content_hash", "0" * 64),
+            "low_quality": bool(result.get("low_quality", False)),
+            "truncated": bool(result.get("truncated", False)),
+            "original_content_chars": result.get("original_content_chars", len(content)),
+            "original_markdown_chars": result.get("original_markdown_chars", len(markdown)),
+            "returned_content_chars": result.get("returned_content_chars", len(content)),
+            "returned_markdown_chars": result.get("returned_markdown_chars", len(markdown)),
+            "links_returned": result.get("links_returned", len(links)),
+            "max_chars": result.get("max_chars", max_chars),
+            "request_id": result.get("request_id", ""),
+            "service_version": result.get("service_version", SERVICE_VERSION),
             "html": html_text,
-            "content": result.get("content", ""),
-            "markdown": result.get("markdown", ""),
         }
+        for opt_key in ("fallback_reason", "content_type", "page_count"):
+            if opt_key in result and result[opt_key] is not None:
+                payload[opt_key] = result[opt_key]
+        return payload
 
     def protect(name: str, description: str, handler: Callable, extension: dict[str, Any] | None = None) -> Callable:
         if not settings.enabled:
@@ -295,7 +332,7 @@ def create_smartfetch_mcp(
             render_webpage,
             RENDER_INPUT_SCHEMA,
             RENDER_INPUT_EXAMPLE,
-            FETCH_OUTPUT_SCHEMA,
+            RENDER_OUTPUT_SCHEMA,
             RENDER_OUTPUT_EXAMPLE,
         ),
     )
