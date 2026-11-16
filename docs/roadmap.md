@@ -97,6 +97,10 @@ Operational improvements to maximize uptime and resilience under edge conditions
 - **Configurable Domain Whitelists/Blacklists**: Allow operator-defined blocklists for malware or phishing domains at the broker level.
 - **Bandwidth Quotas per Request**: Impose hard per-page total byte limits on outbound HTTP traffic during browser execution to prevent bandwidth abuse from massive streaming media assets.
 
+### 4.4 Scheduled Worker Daemon Image Rebuild & Version Alignment
+- **Scheduled Image Rebuild**: Rebuild the `smartfetch-browser-daemon:prod` container image during the first planned maintenance window to synchronize the static version reporting string (`1.11.1` → `1.13.0`), as documented in [`docs/vps-version-consistency-audit.md`](vps-version-consistency-audit.md).
+- **Zero-Downtime Deployment**: Execute the container update alongside the scheduled automated mTLS certificate rotation scripts without interrupting the active Railway gateway.
+
 ---
 
 ## 5. Customer Onboarding & Developer Experience
@@ -126,6 +130,7 @@ Lower friction for AI agent developers, enterprises, and individual users adopti
 | HORIZON 1: Near-Term (v1.13.0)                                                    |
 | - Distributed OpenTelemetry tracing across Railway gateway and VPS daemon         |
 | - Automated mTLS certificate rotation scripts and monitoring alerts               |
+| - Rebuild VPS daemon image to synchronize reported version string (v1.13.0)       |
 | - Client SDK starter templates (Python / TypeScript)                              |
 | - Interactive buyer playground for browser wallet onboarding                      |
 +-----------------------------------------------------------------------------------+
