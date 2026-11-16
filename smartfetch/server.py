@@ -12,6 +12,7 @@ from .access_logging import uvicorn_log_config
 from .config import HOST, PORT, SERVICE_NAME, SERVICE_VERSION
 from .core import smart_fetch
 from .discovery import (
+    agent_card_document,
     docs_html,
     emergency_docs_html,
     emergency_llms_text,
@@ -20,6 +21,7 @@ from .discovery import (
     emergency_x402_manifest,
     llms_text,
     openapi_document,
+    owners_document,
     public_urls,
     robots_text,
     sitemap_xml,
@@ -205,6 +207,21 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             "$schema": "https://glama.ai/mcp/schemas/connector.json",
             "maintainers": [{"email": "smartfetch.contact@gmail.com"}],
         })
+
+    @application.get("/.well-known/agent-card.json")
+    async def agent_card_discovery(request: Request):
+        urls = public_urls(request)
+        return JSONResponse(agent_card_document(urls, settings))
+
+    @application.get("/.well-known/owners.json")
+    async def owners_discovery(request: Request):
+        urls = public_urls(request)
+        return JSONResponse(owners_document(urls))
+
+    @application.get("/mcp/.well-known/owners.json")
+    async def mcp_owners_discovery(request: Request):
+        urls = public_urls(request)
+        return JSONResponse(owners_document(urls))
 
     @application.get("/openapi.json")
     async def openapi(request: Request):

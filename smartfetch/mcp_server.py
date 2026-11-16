@@ -331,6 +331,19 @@ def create_smartfetch_mcp(
             structured_output=False,
         )(tool_handler)
 
+    # Cache static MCP tool listings for high-frequency census and directory bots
+    _cached_tools: Optional[list[Any]] = None
+    orig_list_tools = mcp.list_tools
+
+    async def cached_list_tools():
+        nonlocal _cached_tools
+        if _cached_tools is None:
+            _cached_tools = await orig_list_tools()
+        return _cached_tools
+
+    mcp.list_tools = cached_list_tools
+    mcp._mcp_server.list_tools()(cached_list_tools)
+
     http_app = mcp.streamable_http_app()
     route = next(
         candidate

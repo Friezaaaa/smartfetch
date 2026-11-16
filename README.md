@@ -40,6 +40,32 @@ SmartFetch separates the public API/MCP interface from headless browser executio
 
 ## Documentation & Validation
 
-- Full production audit and on-chain verification report: [`docs/production-validation.md`](docs/production-validation.md)
-- Release notes: [`docs/release-notes-v1.12.0.md`](docs/release-notes-v1.12.0.md)
-- VPS deployment guide: [`docs/vps_deployment_guide.md`](docs/vps_deployment_guide.md)
+- **Agent Integration & Payment Guide**: [`docs/agent-payment-guide.md`](docs/agent-payment-guide.md) — Complete Python, TypeScript, and MCP client examples for Base Mainnet EIP-712 payment authorization.
+- **Production Traffic Analysis**: [`docs/production-traffic-analysis-v1.12.0.md`](docs/production-traffic-analysis-v1.12.0.md) — Telemetry audit of AI agent discovery, MCP indexer traffic, and verified settlements.
+- **Playground Architecture Plan**: [`docs/playground-architecture-plan.md`](docs/playground-architecture-plan.md) — Design and security specification for the interactive web playground.
+- **Production Audit & Verification**: [`docs/production-validation.md`](docs/production-validation.md) — Verified on-chain Base Mainnet settlement and mTLS isolated browser audit.
+- **Release Notes**: [`docs/release-notes-v1.12.0.md`](docs/release-notes-v1.12.0.md)
+- **VPS Deployment Guide**: [`docs/vps_deployment_guide.md`](docs/vps_deployment_guide.md)
+
+---
+
+## Agent Quickstart & x402 Micropayments
+
+SmartFetch enables autonomous AI agents to pay for web retrievals using off-chain EIP-712 payment authorizations settled on Base Mainnet.
+
+### 5-Step Agent Workflow
+1. **Discover**: Query `/.well-known/x402` or `/.well-known/agent-card.json` to verify pricing ($0.005 USDC on Base Mainnet).
+2. **Challenge**: Submit an unauthenticated `POST /fetch` request; SmartFetch replies with `HTTP 402 Payment Required`.
+3. **Sign**: Agent inspects the `PAYMENT-REQUIRED` header, checks its spending limit, and signs an EIP-712 `TransferWithAuthorization`.
+4. **Execute**: Resubmit `POST /fetch` with the signature in the `PAYMENT-SIGNATURE` header.
+5. **Retrieve**: SmartFetch verifies the authorization, renders the page inside the DigitalOcean isolated container, settles the payment on Base Mainnet, and returns HTTP 200 with the transaction receipt in `PAYMENT-RESPONSE`.
+
+### Discovery Manifests
+| Endpoint | Standard | Description |
+| :--- | :--- | :--- |
+| `GET /.well-known/x402` | x402 Manifest v2 | Machine-readable pricing ($0.005), USDC asset address, and payment scheme |
+| `GET /.well-known/agent-card.json` | A2A Protocol | Agent-to-Agent discovery manifest (capabilities, MCP endpoints, contact) |
+| `GET /.well-known/owners.json` | VerifyMCP Standard | Verified domain and MCP identity proof |
+| `GET /mcp` | Model Context Protocol | Streamable HTTP transport for AI agent tool invocation |
+| `GET /openapi.json` | OpenAPI 3.1 | REST API schema for automated code generation |
+| `GET /llms.txt` | LLMs.txt | LLM-readable summary and prompt engineering reference |
