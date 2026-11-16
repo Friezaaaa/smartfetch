@@ -39,6 +39,7 @@ services:
       - BROWSER_WORKER_IPC_DIR=/ipc
       - BROWSER_WORKER_IPC_VOLUME=smartfetch_vps_ipc
       - "BROWSER_WORKER_MODE=${BROWSER_WORKER_MODE:-docker}"
+      - "BROWSER_WORKER_PREWARM=${BROWSER_WORKER_PREWARM:-false}"
       - BROWSER_WORKER_DOCKER_IMAGE=smartfetch-browser-worker:prod
       - BROWSER_WORKER_SECCOMP=/etc/smartfetch/seccomp-chrome.json
       - BROWSER_WORKER_SSL_CERT=/etc/smartfetch/certs/server.crt

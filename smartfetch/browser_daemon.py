@@ -88,10 +88,13 @@ class BrowserDaemonConfig:
     ssl_ca: str | None = None
     max_request_bytes: int = _MAX_REQUEST_BYTES
     max_response_bytes: int = 10_485_760
+    prewarm: bool = False
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> BrowserDaemonConfig:
         environ = os.environ if env is None else env
+        prewarm_raw = environ.get("BROWSER_WORKER_PREWARM", "false").strip().lower()
+        prewarm = prewarm_raw in ("1", "true", "yes", "on")
         return cls(
             host=environ.get("BROWSER_WORKER_HOST", "0.0.0.0").strip(),
             port=int(environ.get("BROWSER_WORKER_PORT", "8443")),
@@ -106,6 +109,7 @@ class BrowserDaemonConfig:
             ssl_cert=environ.get("BROWSER_WORKER_SSL_CERT", "").strip() or None,
             ssl_key=environ.get("BROWSER_WORKER_SSL_KEY", "").strip() or None,
             ssl_ca=environ.get("BROWSER_WORKER_SSL_CA", "").strip() or None,
+            prewarm=prewarm,
         )
 
 
@@ -518,6 +522,35 @@ class DockerWarmPoolRunner(WorkerRunner):
         sock.close()
         return str(host_ctrl)
 
+    def _ensure_slot_started(self, slot_idx: int = 0, deadline: float | None = None) -> str:
+        """Starts container for the specified slot if not already running."""
+        if deadline is None:
+            deadline = time.monotonic() + 15.0
+        with self._condition:
+            if self._closed or not self._slots:
+                raise RuntimeError("DockerWarmPoolRunner is closed or has no slots")
+            if slot_idx < 0 or slot_idx >= len(self._slots):
+                raise IndexError(f"Slot index {slot_idx} out of range")
+            slot = self._slots[slot_idx]
+            if slot.container_name is not None and slot.ctrl_sock_path is not None and Path(slot.ctrl_sock_path).exists():
+                return slot.ctrl_sock_path
+            slot.is_busy = True
+        try:
+            self._recycle_slot(slot)
+            ctrl_sock = self._start_container_for_slot(slot, deadline=deadline)
+            return ctrl_sock
+        finally:
+            with self._condition:
+                slot.is_busy = False
+                self._condition.notify_all()
+
+    def prewarm(self) -> None:
+        """Pre-warms slot 0 in the background without blocking daemon startup."""
+        try:
+            self._ensure_slot_started(0)
+        except Exception as exc:
+            _LOGGER.warning("Worker pre-warm slot 0 failed (will retry on first request): %s", exc)
+
     def run(
         self,
         url: str,
@@ -907,6 +940,11 @@ def create_daemon(
             runner = DirectWorkerRunner(cfg.chromium_path)
 
     server = BrowserDaemonServer(cfg, runner, nonce_cache, url_validator=url_validator)
+
+    # Pre-warm worker in the background if enabled
+    if cfg.worker_mode == "docker_warm" and cfg.prewarm and hasattr(runner, "prewarm"):
+        t = threading.Thread(target=runner.prewarm, daemon=True, name="WarmWorkerPrewarm")
+        t.start()
 
     # Wrap in TLS if cert and key are provided
     if cfg.ssl_cert and cfg.ssl_key:

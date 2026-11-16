@@ -383,6 +383,76 @@ class TestDockerWarmPoolRunner(unittest.TestCase):
         self.assertIsNone(runner._slots[0].container_name)
         self.assertIsNone(runner._slots[1].container_name)
 
+    def test_prewarm_starts_slot_0(self):
+        runner = DockerWarmPoolRunner(
+            ipc_dir=self.temp_dir,
+            max_concurrent=2,
+        )
+        with patch.object(runner, "_start_container_for_slot") as mock_start:
+            mock_start.return_value = "/mock/warm-workers/sf-warm-worker-0-test.ctrl.sock"
+            runner.prewarm()
+
+            mock_start.assert_called_once()
+            call_slot = mock_start.call_args[0][0]
+            self.assertEqual(call_slot.slot_id, 0)
+            self.assertFalse(runner._slots[0].is_busy)
+            self.assertFalse(runner._slots[1].is_busy)
+            self.assertIsNone(runner._slots[1].container_name)
+
+    def test_prewarm_failure_does_not_crash(self):
+        runner = DockerWarmPoolRunner(
+            ipc_dir=self.temp_dir,
+            max_concurrent=2,
+        )
+        with patch.object(runner, "_start_container_for_slot", side_effect=RuntimeError("Docker connection failed")):
+            # Must not raise
+            runner.prewarm()
+            self.assertFalse(runner._slots[0].is_busy)
+
+    def test_daemon_prewarm_triggers_in_background_when_enabled(self):
+        runner = MagicMock()
+        runner.prewarm = MagicMock()
+
+        cfg_enabled = BrowserDaemonConfig(
+            worker_mode="docker_warm",
+            prewarm=True,
+            hmac_key="mock-key",
+        )
+        with patch("threading.Thread") as mock_thread_cls:
+            mock_thread = MagicMock()
+            mock_thread_cls.return_value = mock_thread
+
+            server = create_daemon(config=cfg_enabled, runner=runner)
+            mock_thread_cls.assert_called_once_with(
+                target=runner.prewarm,
+                daemon=True,
+                name="WarmWorkerPrewarm",
+            )
+            mock_thread.start.assert_called_once()
+            server.server_close()
+
+    def test_daemon_prewarm_not_triggered_when_disabled(self):
+        runner = MagicMock()
+        runner.prewarm = MagicMock()
+
+        cfg_disabled = BrowserDaemonConfig(
+            worker_mode="docker_warm",
+            prewarm=False,
+            hmac_key="mock-key",
+        )
+        with patch("threading.Thread") as mock_thread_cls:
+            server = create_daemon(config=cfg_disabled, runner=runner)
+            mock_thread_cls.assert_not_called()
+            runner.prewarm.assert_not_called()
+            server.server_close()
+
+    def test_config_from_env_prewarm_parsing(self):
+        self.assertTrue(BrowserDaemonConfig.from_env({"BROWSER_WORKER_PREWARM": "true"}).prewarm)
+        self.assertTrue(BrowserDaemonConfig.from_env({"BROWSER_WORKER_PREWARM": "1"}).prewarm)
+        self.assertTrue(BrowserDaemonConfig.from_env({"BROWSER_WORKER_PREWARM": "YES"}).prewarm)
+        self.assertFalse(BrowserDaemonConfig.from_env({"BROWSER_WORKER_PREWARM": "false"}).prewarm)
+        self.assertFalse(BrowserDaemonConfig.from_env({}).prewarm)
+
 
 if __name__ == "__main__":
     unittest.main()
