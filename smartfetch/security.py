@@ -164,35 +164,35 @@ def resolve_and_pin_public_url(url: str) -> PinnedTarget:
     )
 
 
-_DNS_REBINDING_PROTECTION_INSTALLED = False
+from requests.adapters import HTTPAdapter
 
 
-def install_dns_rebinding_protection():
-    """Patches urllib3 socket creation to verify resolved IPs against SSRF policy at connect time."""
-    global _DNS_REBINDING_PROTECTION_INSTALLED
-    if _DNS_REBINDING_PROTECTION_INSTALLED:
-        return
-    try:
-        import urllib3.util.connection as uc
-        _orig_create_conn = uc.create_connection
+class SSRFProtectionAdapter(HTTPAdapter):
+    """HTTPAdapter that verifies destination IPs to enforce SSRF and DNS rebinding policy."""
 
-        def secure_create_connection(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None, socket_options=None):
-            host, port = address
-            if not is_private_allowed():
+    def send(self, request, **kwargs):
+        if not is_private_allowed():
+            parsed = urlparse(request.url)
+            host = parsed.hostname
+            if host:
                 try:
                     _check_ip(host)
                 except ValueError as exc:
                     if 'Private' in str(exc) or 'network-metadata' in str(exc):
                         raise
+                    port = parsed.port or (443 if parsed.scheme == 'https' else 80)
                     try:
                         infos = socket.getaddrinfo(host, port, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
                         for info in infos:
                             _check_ip(info[4][0])
                     except socket.gaierror:
                         pass
-            return _orig_create_conn(address, timeout=timeout, source_address=source_address, socket_options=socket_options)
+        return super().send(request, **kwargs)
 
-        uc.create_connection = secure_create_connection
-        _DNS_REBINDING_PROTECTION_INSTALLED = True
-    except (ImportError, AttributeError):
-        pass
+
+def install_dns_rebinding_protection(session=None):
+    """Mounts SSRF protection adapter on the given requests.Session (or no-op)."""
+    if session is not None:
+        adapter = SSRFProtectionAdapter()
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)

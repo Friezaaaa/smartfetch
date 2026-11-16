@@ -16,9 +16,6 @@ from .security import (
     validate_public_url,
 )
 
-# Install socket-level verification for DNS rebinding protection
-install_dns_rebinding_protection()
-
 MAX_BYTES = int(os.getenv('MAX_RESPONSE_BYTES', '10485760'))
 CONNECT_TIMEOUT = float(os.getenv('FETCH_CONNECT_TIMEOUT_SECONDS', '3.0'))
 READ_TIMEOUT = float(os.getenv('FETCH_READ_TIMEOUT_SECONDS', '5.0'))
@@ -34,6 +31,8 @@ SESSION.headers.update({
     'Accept': 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1',
     'Accept-Language': 'en-US,en;q=0.8',
 })
+# Mount SSRF and DNS rebinding protection adapter on retrieval session
+install_dns_rebinding_protection(SESSION)
 
 
 def _request_with_retry(url: str):

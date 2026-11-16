@@ -199,6 +199,35 @@ class SubprocessWorkerRunner(WorkerRunner):
         return json.loads(output_file.read_text(encoding="utf-8"))
 
 
+class WarmPoolWorkerRunner(WorkerRunner):
+    """Executes rendering via a warm Chromium instance from the managed pool."""
+
+    def __init__(self, chromium_path: str = "/usr/bin/chromium"):
+        self.chromium_path = chromium_path
+
+    def run(
+        self,
+        url: str,
+        *,
+        socket_path: str,
+        operation_id: bytes,
+        deadline: float,
+        max_chars: int,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        from smartfetch.browser_pool import get_browser_pool
+        pool = get_browser_pool(self.chromium_path)
+        instance = pool.acquire()
+        try:
+            return instance.render(
+                url,
+                deadline=deadline,
+                max_chars=max_chars,
+            )
+        finally:
+            pool.release(instance)
+
+
 class DockerWorkerRunner(WorkerRunner):
     """Spawns an ephemeral Docker worker container per job."""
 
@@ -583,6 +612,8 @@ def create_daemon(
             runner = DockerWorkerRunner(cfg.docker_image, cfg.seccomp_profile, ipc_volume=cfg.ipc_volume)
         elif cfg.worker_mode == "subprocess":
             runner = SubprocessWorkerRunner(cfg.chromium_path)
+        elif cfg.worker_mode in ("warm_pool", "pool"):
+            runner = WarmPoolWorkerRunner(cfg.chromium_path)
         else:
             runner = DirectWorkerRunner(cfg.chromium_path)
 
