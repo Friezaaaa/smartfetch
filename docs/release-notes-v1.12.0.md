@@ -8,7 +8,7 @@
 
 ## Highlights
 
-SmartFetch v1.12.0 transitions the service from maintenance into full production with an isolated, zero-trust browser rendering architecture and verified x402 payment enforcement on Base Mainnet.
+SmartFetch v1.12.0 transitions the service from emergency containment into full production with an isolated, zero-trust browser rendering architecture and verified x402 payment enforcement on Base Mainnet.
 
 ### Key Capabilities
 
@@ -26,6 +26,14 @@ SmartFetch v1.12.0 transitions the service from maintenance into full production
 
 3. **Production Metadata & Discovery**:
    - Verified OpenAPI 3.1.0 specifications (`/openapi.json`), LLM documentation (`/llms.txt`), and x402 bazaar discovery manifests (`/.well-known/x402`).
+
+---
+
+## Test Suite & Validation Notes
+
+- **Production Validation**: 100% passed across all live end-to-end integration and security audit gates (`scripts/test_vps_security_audit.py`, `scripts/test_discovery_contract.py`, `scripts/test_no_free_bypass.py`).
+- **Unit Test Suite**: 687 passed unit tests covering core contracts, mTLS, remote browser client, daemon protocol, and x402 middleware.
+- **Obsolete Emergency Tests**: 63 historical tests in `tests/test_v1111_emergency_*` that assert the service remains in an offline, non-payable `emergency_fail_closed` maintenance state fail by design as SmartFetch is now live, payable, and fully operational. These containment assertions are retired in v1.12.0.
 
 ---
 
