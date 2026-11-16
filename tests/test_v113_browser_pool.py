@@ -11,6 +11,7 @@ from smartfetch.browser_daemon import (
 )
 from smartfetch.browser_pool import (
     BrowserPoolManager,
+    PoolExhaustedError,
     WarmChromiumInstance,
     get_browser_pool,
     get_process_rss,
@@ -104,6 +105,27 @@ class TestWarmChromiumInstance(unittest.TestCase):
         disposed = any("Target.disposeBrowserContext" in p and "ctx-123" in p for p in sent_payloads)
         self.assertTrue(disposed, "BrowserContext was not properly disposed!")
 
+    @patch("smartfetch.browser_pool.websocket.create_connection")
+    def test_render_failure_marks_instance_tainted(self, mock_ws_connect):
+        inst = WarmChromiumInstance(instance_id="test-fail")
+        inst.ws_endpoint = "ws://127.0.0.1:9222/devtools/browser/abc"
+
+        mock_ws = MagicMock()
+        mock_ws.recv.side_effect = RuntimeError("DevTools connection crashed")
+        mock_ws_connect.return_value = mock_ws
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        inst.proc = mock_proc
+
+        self.assertTrue(inst.is_healthy())
+        with self.assertRaises(RuntimeError):
+            inst.render("https://example.com/fail", deadline=time.monotonic() + 1.0)
+
+        # Instance must now be marked tainted and unhealthy
+        self.assertTrue(inst._tainted)
+        self.assertFalse(inst.is_healthy())
+
 
 class TestBrowserPoolManager(unittest.TestCase):
     """Verifies BrowserPoolManager acquisition, recycling, and status metrics."""
@@ -148,6 +170,44 @@ class TestBrowserPoolManager(unittest.TestCase):
         self.assertEqual(status["pool_size_target"], 2)
         self.assertEqual(status["instances_alive"], 0)
         self.assertEqual(status["instances_busy"], 0)
+
+    def test_pool_manager_enforces_hard_capacity_limit(self):
+        pool = BrowserPoolManager(pool_size=1)
+        mock_inst = MagicMock(spec=WarmChromiumInstance)
+        mock_inst.instance_id = "inst-busy"
+        mock_inst.is_busy = True
+        mock_inst.is_healthy.return_value = True
+        pool._instances.append(mock_inst)
+
+        # Capacity is 1 and 1 instance is busy. Must not spawn new instances!
+        with self.assertRaises(PoolExhaustedError):
+            pool.acquire(timeout=0.05)
+
+        self.assertEqual(len(pool._instances), 1)
+
+    def test_pool_manager_waiting_and_release_wakes_waiting_thread(self):
+        import threading
+        pool = BrowserPoolManager(pool_size=1)
+        mock_inst = MagicMock(spec=WarmChromiumInstance)
+        mock_inst.instance_id = "inst-1"
+        mock_inst.is_busy = True
+        mock_inst.is_healthy.return_value = True
+        pool._instances.append(mock_inst)
+
+        # Schedule release after 50ms
+        def delayed_release():
+            time.sleep(0.05)
+            pool.release(mock_inst)
+
+        t = threading.Thread(target=delayed_release)
+        t.start()
+
+        # acquire() should wait and succeed once released
+        acquired = pool.acquire(timeout=2.0)
+        t.join()
+
+        self.assertIs(acquired, mock_inst)
+        self.assertTrue(mock_inst.is_busy)
 
 
 class TestDaemonPoolIntegration(unittest.TestCase):

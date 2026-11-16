@@ -50,9 +50,6 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         render_mode: str = "auto",
         no_cache: bool = False,
     ) -> dict:
-        remote_cfg = RemoteBrowserConfig.from_env()
-        if not remote_cfg.is_configured:
-            raise RuntimeError("Browser rendering is unavailable: remote browser worker is not configured")
         loop = asyncio.get_running_loop()
         should_force = force_browser or os.getenv("BROWSER_WORKER_REQUIRED", "false").lower() in ("1", "true", "yes")
         result = await loop.run_in_executor(

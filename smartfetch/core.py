@@ -25,24 +25,29 @@ NOSCRIPT_JS_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+SCRIPT_TAG_PATTERN = re.compile(r'<script\b[^>]*>', re.IGNORECASE)
+
 
 def evaluate_escalation_heuristics(html: str, extracted_content: str, low_quality: bool) -> tuple[bool, str]:
     """Evaluates whether static HTML extraction is insufficient and requires browser escalation."""
     content_stripped = (extracted_content or "").strip()
-    if low_quality or len(content_stripped) < 200:
-        for pattern in SPA_ROOT_PATTERNS:
-            if pattern.search(html):
-                return True, "spa_root_tag"
-        if NOSCRIPT_JS_PATTERN.search(html):
-            return True, "noscript_warning"
-        return True, "minimal_dom"
+    has_script = bool(SCRIPT_TAG_PATTERN.search(html or ""))
 
     for pattern in SPA_ROOT_PATTERNS:
         if pattern.search(html):
             return True, "spa_root_tag"
 
-    if NOSCRIPT_JS_PATTERN.search(html) and len(content_stripped) < 500:
+    if NOSCRIPT_JS_PATTERN.search(html):
         return True, "noscript_warning"
+
+    # If extraction explicitly failed quality checks (empty/unextracted in extract.py), escalate
+    if low_quality:
+        return True, "minimal_dom"
+
+    # If content is short (< 200 chars) but has clean text (low_quality is False),
+    # only escalate if the document contains script tags indicating potential client rendering.
+    if len(content_stripped) < 200 and has_script:
+        return True, "minimal_dom"
 
     return False, "none"
 
@@ -93,8 +98,9 @@ def smart_fetch(
             return shape_output(cached_result, max_chars)
 
     obs = ObservabilityRecord(
-        retrieval_tier="http",
+        retrieval_tier="browser" if resolved_render_mode == "browser" else "http",
         cache_hit=False,
+        escalation_reason="manual_override" if resolved_render_mode == "browser" else "none",
     )
 
     # 2. Tier 1: Fast HTTP (skipped if resolved_render_mode == "browser")
@@ -124,7 +130,7 @@ def smart_fetch(
             if resolved_render_mode == "http_only":
                 obs.retrieval_tier = "http"
                 record_retrieval(obs)
-                result = shape_output({
+                payload = {
                     'success': True,
                     'requested_url': url,
                     'final_url': page['final_url'],
@@ -135,10 +141,10 @@ def smart_fetch(
                     'elapsed_ms': round((time.perf_counter() - started) * 1000),
                     'telemetry': obs.to_dict(),
                     **extracted,
-                }, max_chars)
+                }
                 if not no_cache and page.get('status_code') == 200:
-                    get_cache_provider().set(cache_key, result)
-                return result
+                    get_cache_provider().set(cache_key, payload)
+                return shape_output(payload, max_chars)
 
             should_escalate, escalation_reason = evaluate_escalation_heuristics(
                 page['html'],
@@ -146,10 +152,10 @@ def smart_fetch(
                 extracted.get('low_quality', False),
             )
 
-            if not extracted['low_quality'] and not should_escalate:
+            if not should_escalate:
                 obs.retrieval_tier = "http"
                 record_retrieval(obs)
-                result = shape_output({
+                payload = {
                     'success': True,
                     'requested_url': url,
                     'final_url': page['final_url'],
@@ -160,10 +166,10 @@ def smart_fetch(
                     'elapsed_ms': round((time.perf_counter() - started) * 1000),
                     'telemetry': obs.to_dict(),
                     **extracted,
-                }, max_chars)
+                }
                 if not no_cache and page.get('status_code') == 200:
-                    get_cache_provider().set(cache_key, result)
-                return result
+                    get_cache_provider().set(cache_key, payload)
+                return shape_output(payload, max_chars)
 
             # Escalation triggered: fall through to browser tier
             obs.escalation_reason = escalation_reason
@@ -182,6 +188,8 @@ def smart_fetch(
             obs.http_latency_ms = round((time.perf_counter() - http_start) * 1000, 2)
             obs.escalation_reason = "http_error"
             http_error = str(exc)
+            if "Private/local/network-metadata" in str(exc) or "policy_rejection" in str(getattr(exc, "diagnostics", {})):
+                obs.is_ssrf_rejection = True
             http_diagnostics = diagnostics_for_exception(exc) or make_diagnostics(
                 url,
                 'http',
@@ -229,7 +237,7 @@ def smart_fetch(
             raise annotated from error
 
         record_retrieval(obs)
-        result = shape_output({
+        payload = {
             'success': True,
             'requested_url': url,
             'final_url': page['final_url'],
@@ -241,10 +249,10 @@ def smart_fetch(
             'fallback_reason': 'forced' if (force_browser or resolved_render_mode == "browser") else http_error,
             'telemetry': obs.to_dict(),
             **extracted,
-        }, max_chars)
+        }
         if not no_cache and page.get('status_code') == 200:
-            get_cache_provider().set(cache_key, result)
-        return result
+            get_cache_provider().set(cache_key, payload)
+        return shape_output(payload, max_chars)
     except Exception as browser_error:
         obs.browser_latency_ms = round((time.perf_counter() - browser_start) * 1000, 2)
         obs.failure_reason = str(browser_error)

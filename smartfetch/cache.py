@@ -1,7 +1,6 @@
 """Result Cache abstraction and in-memory TTL implementation for SmartFetch."""
 
 from abc import ABC, abstractmethod
-import copy
 import hashlib
 import os
 import threading
@@ -99,12 +98,12 @@ class InMemoryTTLCacheProvider(ResultCacheProvider):
             if expires_at <= now:
                 self._store.pop(key, None)
                 return None
-            return copy.deepcopy(value)
+            return dict(value)
 
     def set(self, key: str, value: dict[str, Any], ttl_seconds: int = DEFAULT_CACHE_TTL_SECONDS) -> None:
         now = time.monotonic()
         expires_at = now + max(1, ttl_seconds)
-        stored_value = copy.deepcopy(value)
+        stored_value = dict(value)
         with self._lock:
             if len(self._store) >= self._maxsize:
                 self._purge_expired(now)

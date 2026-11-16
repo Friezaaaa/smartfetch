@@ -217,7 +217,8 @@ class WarmPoolWorkerRunner(WorkerRunner):
     ) -> dict[str, Any]:
         from smartfetch.browser_pool import get_browser_pool
         pool = get_browser_pool(self.chromium_path)
-        instance = pool.acquire()
+        remaining = max(1.0, deadline - time.monotonic())
+        instance = pool.acquire(timeout=remaining)
         try:
             return instance.render(
                 url,

@@ -226,6 +226,49 @@ class TestRedirectValidationAndHardening(unittest.TestCase):
         self.assertEqual(diag.phase, "redirect")
         self.assertEqual(diag.failure_code, "policy_rejection")
 
+    @patch("smartfetch.http_fetch.validate_public_url", side_effect=lambda u: u)
+    @patch("smartfetch.http_fetch.SESSION.get")
+    def test_redirect_response_is_closed(self, mock_get, _validate):
+        resp = mock_response(302, headers={"Location": "https://example.com/dest"})
+        resp.close = MagicMock()
+        final_resp = mock_response(200, body=b"<html>OK</html>")
+        final_resp.close = MagicMock()
+        mock_get.side_effect = [resp, final_resp]
+
+        http_fetch("https://example.com/start")
+        resp.close.assert_called_once()
+        final_resp.close.assert_called_once()
+
+
+class TestSocketLevelDNSRebindingImmunity(unittest.TestCase):
+    """Verifies that SafeHTTPConnection validates destination IP at socket connect time."""
+
+    @patch("urllib3.connection.HTTPConnection._new_conn")
+    def test_socket_level_verification_blocks_private_ip(self, mock_super_conn):
+        from smartfetch.security import SafeHTTPConnection
+        mock_sock = MagicMock()
+        mock_sock.getpeername.return_value = ("169.254.169.254", 80)
+        mock_super_conn.return_value = mock_sock
+
+        conn = SafeHTTPConnection("rebind.example.com", 80)
+        with self.assertRaises(ValueError) as ctx:
+            conn._new_conn()
+
+        self.assertIn("Private/local/network-metadata", str(ctx.exception))
+        mock_sock.close.assert_called_once()
+
+    @patch("urllib3.connection.HTTPConnection._new_conn")
+    def test_socket_level_verification_allows_public_ip(self, mock_super_conn):
+        from smartfetch.security import SafeHTTPConnection
+        mock_sock = MagicMock()
+        mock_sock.getpeername.return_value = ("93.184.216.34", 80)
+        mock_super_conn.return_value = mock_sock
+
+        conn = SafeHTTPConnection("example.com", 80)
+        sock = conn._new_conn()
+        self.assertIs(sock, mock_sock)
+        mock_sock.close.assert_not_called()
+
 
 class TestResponseSizeCeilings(unittest.TestCase):
     """Verifies that Content-Length header and streaming chunks are bounded by MAX_RESPONSE_BYTES."""

@@ -108,6 +108,9 @@ class TestObservability(unittest.TestCase):
         self.assertEqual(snap["counters"]["tier_browser"], 1)
         self.assertEqual(snap["counters"]["escalations"], 1)
         self.assertEqual(snap["counters"]["failures"], 1)
+        self.assertIn("rates", snap)
+        self.assertEqual(snap["rates"]["cache_hit_rate"], 0.25)
+        self.assertIn("escalation_reasons", snap)
 
 
 class TestTieredWaterfall(unittest.TestCase):
@@ -240,6 +243,73 @@ class TestTieredWaterfall(unittest.TestCase):
         self.assertEqual(res["retrieval_tier"], "browser")
         self.assertEqual(res["fallback_reason"], "forced")
         mock_http.assert_not_called()
+        mock_browser.assert_called_once()
+
+    @patch("smartfetch.core.http_fetch")
+    @patch("smartfetch.core.browser_fetch")
+    def test_cache_truncation_independence(self, mock_browser, mock_http):
+        full_text = "Detailed documentation sentence number. " * 100  # ~4000 chars
+        mock_http.return_value = {
+            "html": f"<html><body><article><p>{full_text}</p></article></body></html>",
+            "final_url": "https://example.com/large-article",
+            "status_code": 200,
+        }
+
+        # Request 1: Client requests small max_chars (1000)
+        res1 = smart_fetch("https://example.com/large-article", max_chars=1000)
+        self.assertEqual(res1["retrieval_tier"], "http")
+        self.assertTrue(res1["truncated"])
+        self.assertEqual(res1["max_chars"], 1000)
+        self.assertEqual(mock_http.call_count, 1)
+
+        # Request 2: Client requests large max_chars (5000) for same URL
+        # Must hit cache, but return full un-truncated content shaped to 5000, NOT poisoned by 1000!
+        res2 = smart_fetch("https://example.com/large-article", max_chars=5000)
+        self.assertEqual(res2["retrieval_tier"], "cache")
+        self.assertTrue(res2["cache_hit"])
+        self.assertEqual(mock_http.call_count, 1)  # Cache hit
+        self.assertFalse(res2["truncated"])
+        self.assertEqual(res2["max_chars"], 5000)
+        self.assertEqual(res2["returned_content_chars"], res2["original_content_chars"])
+        self.assertGreater(len(res2["content"]), len(res1["content"]))
+        mock_browser.assert_not_called()
+
+    @patch("smartfetch.core.http_fetch")
+    @patch("smartfetch.core.browser_fetch")
+    def test_short_dom_without_script_does_not_escalate(self, mock_browser, mock_http):
+        # Short static page (~170 chars, clean text, low_quality is False) with no <script> tag
+        mock_http.return_value = {
+            "html": "<html><body><h1>Example Domain</h1><p>This domain is established to be used for illustrative examples in documents. You may use this domain in examples without prior coordination or asking for permission.</p></body></html>",
+            "final_url": "https://example.com/status",
+            "status_code": 200,
+        }
+
+        res = smart_fetch("https://example.com/status")
+        self.assertTrue(res["success"])
+        self.assertEqual(res["retrieval_tier"], "http")
+        self.assertEqual(res["render_method"], "http")
+        mock_http.assert_called_once()
+        mock_browser.assert_not_called()
+
+    @patch("smartfetch.core.http_fetch")
+    @patch("smartfetch.core.browser_fetch")
+    def test_short_dom_with_script_does_escalate(self, mock_browser, mock_http):
+        # Short static page with <script> tag should escalate
+        mock_http.return_value = {
+            "html": "<html><head><script src='app.js'></script></head><body><h1>Loading...</h1></body></html>",
+            "final_url": "https://example.com/app",
+            "status_code": 200,
+        }
+        mock_browser.return_value = {
+            "html": "<html><body><h1>Loaded SPA App</h1><p>" + ("Dynamic content. " * 20) + "</p></body></html>",
+            "final_url": "https://example.com/app",
+            "status_code": 200,
+        }
+
+        res = smart_fetch("https://example.com/app")
+        self.assertEqual(res["retrieval_tier"], "browser")
+        self.assertEqual(res["render_method"], "browser")
+        mock_http.assert_called_once()
         mock_browser.assert_called_once()
 
 

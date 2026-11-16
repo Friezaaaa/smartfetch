@@ -165,10 +165,63 @@ def resolve_and_pin_public_url(url: str) -> PinnedTarget:
 
 
 from requests.adapters import HTTPAdapter
+import urllib3.connection
+import urllib3.connectionpool
+
+
+class SafeHTTPConnection(urllib3.connection.HTTPConnection):
+    """HTTPConnection that verifies the connected peer IP before sending request bytes."""
+
+    def _new_conn(self) -> socket.socket:
+        sock = super()._new_conn()
+        if not is_private_allowed():
+            try:
+                peer_ip = sock.getpeername()[0]
+                _check_ip(peer_ip)
+            except Exception:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+                raise
+        return sock
+
+
+class SafeHTTPSConnection(urllib3.connection.HTTPSConnection):
+    """HTTPSConnection that verifies the connected peer IP before TLS handshake and request bytes."""
+
+    def _new_conn(self) -> socket.socket:
+        sock = super()._new_conn()
+        if not is_private_allowed():
+            try:
+                peer_ip = sock.getpeername()[0]
+                _check_ip(peer_ip)
+            except Exception:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+                raise
+        return sock
+
+
+class SafeHTTPConnectionPool(urllib3.connectionpool.HTTPConnectionPool):
+    ConnectionCls = SafeHTTPConnection
+
+
+class SafeHTTPSConnectionPool(urllib3.connectionpool.HTTPSConnectionPool):
+    ConnectionCls = SafeHTTPSConnection
 
 
 class SSRFProtectionAdapter(HTTPAdapter):
-    """HTTPAdapter that verifies destination IPs to enforce SSRF and DNS rebinding policy."""
+    """HTTPAdapter that verifies destination IPs at socket connect time to enforce SSRF and DNS rebinding policy."""
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        super().init_poolmanager(connections, maxsize, block, **pool_kwargs)
+        self.poolmanager.pool_classes_by_scheme = {
+            "http": SafeHTTPConnectionPool,
+            "https": SafeHTTPSConnectionPool,
+        }
 
     def send(self, request, **kwargs):
         if not is_private_allowed():

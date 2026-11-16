@@ -35,7 +35,7 @@ MAX_INSTANCE_RSS_BYTES = int(os.getenv("BROWSER_POOL_MAX_RSS_BYTES", "536870912"
 
 def get_process_rss(pid: int) -> int:
     """Returns memory Resident Set Size (RSS) in bytes for a given PID."""
-    if pid <= 0:
+    if not isinstance(pid, int) or pid <= 0:
         return 0
     # Linux /proc/<pid>/statm
     try:
@@ -68,6 +68,8 @@ class WarmChromiumInstance:
     metrics: InstanceMetrics | None = None
     proc: subprocess.Popen | None = None
     ws_endpoint: str | None = None
+    _tainted: bool = False
+    is_busy: bool = False
 
     def __init__(
         self,
@@ -92,6 +94,7 @@ class WarmChromiumInstance:
         self.ws_endpoint: str | None = None
         self.port: int | None = None
         self.is_busy: bool = False
+        self._tainted: bool = False
         self.metrics = InstanceMetrics()
         self._lock = threading.Lock()
 
@@ -160,6 +163,8 @@ class WarmChromiumInstance:
 
     def is_healthy(self) -> bool:
         """Determines if the warm instance is alive, responsive, and within resource bounds."""
+        if self._tainted:
+            return False
         if self.proc is None or self.proc.poll() is not None:
             return False
         now = time.monotonic()
@@ -323,6 +328,10 @@ class WarmChromiumInstance:
                 **extracted,
             }, max_chars)
 
+        except Exception as exc:
+            self._tainted = True
+            _LOGGER.warning("Warm Chromium instance %s marked tainted due to error: %s", self.instance_id, exc)
+            raise
         finally:
             # 6. Dispose the BrowserContext to wipe all cookies, storage, and page memory
             if context_id:
@@ -348,39 +357,71 @@ class BrowserPoolManager:
         self.chromium_path = chromium_path
         self._instances: list[WarmChromiumInstance] = []
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
+        self._launching_count = 0
         self._recycle_counter = 0
 
-    def acquire(self) -> WarmChromiumInstance:
-        """Returns an idle, healthy warm instance from the pool, starting one if needed."""
-        with self._lock:
-            # Look for an idle, healthy instance
-            for inst in self._instances:
-                if not inst.is_busy:
-                    if inst.is_healthy():
-                        inst.is_busy = True
-                        return inst
-                    else:
-                        # Stale or over limits: retire it
-                        _LOGGER.info("Retiring warm Chromium instance %s", inst.instance_id)
+    def acquire(self, timeout: float = 10.0) -> WarmChromiumInstance:
+        """Returns an idle, healthy warm instance from the pool within pool_size limit.
+
+        If all instances are busy, waits up to timeout seconds for an instance to become free.
+        Raises PoolExhaustedError if capacity is exhausted and no instance becomes available.
+        """
+        deadline = time.monotonic() + max(0.1, timeout)
+        while True:
+            instance_to_start = None
+            with self._condition:
+                # 1. Clean up unhealthy idle instances
+                for inst in list(self._instances):
+                    if not inst.is_busy and not inst.is_healthy():
+                        _LOGGER.info("Retiring unhealthy warm Chromium instance %s", inst.instance_id)
                         inst.close()
                         self._instances.remove(inst)
                         self._recycle_counter += 1
-                        break
 
-            # Need to spawn a new warm instance
-            new_id = f"inst-{len(self._instances) + 1}-{int(time.monotonic())}"
-            inst = WarmChromiumInstance(
-                instance_id=new_id,
-                chromium_path=self.chromium_path,
-            )
-            inst.start()
-            inst.is_busy = True
-            self._instances.append(inst)
-            return inst
+                # 2. Look for an idle, healthy instance
+                for inst in self._instances:
+                    if not inst.is_busy and inst.is_healthy():
+                        inst.is_busy = True
+                        return inst
+
+                # 3. Check if we have capacity under pool_size to start a new instance
+                total_allocated = len(self._instances) + self._launching_count
+                if total_allocated < self.pool_size:
+                    self._launching_count += 1
+                    new_id = f"inst-{len(self._instances) + self._launching_count}-{int(time.monotonic())}"
+                    instance_to_start = WarmChromiumInstance(
+                        instance_id=new_id,
+                        chromium_path=self.chromium_path,
+                    )
+                else:
+                    # At capacity! Must wait for an instance to be released
+                    rem = deadline - time.monotonic()
+                    if rem <= 0:
+                        raise PoolExhaustedError(
+                            f"Browser pool capacity ({self.pool_size}) exhausted; timed out waiting for an available instance."
+                        )
+                    self._condition.wait(timeout=rem)
+
+            # If we need to start an instance, do it outside the lock
+            if instance_to_start is not None:
+                try:
+                    start_timeout = min(10.0, max(1.0, deadline - time.monotonic()))
+                    instance_to_start.start(timeout=start_timeout)
+                    instance_to_start.is_busy = True
+                    with self._condition:
+                        self._launching_count -= 1
+                        self._instances.append(instance_to_start)
+                    return instance_to_start
+                except Exception:
+                    with self._condition:
+                        self._launching_count -= 1
+                        self._condition.notify_all()
+                    raise
 
     def release(self, instance: WarmChromiumInstance) -> None:
         """Releases an instance back to the pool."""
-        with self._lock:
+        with self._condition:
             instance.is_busy = False
             # Check if it should be recycled immediately
             if not instance.is_healthy():
@@ -389,17 +430,19 @@ class BrowserPoolManager:
                 if instance in self._instances:
                     self._instances.remove(instance)
                 self._recycle_counter += 1
+            self._condition.notify()
 
     def close_all(self) -> None:
         """Terminates all instances in the pool."""
-        with self._lock:
+        with self._condition:
             for inst in self._instances:
                 inst.close()
             self._instances.clear()
+            self._condition.notify_all()
 
     def get_status(self) -> dict[str, Any]:
         """Returns diagnostic metrics on the pool."""
-        with self._lock:
+        with self._condition:
             active_count = sum(1 for i in self._instances if i.is_busy)
             total_jobs = sum(i.metrics.jobs_executed for i in self._instances)
             rss_total = sum(get_process_rss(i.proc.pid) for i in self._instances if i.proc)
@@ -407,6 +450,7 @@ class BrowserPoolManager:
                 "pool_size_target": self.pool_size,
                 "instances_alive": len(self._instances),
                 "instances_busy": active_count,
+                "launching_count": self._launching_count,
                 "recycles_count": self._recycle_counter,
                 "total_jobs_served": total_jobs,
                 "total_memory_rss_bytes": rss_total,
