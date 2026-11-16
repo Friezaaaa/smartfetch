@@ -123,7 +123,7 @@ class V17MCPDiscoveryTests(unittest.TestCase):
         )
         tool = listed['result']['tools'][0]
         self.assertEqual(tool['name'], 'fetch_webpage')
-        self.assertIn('unavailable', tool['description'].lower())
+        self.assertIn('fetch, scrape, or extract', tool['description'].lower())
         self.assertEqual(tool['_meta']['availability'], 'unavailable')
         self.assertFalse(tool['_meta']['payment_challenge_enabled'])
         self.assertEqual(tool['inputSchema'], {
@@ -159,7 +159,7 @@ class V17MCPDiscoveryTests(unittest.TestCase):
         ))) as client:
             meta = client.get('/meta').json()
 
-        self.assertEqual(meta['version'], '1.11.1')
+        self.assertEqual(meta['version'], '1.12.0')
         self.assertEqual(meta['mcp']['url'], 'http://testserver/mcp')
         self.assertEqual([tool['name'] for tool in meta['tools']], [
             'fetch_webpage', 'webpage_to_markdown',

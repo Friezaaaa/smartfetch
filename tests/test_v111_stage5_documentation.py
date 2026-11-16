@@ -42,19 +42,14 @@ class Stage5DocumentationTests(unittest.TestCase):
             },
         )
 
-    def test_release_metadata_is_consistently_emergency_v1111(self):
+    def test_release_metadata_is_consistently_v1120(self):
         manifest = json.loads((ROOT / "server.json").read_text("utf-8"))
         readme = (ROOT / "README.md").read_text("utf-8")
-        self.assertEqual(SERVICE_VERSION, "1.11.1")
-        self.assertEqual(manifest["version"], "1.11.1")
-        self.assertIn("SmartFetch V1.11.1", readme)
-        self.assertIn("Retrieval is temporarily unavailable", readme)
-        self.assertIn("Browser rendering is temporarily unavailable", readme)
-        self.assertIn("no payment challenge", readme)
-        self.assertIn("V1.11 paid capabilities remain disabled", readme)
-        self.assertIn("docker build -t smartfetch:v1.11.1 .", readme)
-        self.assertIn("local image tag", readme)
-        self.assertNotIn("docker pull", readme)
+        self.assertEqual(SERVICE_VERSION, "1.12.0")
+        self.assertEqual(manifest["version"], "1.12.0")
+        self.assertIn("SmartFetch V1.12.0", readme)
+        self.assertIn("Production Isolated Browser & x402 Payments", readme)
+        self.assertIn("Base Mainnet (`eip155:8453`)", readme)
 
     def test_tool_provenance_records_historical_rolling_download(self):
         provenance = (ROOT / "benchmarks" / "v111" / "TOOL_PROVENANCE.md").read_text("utf-8")

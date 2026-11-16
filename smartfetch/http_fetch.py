@@ -10,10 +10,17 @@ from .diagnostics import (
     diagnostics_for_exception,
     make_diagnostics,
 )
-from .security import DNSResolutionError, validate_public_url
+from .security import (
+    DNSResolutionError,
+    install_dns_rebinding_protection,
+    validate_public_url,
+)
 
-MAX_BYTES = int(os.getenv('MAX_RESPONSE_BYTES', '3000000'))
-TIMEOUT = float(os.getenv('FETCH_TIMEOUT_SECONDS', '12'))
+MAX_BYTES = int(os.getenv('MAX_RESPONSE_BYTES', '10485760'))
+CONNECT_TIMEOUT = float(os.getenv('FETCH_CONNECT_TIMEOUT_SECONDS', '3.0'))
+READ_TIMEOUT = float(os.getenv('FETCH_READ_TIMEOUT_SECONDS', '5.0'))
+FETCH_TIMEOUT = float(os.getenv('FETCH_TIMEOUT_SECONDS', '10.0'))
+TIMEOUT = (CONNECT_TIMEOUT, READ_TIMEOUT)
 MAX_REDIRECTS = 5
 TRANSIENT_STATUS_CODES = {502, 503, 504}
 
@@ -24,6 +31,8 @@ SESSION.headers.update({
     'Accept': 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1',
     'Accept-Language': 'en-US,en;q=0.8',
 })
+# Mount SSRF and DNS rebinding protection adapter on retrieval session
+install_dns_rebinding_protection(SESSION)
 
 
 def _request_with_retry(url: str):
@@ -71,6 +80,7 @@ def _annotate_and_raise(error: BaseException, diagnostics) -> None:
 
 
 def http_fetch(url: str, *, _attempt_state=None) -> dict:
+    started_at = time.perf_counter()
     try:
         current = validate_public_url(url)
     except Exception as error:
@@ -83,7 +93,19 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
         ))
 
     retry_attempted = False
+    seen_urls = {current}
     for _ in range(MAX_REDIRECTS + 1):
+        if time.perf_counter() - started_at > FETCH_TIMEOUT:
+            error = requests.Timeout(f'Fetch exceeded total timeout of {FETCH_TIMEOUT}s')
+            _annotate_and_raise(error, make_diagnostics(
+                url,
+                'http',
+                'connect',
+                'timeout',
+                http_attempted=True,
+                http_retry_attempted=retry_attempted,
+            ))
+
         try:
             response, retried = _request_with_retry(current)
             retry_attempted = retry_attempted or retried
@@ -102,10 +124,12 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
             ))
 
         if response.status_code in {301, 302, 303, 307, 308}:
+            status_code = response.status_code
             location = response.headers.get('Location')
+            response.close()
             if not location:
                 error = RuntimeError(
-                    f'Redirect {response.status_code} missing Location header'
+                    f'Redirect {status_code} missing Location header'
                 )
                 _annotate_and_raise(error, make_diagnostics(
                     url,
@@ -114,10 +138,22 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
                     'invalid_content',
                     http_attempted=True,
                     http_retry_attempted=retry_attempted,
-                    upstream_status=response.status_code,
+                    upstream_status=status_code,
+                ))
+            next_url = urljoin(current, location)
+            if next_url in seen_urls:
+                error = RuntimeError(f'Redirect loop detected: {next_url}')
+                _annotate_and_raise(error, make_diagnostics(
+                    url,
+                    'http',
+                    'redirect',
+                    'policy_rejection',
+                    http_attempted=True,
+                    http_retry_attempted=retry_attempted,
+                    upstream_status=status_code,
                 ))
             try:
-                current = validate_public_url(urljoin(current, location))
+                current = validate_public_url(next_url)
             except Exception as error:
                 is_dns = isinstance(error, DNSResolutionError)
                 _annotate_and_raise(error, make_diagnostics(
@@ -127,17 +163,20 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
                     'dns' if is_dns else 'policy_rejection',
                     http_attempted=True,
                     http_retry_attempted=retry_attempted,
-                    upstream_status=response.status_code,
+                    upstream_status=status_code,
                 ))
+            seen_urls.add(current)
             continue
 
         if response.status_code >= 400:
+            status_code = response.status_code
+            response.close()
             failure_code = (
                 'blocked_response'
-                if response.status_code in {401, 403, 407, 429}
+                if status_code in {401, 403, 407, 429}
                 else 'upstream_status'
             )
-            error = RuntimeError(f'HTTP status {response.status_code}')
+            error = RuntimeError(f'HTTP status {status_code}')
             _annotate_and_raise(error, make_diagnostics(
                 url,
                 'http',
@@ -145,11 +184,12 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
                 failure_code,
                 http_attempted=True,
                 http_retry_attempted=retry_attempted,
-                upstream_status=response.status_code,
+                upstream_status=status_code,
             ))
 
         content_type = response.headers.get('Content-Type', '').lower()
         if not any(x in content_type for x in ('text/html', 'application/xhtml+xml', 'text/plain')):
+            response.close()
             error = RuntimeError(
                 f'Unsupported content-type: {content_type or "unknown"}'
             )
@@ -164,6 +204,7 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
 
         declared = int(response.headers.get('Content-Length') or 0)
         if declared > MAX_BYTES:
+            response.close()
             error = RuntimeError(f'Response too large ({declared} bytes)')
             _annotate_and_raise(error, make_diagnostics(
                 url,
@@ -180,6 +221,7 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
             for chunk in response.iter_content(chunk_size=65536):
                 total += len(chunk)
                 if total > MAX_BYTES:
+                    response.close()
                     error = RuntimeError(
                         f'Response exceeded {MAX_BYTES} byte limit'
                     )
@@ -206,6 +248,8 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
                 http_attempted=True,
                 http_retry_attempted=retry_attempted,
             ))
+        finally:
+            response.close()
 
         raw = b''.join(chunks)
         encoding = response.encoding or 'utf-8'

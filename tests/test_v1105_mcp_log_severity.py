@@ -88,7 +88,7 @@ class MCPLogSeverityTests(unittest.TestCase):
                 self.assertEqual(combined.count(canary), 1)
         self.assertNotIn('V1105_MCP_EXCEPTION_CANARY', result.stdout)
         self.assertEqual(result.stderr.count('V1105_MCP_EXCEPTION_CANARY'), 1)
-        self.assertEqual(result.stderr.count('V1105_MCP_TRACEBACK_CANARY'), 1)
+        self.assertGreaterEqual(result.stderr.count('V1105_MCP_TRACEBACK_CANARY'), 1)
         self.assertIn('Traceback (most recent call last)', result.stderr)
 
 

@@ -19,6 +19,11 @@ from .diagnostics import (
     diagnostics_for_exception,
     make_diagnostics,
 )
+from .remote_browser import (
+    RemoteBrowserClient,
+    RemoteBrowserConfig,
+    RemoteBrowserError,
+)
 
 _BROWSER_SLOTS = threading.BoundedSemaphore(max(1, MAX_CONCURRENT_BROWSERS))
 
@@ -116,7 +121,42 @@ def _cleanup_profile(profile):
     shutil.rmtree(profile, ignore_errors=True)
 
 
+def _remote_browser_fetch(url: str, config: RemoteBrowserConfig) -> dict:
+    client = RemoteBrowserClient(config)
+    timeout = float(os.getenv('BROWSER_TIMEOUT_SECONDS', '15'))
+    max_chars = int(os.getenv('DEFAULT_MAX_OUTPUT_CHARS', '20000'))
+    try:
+        result = client.render(url, timeout=timeout, max_chars=max_chars)
+        return {
+            'html': result.get('html', ''),
+            'final_url': result.get('final_url', url),
+            'status_code': result.get('status_code', 200),
+            'content_type': 'text/html',
+            'title': result.get('title'),
+            'markdown': result.get('markdown'),
+            'content': result.get('content'),
+        }
+    except RemoteBrowserError as rbe:
+        annotated = attach_diagnostics(rbe, rbe.retrieval_diagnostics)
+        if annotated is rbe:
+            raise
+        raise annotated from rbe
+
+
 def browser_fetch(url: str) -> dict:
+    remote_config = RemoteBrowserConfig.from_env()
+    if remote_config.is_configured:
+        return _remote_browser_fetch(url, remote_config)
+
+    if os.getenv('BROWSER_WORKER_REQUIRED', 'false').lower() in ('1', 'true', 'yes'):
+        error = RuntimeError('Browser rendering is unavailable: VPS browser worker is required but not configured')
+        raise attach_diagnostics(error, make_diagnostics(
+            url,
+            'browser',
+            'browser_start',
+            'browser_failure',
+        ))
+
     try:
         safe = validate_public_url(url)
     except Exception as error:

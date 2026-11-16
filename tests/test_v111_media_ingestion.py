@@ -358,11 +358,14 @@ class FfprobeBoundaryTests(unittest.IsolatedAsyncioTestCase):
                     return -9
                 await asyncio.Future()
         process = HungProcess(b"{}")
-        with patch("smartfetch.media.shutil.which", return_value="/usr/bin/ffprobe"), \
-             patch("smartfetch.media.asyncio.create_subprocess_exec", return_value=process), \
-             patch("smartfetch.media.FFPROBE_TIMEOUT_SECONDS", 0.01):
-            with self.assertRaisesRegex(MediaFailure, "^retrieval_timeout$"):
-                await run_ffprobe(Path("private-file.bin"))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private-file.bin"
+            path.write_bytes(b"media")
+            with patch("smartfetch.media.shutil.which", return_value="/usr/bin/ffprobe"), \
+                 patch("smartfetch.media.asyncio.create_subprocess_exec", return_value=process), \
+                 patch("smartfetch.media.FFPROBE_TIMEOUT_SECONDS", 0.01):
+                with self.assertRaisesRegex(MediaFailure, "^retrieval_timeout$"):
+                    await run_ffprobe(path)
         self.assertTrue(process.killed)
 
 

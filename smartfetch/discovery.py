@@ -125,6 +125,8 @@ def x402_manifest(urls, settings, v111_accepts=None):
             "price": settings.price,
             "network": settings.network,
             "asset": "USDC",
+            "payTo": settings.pay_to,
+            "pay_to": settings.pay_to,
         },
         "endpoints": {
             "mcp": {
@@ -161,6 +163,78 @@ def x402_manifest(urls, settings, v111_accepts=None):
             ],
         }
     return manifest
+
+
+def agent_card_document(urls, settings=None):
+    """Return an A2A agent card document without secrets."""
+    network = settings.network if settings else "eip155:8453"
+    price = settings.price if settings else "$0.005"
+    pay_to = settings.pay_to if settings else ""
+    enabled = settings.enabled if settings else True
+    return {
+        "name": SERVICE_NAME,
+        "description": (
+            "Production isolated headless browser retrieval engine with "
+            "x402 micropayments on Base Mainnet."
+        ),
+        "version": SERVICE_VERSION,
+        "url": urls["base"],
+        "protocols": {
+            "mcp": {
+                "transport": "streamable-http",
+                "url": urls["mcp"],
+            },
+            "rest": {
+                "url": urls["fetch"],
+                "openapi": urls["openapi"],
+            },
+            "x402": {
+                "manifest": urls["x402"],
+                "network": network,
+                "asset": "USDC",
+                "price": price,
+                "payTo": pay_to,
+                "enabled": enabled,
+            },
+        },
+        "capabilities": [
+            {
+                "name": "fetch_webpage",
+                "description": "Fetch webpage content and structure using isolated headless browser.",
+            },
+            {
+                "name": "webpage_to_markdown",
+                "description": "Convert webpage content to Markdown using isolated headless browser.",
+            },
+            {
+                "name": "extract_webpage_text",
+                "description": "Extract plain text from webpage using isolated headless browser.",
+            },
+            {
+                "name": "render_webpage",
+                "description": "Render webpage with headless Chromium in isolated VPS worker.",
+            },
+        ],
+        "contact": {
+            "email": "smartfetch.contact@gmail.com",
+        },
+    }
+
+
+def owners_document(urls):
+    """Return a VerifyMCP owners document without secrets."""
+    return {
+        "$schema": "https://verifymcp.io/schemas/owners-v1.json",
+        "owner": SERVICE_NAME,
+        "email": "smartfetch.contact@gmail.com",
+        "servers": [
+            {
+                "name": "smartfetch",
+                "transport": "streamable-http",
+                "url": urls["mcp"],
+            }
+        ],
+    }
 
 
 def _variant_manifest_entry(definition, requirement, resource):
@@ -841,11 +915,18 @@ Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['pric
 
 ## Endpoints
 - [Community x402 manifest]({urls['x402']})
+- [A2A Manifest]({urls['base']}/.well-known/agent-card.json)
+- [Owners verification]({urls['base']}/.well-known/owners.json)
 - [Documentation]({urls['docs']})
 - [OpenAPI 3.1]({urls['openapi']})
 - [Metadata]({urls['meta']})
 - [Remote MCP Streamable HTTP]({urls['mcp']})
 - [Paid HTTP retrieval]({urls['fetch']}): POST only
+
+## Agent Onboarding & Payment Guide
+- [Comprehensive Agent Payment Integration Guide]({GITHUB_URL}/blob/main/docs/agent-payment-guide.md)
+- Complete Python (`httpx` + `eth-account`) and TypeScript (`viem`) Base Mainnet USDC EIP-712 signing examples.
+- Execution workflow: Discover tool -> inspect price ($0.005 USDC) -> authorize payment -> execute fetch -> receive browser-rendered content.
 
 ## MCP tools
 - fetch_webpage: full SmartFetch result
@@ -913,15 +994,18 @@ def _emergency_identities():
 
 
 def emergency_meta(urls: dict) -> dict:
+    from .remote_browser import RemoteBrowserConfig
+    remote_cfg = RemoteBrowserConfig.from_env()
+    is_available = remote_cfg.is_configured
     return {
         "service": SERVICE_NAME,
         "version": SERVICE_VERSION,
-        "mode": "emergency_fail_closed",
-        "retrieval_available": False,
-        "browser_available": False,
+        "mode": "production" if is_available else "emergency_fail_closed",
+        "retrieval_available": is_available,
+        "browser_available": is_available,
         "fetch": {
             "url": urls["fetch"],
-            "availability": "unavailable",
+            "availability": "available" if is_available else "unavailable",
             "payment_challenge_enabled": False,
         },
         "mcp": {"url": urls["mcp"]},
@@ -1037,6 +1121,8 @@ def emergency_llms_text(urls: dict) -> str:
         f"# SmartFetch {SERVICE_VERSION} emergency availability",
         "Retrieval and browser rendering are temporarily unavailable; no payment challenge is active.",
         f"- [Community x402 manifest]({urls['x402']})",
+        f"- [A2A Manifest]({urls['base']}/.well-known/agent-card.json)",
+        f"- [Owners verification]({urls['base']}/.well-known/owners.json)",
         f"- [Documentation]({urls['docs']})",
         f"- [OpenAPI 3.1]({urls['openapi']})",
         f"- [Metadata]({urls['meta']})",

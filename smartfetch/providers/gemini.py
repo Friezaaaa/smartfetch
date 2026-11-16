@@ -9,8 +9,12 @@ import math
 from typing import Any, Literal, Protocol
 
 import httpx
-from google import genai
-from google.genai import types as genai_types
+try:
+    from google import genai
+    from google.genai import types as genai_types
+except ImportError:
+    genai = None  # type: ignore[assignment]
+    genai_types = None  # type: ignore[assignment]
 
 from ..costs import ProviderUsage, UsageAccountingError
 from ..evidence import EvidenceValidationError, validate_cited_answer, validate_structured_result
@@ -197,6 +201,8 @@ class GoogleGenAIInteractionsTransport:
         if type(api_key) is not str or not api_key.strip():
             raise ProviderAdapterError("provider_unavailable", provider="gemini")
         if type(max_response_bytes) is not int or not 1 <= max_response_bytes <= 4_194_304:
+            raise ProviderAdapterError("provider_unavailable", provider="gemini")
+        if genai is None or genai_types is None:
             raise ProviderAdapterError("provider_unavailable", provider="gemini")
         try:
             bounded_transport = _ResponseLimitTransport(

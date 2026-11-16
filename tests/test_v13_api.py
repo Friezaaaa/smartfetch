@@ -38,7 +38,7 @@ class FastAPICompatibilityTests(unittest.TestCase):
         self.assertEqual(health.status_code, 200)
         self.assertTrue(health.json()['ok'])
         self.assertEqual(health.json()['service'], 'SmartFetch')
-        self.assertEqual(health.json()['version'], '1.11.1')
+        self.assertEqual(health.json()['version'], '1.12.0')
         self.assertFalse(health.json()['retrieval_available'])
         self.assertFalse(health.json()['browser_available'])
         self.assertEqual(health.json()['mode'], 'emergency_fail_closed')

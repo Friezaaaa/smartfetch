@@ -180,12 +180,11 @@ class CurrentVersionAndRegistryTests(unittest.TestCase):
             (REPO_ROOT / 'server.json').read_text(encoding='utf-8')
         )
 
-        self.assertEqual(SERVICE_VERSION, '1.11.1')
-        self.assertEqual(manifest['version'], '1.11.1')
+        self.assertEqual(SERVICE_VERSION, '1.12.0')
+        self.assertEqual(manifest['version'], '1.12.0')
         self.assertEqual(
             manifest['description'],
-            'Emergency fail-closed service: retrieval and browser rendering '
-            'are temporarily unavailable; no payment challenge is active.',
+            'Public web retrieval with zero-trust browser isolation and x402 payment enforcement on Base Mainnet.',
         )
         self.assertEqual(MCP_TOOLS, (
             'fetch_webpage',
