@@ -216,10 +216,10 @@ SmartFetch exposes standard Model Context Protocol (MCP) tools over **Streamable
 `https://smartfetch-production-ea53.up.railway.app/mcp`
 
 ### Available Tools
-1. `fetch_webpage`: Complete browser extraction with HTML, clean text, metadata, and links.
-2. `webpage_to_markdown`: Clean Markdown conversion optimized for LLM context windows.
-3. `extract_webpage_text`: High-density plain text extraction without markup noise.
-4. `render_webpage`: Guaranteed headless Chromium execution for Single-Page Applications (SPAs).
+1. `fetch_webpage` (**Primary Flagship Tool**): Unified web retrieval supporting Markdown, plain text, and HTML with intelligent tiered waterfall rendering (Fast HTTP -> Heuristic Escalation -> Isolated Chromium).
+2. `webpage_to_markdown` (*Compatibility Alias*): Clean Markdown conversion optimized for LLM context windows (delegates to `fetch_webpage`).
+3. `extract_webpage_text` (*Compatibility Alias*): High-density plain text extraction without markup noise (delegates to `fetch_webpage`).
+4. `render_webpage` (*Compatibility Alias*): Headless Chromium execution for JavaScript-heavy applications (delegates to `fetch_webpage`).
 
 ### Paying MCP Client Configuration
 When using MCP clients (such as Claude Desktop, Cursor, or custom agent runners), configure the client session with payment support:
@@ -238,8 +238,8 @@ async def run_mcp_agent():
             # List tools (free, cached)
             tools = await session.list_tools()
             
-            # Call tool (triggers verified $0.005 USDC payment)
-            result = await session.call_tool("webpage_to_markdown", {"url": "https://news.ycombinator.com"})
+            # Call primary flagship tool (triggers verified $0.005 USDC payment)
+            result = await session.call_tool("fetch_webpage", {"url": "https://news.ycombinator.com"})
             print(result.content[0].text)
 ```
 
