@@ -134,7 +134,8 @@ class V19MCPToolContractTests(unittest.TestCase):
             'SmartFetch',
         )
         self.assertEqual([tool['name'] for tool in tools], TOOL_NAMES)
-        self.assertTrue(all('unavailable' in tool['description'].lower() for tool in tools))
+        self.assertTrue(all(len(tool['description']) > 0 for tool in tools))
+        self.assertTrue(all('webpage' in tool['description'].lower() or 'url' in tool['description'].lower() for tool in tools))
         self.assertTrue(all(tool['_meta']['availability'] == 'unavailable' for tool in tools))
         self.assertTrue(all(tool['_meta']['payment_challenge_enabled'] is False for tool in tools))
         by_name = {tool['name']: tool for tool in tools}
@@ -334,7 +335,7 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
 
         OpenAPI.model_validate(document)
         self.assertEqual(document['openapi'], '3.1.0')
-        self.assertEqual(document['info']['version'], '1.11.1')
+        self.assertEqual(document['info']['version'], '1.12.0')
         self.assertEqual(document['servers'], [{
             'url': 'https://agent.example:9443',
         }])
@@ -435,7 +436,6 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
             'cdp_api_key',
             'private_key',
             'wallet_secret',
-            VALID_ADDRESS.lower(),
             'private credential material',
         ):
             self.assertNotIn(forbidden, lowered)
@@ -471,6 +471,8 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
                 'price': '$0.005',
                 'network': 'eip155:8453',
                 'asset': 'USDC',
+                'payTo': VALID_ADDRESS,
+                'pay_to': VALID_ADDRESS,
             },
             'endpoints': {
                 'mcp': {
@@ -485,7 +487,6 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
         })
         serialized = json.dumps(manifest).lower()
         for forbidden in (
-            VALID_ADDRESS.lower(),
             'organizations/test/apikeys/test',
             'private credential material',
             'payment-signature',
@@ -617,10 +618,9 @@ class V19RegistryManifestTests(unittest.TestCase):
             'name': 'io.github.Friezaaaa/smartfetch',
             'title': 'SmartFetch',
             'description': (
-                'Emergency fail-closed service: retrieval and browser rendering '
-                'are temporarily unavailable; no payment challenge is active.'
+                'Public web retrieval with zero-trust browser isolation and x402 payment enforcement on Base Mainnet.'
             ),
-            'version': '1.11.1',
+            'version': '1.12.0',
             'repository': {
                 'url': 'https://github.com/Friezaaaa/smartfetch',
                 'source': 'github',

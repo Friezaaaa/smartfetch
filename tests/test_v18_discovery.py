@@ -124,7 +124,7 @@ class V18MCPBazaarMetadataTests(unittest.TestCase):
         output = declaration['info']['output']
         self.assertEqual(output['type'], 'json')
         self.assertTrue(output['example']['success'])
-        self.assertEqual(output['example']['service_version'], '1.11.1')
+        self.assertEqual(output['example']['service_version'], '1.12.0')
         output_schema = declaration['schema']['properties']['output'][
             'properties'
         ]['example']
@@ -216,10 +216,9 @@ class V18RegistryManifestTests(unittest.TestCase):
             'name': 'io.github.Friezaaaa/smartfetch',
             'title': 'SmartFetch',
             'description': (
-                'Emergency fail-closed service: retrieval and browser '
-                'rendering are temporarily unavailable; no payment challenge is active.'
+                'Public web retrieval with zero-trust browser isolation and x402 payment enforcement on Base Mainnet.'
             ),
-            'version': '1.11.1',
+            'version': '1.12.0',
             'repository': {
                 'url': 'https://github.com/Friezaaaa/smartfetch',
                 'source': 'github',

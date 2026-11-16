@@ -57,6 +57,22 @@ def _descendant_fetcher(marker, *, force_browser, max_chars):
 
 
 def _process_exists(pid):
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, wintypes.DWORD(pid))
+        if not handle:
+            return False
+        try:
+            exit_code = wintypes.DWORD()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return exit_code.value == 259
+            return False
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except OSError:
@@ -352,6 +368,7 @@ class KillableWorkTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(type(result), dict)
             media._reset_capacity_limiters_for_tests()
 
+    @unittest.skipUnless(os.name == "posix" and Path("/proc").is_dir(), "Requires Linux /proc for descendant tracking")
     async def test_webpage_timeout_terminates_detached_descendant_before_return(self):
         with tempfile.TemporaryDirectory() as directory:
             marker = str(Path(directory) / "descendant.pid")
@@ -370,6 +387,7 @@ class KillableWorkTests(unittest.IsolatedAsyncioTestCase):
                 if descendant_pid is not None:
                     _force_stop_test_process(descendant_pid)
 
+    @unittest.skipUnless(os.name == "posix" and Path("/proc").is_dir(), "Requires Linux /proc for descendant tracking")
     async def test_webpage_cancellation_terminates_descendant_before_return(self):
         with tempfile.TemporaryDirectory() as directory:
             marker = Path(directory) / "descendant.pid"

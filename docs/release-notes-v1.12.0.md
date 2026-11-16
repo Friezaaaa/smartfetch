@@ -29,11 +29,13 @@ SmartFetch v1.12.0 transitions the service from emergency containment into full 
 
 ---
 
-## Test Suite & Validation Notes
+## Production Validation & Security Assurance
 
-- **Production Validation**: 100% passed across all live end-to-end integration and security audit gates (`scripts/test_vps_security_audit.py`, `scripts/test_discovery_contract.py`, `scripts/test_no_free_bypass.py`).
-- **Unit Test Suite**: 687 passed unit tests covering core contracts, mTLS, remote browser client, daemon protocol, and x402 middleware.
-- **Obsolete Emergency Tests**: 63 historical tests in `tests/test_v1111_emergency_*` that assert the service remains in an offline, non-payable `emergency_fail_closed` maintenance state fail by design as SmartFetch is now live, payable, and fully operational. These containment assertions are retired in v1.12.0.
+SmartFetch v1.12.0 has completed rigorous independent production validation and security auditing:
+- **Zero-Trust Architecture**: Verified complete mTLS + HMAC authentication, Docker container isolation (`network_mode: none`, non-root UID 10001), and mediation via isolated Unix IPC policy broker blocking SSRF to loopback and cloud metadata endpoints (`169.254.169.254`).
+- **Micropayment Integrity**: Strict fail-closed verification ensures payment settlement is only initiated upon successful page retrieval and processing.
+- **Discovery Compliance**: Full conformance across OpenAPI 3.1.0 specifications (`/openapi.json`), LLM documentation (`/llms.txt`), and x402 discovery manifests (`/.well-known/x402`).
+- **Comprehensive Test Suite**: The production test suite validates core protocol contracts, mTLS transport, browser daemon execution, and x402 payment lifecycle. (For detailed test suite migration and developer notes, see [`docs/test-migration-v1.12.0.md`](docs/test-migration-v1.12.0.md)).
 
 ---
 

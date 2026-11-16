@@ -67,14 +67,19 @@ class PythonBuyerExampleTests(unittest.TestCase):
 class TypeScriptBuyerExampleTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('node'), 'Node.js is not installed')
     def test_example_passes_node_typescript_syntax_check(self):
+        cmd = ['node', '--check']
+        help_out = subprocess.run(['node', '--help'], capture_output=True, text=True, check=False).stdout
+        if '--experimental-strip-types' in help_out:
+            cmd = ['node', '--experimental-strip-types', '--check']
         result = subprocess.run(
-            ['node', '--check', str(TYPESCRIPT_EXAMPLE)],
+            cmd + [str(TYPESCRIPT_EXAMPLE)],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
             check=False,
         )
-
+        if result.returncode != 0 and 'ERR_UNKNOWN_FILE_EXTENSION' in result.stderr:
+            self.skipTest('Node.js runtime does not support .ts extension without loader')
         self.assertEqual(result.returncode, 0, result.stderr)
 
 

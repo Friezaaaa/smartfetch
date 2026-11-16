@@ -120,7 +120,7 @@ class V16BazaarDiscoveryTests(unittest.TestCase):
         self.assertEqual(output_example['render_method'], 'http')
         # This declaration is retained for compatibility but is not advertised
         # while retrieval is unavailable.
-        self.assertEqual(output_example['service_version'], '1.11.1')
+        self.assertEqual(output_example['service_version'], '1.12.0')
         self.assertTrue({
             'requested_url',
             'final_url',
