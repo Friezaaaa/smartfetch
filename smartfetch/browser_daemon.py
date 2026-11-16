@@ -298,7 +298,7 @@ class DockerWorkerRunner(WorkerRunner):
 class BrowserWorkerHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the browser worker daemon."""
 
-    server_version = "SmartFetchWorker/1.11.1"
+    server_version = "SmartFetchWorker/1.12.0"
 
     def log_message(self, format: str, *args: Any) -> None:
         _LOGGER.info(f"%s - - [{self.log_date_time_string()}] {format % args}")
@@ -313,7 +313,7 @@ class BrowserWorkerHandler(BaseHTTPRequestHandler):
             payload = {
                 "ok": True,
                 "service": "smartfetch-browser-worker",
-                "version": "1.11.1",
+                "version": "1.12.0",
                 "active_jobs": active_jobs,
                 "capacity": self.daemon_server.config.max_concurrent,
             }

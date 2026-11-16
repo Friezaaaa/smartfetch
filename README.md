@@ -1,34 +1,45 @@
-# SmartFetch V1.11.1 — emergency fail-closed mode
+# SmartFetch V1.12.0 — Production Isolated Browser & x402 Payments
 
-This source tree is an emergency containment release. Retrieval is temporarily unavailable. Browser rendering is temporarily unavailable. Every valid `POST /fetch` request and every invocation of the four existing MCP tools fails before payment verification, DNS, network retrieval, provider work or settlement. There is no payment challenge for an unavailable operation.
+SmartFetch provides reliable, high-performance public webpage retrieval and rendering for AI agents and developer applications with zero-trust browser isolation and x402 micropayment protection.
 
-V1.11 paid capabilities remain disabled: the eight V1.11 REST variants return ordinary 404 responses, and the two additional MCP tools are absent. The V1.11 Stage 5 benchmark remains offline by default; this release does not authorize a real provider benchmark or activate Exa or Gemini.
+---
 
-This repository version is **1.11.1**. It does not claim that a V1.11.1 image, Official MCP Registry entry or x402scan listing has been published. V1.10.6 remains the separately published Official MCP Registry version; publication of this emergency version requires separate review and authorization. Deployment, production configuration, Registry publication and x402scan changes are separate actions.
+## Architecture Overview
 
-## Current public contract
+SmartFetch separates the public API/MCP interface from headless browser execution across two isolated tiers:
 
-- `GET /health` remains a free liveness route. Its JSON includes `version: "1.11.1"`, `retrieval_available: false`, `browser_available: false` and `mode: "emergency_fail_closed"`.
-- `/`, `/docs`, `/openapi.json`, `/llms.txt`, `/.well-known/x402`, `/meta`, `/robots.txt` and `/sitemap.xml` remain free. They identify retrieval as unavailable and advertise zero actionable payable resources.
-- Valid `POST /fetch` returns finite HTTP 503 `retrieval_unavailable`. A valid forced-browser request instead returns finite HTTP 503 `browser_unavailable`. Both include `Retry-After: 3600` and `Cache-Control: no-store` and do not process payment headers.
-- Malformed, oversized or unsupported request envelopes retain finite validation errors rather than being relabeled as unavailable.
-- MCP `initialize` and `tools/list` remain free. `tools/list` exposes exactly `fetch_webpage`, `webpage_to_markdown`, `extract_webpage_text` and `render_webpage`, each explicitly marked unavailable. Calling any of them returns a finite error result before a payment wrapper or retrieval handler.
-- The eight V1.11 REST variants remain 404, and `search_and_extract` and `extract_structured_data` are absent from MCP discovery.
+1. **Railway Public Gateway**:
+   - Hosts the streamable Model Context Protocol (MCP) server (`/mcp`) and REST API (`/fetch`).
+   - Serves discovery documents: `/.well-known/x402`, `/openapi.json`, `/llms.txt`, `/meta`, `/docs`.
+   - Strictly enforces x402 micropayment challenges across all retrieval operations ($0.005 USDC on Base Mainnet).
+   - Verifies and settles EIP-712 payment authorizations via Coinbase Developer Platform (CDP) facilitators.
 
-Successful retrieval responses do not exist in this emergency mode. The additive `content_trust: untrusted_external` marker is reserved for future successful retrieved results; it is not inserted into emergency errors and does not rewrite source content.
+2. **DigitalOcean Isolated Browser Worker (VPS)**:
+   - Dedicated headless browser rendering host communicating with Railway via mutual TLS (mTLS) and HMAC-SHA256 signature verification.
+   - Replay protection with 16-byte nonce validation and sliding timestamp window.
+   - Renders web pages inside ephemeral Docker containers (`--network none`, non-root UID `10001:10001`).
+   - All network traffic is mediated by an isolated Unix IPC policy broker enforcing strict SSRF protections against private IP ranges and cloud metadata endpoints (`169.254.169.254`).
 
-## Local source validation
+---
 
-Use an isolated Python environment with the repository's declared dependencies and run the emergency test suites before building. The local container build command is:
+## Production Parameters
 
-```sh
-docker build -t smartfetch:v1.11.1 .
-```
+- **Service Version**: `1.12.0`
+- **Operating Mode**: `isolated_browser`
+- **Supported Network**: Base Mainnet (`eip155:8453`)
+- **Asset**: Native USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`)
+- **Price**: 5000 atomic units ($0.005 USDC) per successful request
+- **Seller Treasury (`payTo`)**: `0xE29Fcb6ef1534d5F138E48a8A71370BE7770A786`
+- **MCP Tools**:
+  - `fetch_webpage`
+  - `webpage_to_markdown`
+  - `extract_webpage_text`
+  - `render_webpage`
 
-This is a **local image tag**, not a remote published V1.11.1 image. The Dockerfile runs as UID/GID `10001:10001` and does not install Chromium, FFmpeg or FFprobe. The built-image gate runs the emergency API/MCP smoke script inside a locally started container. No provider, facilitator, wallet or payment credentials are required for startup or these free checks.
+---
 
-## Release and rollback boundary
+## Documentation & Validation
 
-Do not activate V1.11 paid interfaces or restore retrieval while the approved SSRF, cancellation, credential-isolation and cleanup boundaries remain unproven. A security rollback may use only another verified fail-closed image; restoring a retrieval-enabled V1.11.0 image is prohibited. Browser restoration and any retrieval-enabled architecture require separate exact-runtime and final-image containment gates. Publishing to the Official MCP Registry or x402scan requires separate authorization after deployment verification.
-
-Historical V1.10 payment/retrieval details remain available in earlier Git history. They are not instructions to pay or execute retrieval against this emergency service.
+- Full production audit and on-chain verification report: [`docs/production-validation.md`](docs/production-validation.md)
+- Release notes: [`docs/release-notes-v1.12.0.md`](docs/release-notes-v1.12.0.md)
+- VPS deployment guide: [`docs/vps_deployment_guide.md`](docs/vps_deployment_guide.md)
