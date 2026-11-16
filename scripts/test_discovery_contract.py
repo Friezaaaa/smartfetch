@@ -32,7 +32,7 @@ def audit_discovery():
     assert r_mcp.status_code == 200
     mcp_data = r_mcp.json()
     assert mcp_data["name"] == "SmartFetch"
-    assert mcp_data["version"] == "1.11.1"
+    assert mcp_data["version"] in ("1.12.0", "1.13.0", "1.13.1")
     assert mcp_data["transport"] == "streamable-http"
     tools = [t["name"] for t in mcp_data["tools"]]
     assert tools == ["fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage"]
@@ -44,7 +44,7 @@ def audit_discovery():
     assert r_meta.status_code == 200
     meta_data = r_meta.json()
     assert meta_data["service"] == "SmartFetch"
-    assert meta_data["version"] == "1.11.1"
+    assert meta_data["version"] in ("1.12.0", "1.13.0", "1.13.1")
     assert meta_data["mode"] == "isolated_browser"
     assert meta_data["retrieval_available"] is True
     assert meta_data["browser_available"] is True

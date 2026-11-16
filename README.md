@@ -1,4 +1,4 @@
-# SmartFetch V1.12.0 — Production Isolated Browser & x402 Payments
+# SmartFetch V1.13.1 — Production Isolated Browser & x402 Payments
 
 SmartFetch provides reliable, high-performance public webpage retrieval and rendering for AI agents and developer applications with zero-trust browser isolation and x402 micropayment protection.
 
@@ -24,7 +24,7 @@ SmartFetch separates the public API/MCP interface from headless browser executio
 
 ## Production Parameters
 
-- **Service Version**: `1.12.0`
+- **Service Version**: `1.13.1`
 - **Operating Mode**: `isolated_browser`
 - **Supported Network**: Base Mainnet (`eip155:8453`)
 - **Asset**: Native USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`)
