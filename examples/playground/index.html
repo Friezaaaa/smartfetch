@@ -309,9 +309,29 @@
   noCacheCheckbox.addEventListener('change', updateSnippets);
   includeHtmlCheckbox.addEventListener('change', updateSnippets);
 
+  function isSSRF(url) {
+    if (!url) return false;
+    const clean = url.trim().toLowerCase();
+    return /^(https?:\/\/)?(\[::1\]|::1|localhost|127\.|0\.|169\.254\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|\[fd[0-9a-f]{2}:|\[fe80:)/i.test(clean);
+  }
+
   function validateSSRF(url) {
-    const isPrivate = /^(https?:\/\/)?(localhost|127\.|0\.|169\.254\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|::1)/i.test(url);
+    const isPrivate = isSSRF(url);
     ssrfWarning.style.display = isPrivate ? 'block' : 'none';
+    const inspectBtn = document.getElementById('inspectBtn');
+    const paidBtn = document.getElementById('paidBtn');
+    if (isPrivate) {
+      inspectBtn.disabled = true;
+      paidBtn.disabled = true;
+      showStatus("&#10060; <strong>SSRF Blocked:</strong> Internal / private address (localhost, 127.0.0.1, 169.254.169.254) forbidden client-side.", "danger");
+    } else {
+      inspectBtn.disabled = false;
+      paidBtn.disabled = false;
+      if (executionStatus.className.includes('alert-danger') && executionStatus.textContent.includes('SSRF Blocked')) {
+        executionStatus.style.display = 'none';
+      }
+    }
+    return isPrivate;
   }
 
   function showStatus(html, type) {
@@ -333,6 +353,12 @@
   async function inspectHealthAnd402() {
     const gateway = gatewayUrlInput.value.trim().replace(/\/+$/, '');
     const target = targetUrlInput.value.trim();
+
+    if (isSSRF(target)) {
+      showStatus("&#10060; <strong>SSRF Blocked:</strong> Internal / private address (localhost, 127.0.0.1, 169.254.169.254) forbidden client-side.", "danger");
+      return;
+    }
+
     showStatus("Connecting to gateway /health and fetching unauthenticated 402 challenge...", "info");
 
     try {
@@ -359,8 +385,15 @@
       }
 
       const bodyData = await fetchResp.json().catch(() => null);
+      const acc = (challenge && challenge.accepts && challenge.accepts[0]) || {};
+      const network = acc.network || 'eip155:8453';
+      const payTo = acc.payTo || '0xE29Fcb6ef1534d5F138E48a8A71370BE7770A786';
+      const price = acc.amount === '5000' ? '$0.005 USDC' : (acc.amount ? `${acc.amount} (${network})` : '$0.005 USDC');
 
-      showStatus(`&#10004; <strong>Gateway Online (mode: ${hData.mode || 'isolated_browser'})</strong><br>Received 402 Challenge: <strong>$0.005 USDC on Base Mainnet</strong>.`, "warning");
+      showStatus(`&#10004; <strong>Gateway Online (mode: ${hData.mode || 'isolated_browser'})</strong><br>
+Payment Requirement: <strong>${price}</strong> (${acc.amount || '5000'} atomic units)<br>
+Network: <code>${network}</code><br>
+Pay To: <code style="word-break:break-all;">${payTo}</code>`, "warning");
 
       document.getElementById('metaOutput').textContent = JSON.stringify({
         health: hData,
@@ -370,8 +403,19 @@
         body: bodyData
       }, null, 2);
 
-      document.getElementById('markdownOutput').textContent = "Received HTTP 402 Payment Required.\n\nInspect the decoded challenge in the 'Metadata & JSON' tab.";
-      document.getElementById('textOutput').textContent = "HTTP 402 Payment Required.";
+      document.getElementById('markdownOutput').textContent = 
+`# HTTP 402 Payment Required
+
+- **Price:** ${price} (${acc.amount || '5000'} atomic units)
+- **Network:** \`${network}\`
+- **Pay To:** \`${payTo}\`
+- **Asset Contract:** \`${acc.asset || '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'}\`
+
+Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
+
+      document.getElementById('textOutput').textContent = 
+`HTTP 402 Payment Required\nPrice: ${price}\nNetwork: ${network}\nPay To: ${payTo}`;
+
       document.getElementById('previewIframe').srcdoc = "<p style='padding:20px;font-family:sans-serif;color:#d97706;'>HTTP 402 Payment Required. Sign in MetaMask to render webpage.</p>";
       switchOutputTab('meta');
     } catch(err) {
@@ -389,6 +433,12 @@
 
     const gateway = gatewayUrlInput.value.trim().replace(/\/+$/, '');
     const target = targetUrlInput.value.trim();
+
+    if (isSSRF(target)) {
+      showStatus("&#10060; <strong>SSRF Blocked:</strong> Internal / private address (localhost, 127.0.0.1, 169.254.169.254) forbidden client-side.", "danger");
+      return;
+    }
+
     const btn = document.getElementById('paidBtn');
     btn.disabled = true;
 

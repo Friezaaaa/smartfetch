@@ -97,6 +97,26 @@ class TestPlaygroundSandbox(unittest.TestCase):
         self.assertNotIn("allow-same-origin", content)
         self.assertNotIn("allow-top-navigation", content)
 
+    def test_playground_ssrf_and_eip712_structure(self):
+        """examples/playground/index.html includes client-side SSRF defenses and EIP-712 USDC TransferWithAuthorization."""
+        repo_root = Path(__file__).resolve().parent.parent
+        playground_path = repo_root / "examples" / "playground" / "index.html"
+        content = playground_path.read_text(encoding="utf-8")
+
+        # SSRF checks
+        self.assertIn("function isSSRF", content)
+        self.assertIn("169.254.", content)
+        self.assertIn("localhost", content)
+        self.assertIn("SSRF Blocked", content)
+
+        # Web3 / EIP-712 USDC contract definitions
+        self.assertIn("TransferWithAuthorization", content)
+        self.assertIn("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", content)
+        self.assertIn("0x2105", content)
+        self.assertIn("8453", content)
+        self.assertIn("x402Version: 2", content)
+
+
 
 if __name__ == "__main__":
     unittest.main()
