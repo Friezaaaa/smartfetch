@@ -1,8 +1,10 @@
-"""Unwrapped, native MCP identities for the emergency fail-closed service."""
+"""Unwrapped, native MCP identities for SmartFetch service."""
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Annotated
+import asyncio
+import os
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, TextContent
@@ -11,6 +13,7 @@ from starlette.routing import Route
 
 from .config import HOST, MAX_REQUEST_BODY_BYTES, SERVICE_VERSION
 from .mcp_logging import configure_mcp_sdk_logging
+from .remote_browser import RemoteBrowserConfig
 
 
 MCP_PATH = "/mcp"
@@ -67,43 +70,155 @@ def create_emergency_mcp() -> SmartFetchMCP:
     mcp._mcp_server.version = SERVICE_VERSION
     configure_mcp_sdk_logging()
 
+    def _execute_sync(url: str, force_browser: bool, max_chars: int) -> dict[str, Any]:
+        from .core import smart_fetch
+        return smart_fetch(url, force_browser=force_browser, max_chars=max_chars)
+
     async def fetch_webpage(
         url: str,
         max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS)] = MCP_DEFAULT_MAX_CHARS,
         force_browser: bool = False,
     ) -> CallToolResult:
-        return _unavailable(force_browser)
+        remote_cfg = RemoteBrowserConfig.from_env()
+        if not remote_cfg.is_configured:
+            return _unavailable(force_browser)
+        try:
+            loop = asyncio.get_running_loop()
+            should_force = force_browser or os.getenv("BROWSER_WORKER_REQUIRED", "false").lower() in ("1", "true", "yes")
+            result = await loop.run_in_executor(None, _execute_sync, url, should_force, max_chars)
+            return CallToolResult(
+                content=[TextContent(type="text", text=result.get("content", "") or result.get("markdown", "") or result.get("html", ""))],
+                structuredContent=result,
+                isError=False,
+            )
+        except Exception as exc:
+            err_msg = str(exc)
+            return CallToolResult(
+                isError=True,
+                content=[TextContent(type="text", text=err_msg)],
+                structuredContent={"success": False, "error_code": "render_failed", "error": err_msg},
+            )
 
     async def webpage_to_markdown(
         url: str,
         max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS)] = MCP_DEFAULT_MAX_CHARS,
         force_browser: bool = False,
     ) -> CallToolResult:
-        return _unavailable(force_browser)
+        remote_cfg = RemoteBrowserConfig.from_env()
+        if not remote_cfg.is_configured:
+            return _unavailable(force_browser)
+        try:
+            loop = asyncio.get_running_loop()
+            should_force = force_browser or os.getenv("BROWSER_WORKER_REQUIRED", "false").lower() in ("1", "true", "yes")
+            result = await loop.run_in_executor(None, _execute_sync, url, should_force, max_chars)
+            md_text = result.get("markdown", "") or result.get("content", "")
+            payload = {
+                "success": True,
+                "requested_url": url,
+                "final_url": result.get("final_url", url),
+                "status_code": result.get("status_code", 200),
+                "render_method": result.get("render_method", "browser"),
+                "elapsed_ms": result.get("elapsed_ms", 0),
+                "title": result.get("title", ""),
+                "markdown": md_text,
+            }
+            return CallToolResult(
+                content=[TextContent(type="text", text=md_text)],
+                structuredContent=payload,
+                isError=False,
+            )
+        except Exception as exc:
+            err_msg = str(exc)
+            return CallToolResult(
+                isError=True,
+                content=[TextContent(type="text", text=err_msg)],
+                structuredContent={"success": False, "error_code": "render_failed", "error": err_msg},
+            )
 
     async def extract_webpage_text(
         url: str,
         max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS)] = MCP_DEFAULT_MAX_CHARS,
         force_browser: bool = False,
     ) -> CallToolResult:
-        return _unavailable(force_browser)
+        remote_cfg = RemoteBrowserConfig.from_env()
+        if not remote_cfg.is_configured:
+            return _unavailable(force_browser)
+        try:
+            loop = asyncio.get_running_loop()
+            should_force = force_browser or os.getenv("BROWSER_WORKER_REQUIRED", "false").lower() in ("1", "true", "yes")
+            result = await loop.run_in_executor(None, _execute_sync, url, should_force, max_chars)
+            text_content = result.get("content", "")
+            payload = {
+                "success": True,
+                "requested_url": url,
+                "final_url": result.get("final_url", url),
+                "status_code": result.get("status_code", 200),
+                "render_method": result.get("render_method", "browser"),
+                "elapsed_ms": result.get("elapsed_ms", 0),
+                "title": result.get("title", ""),
+                "content": text_content,
+            }
+            return CallToolResult(
+                content=[TextContent(type="text", text=text_content)],
+                structuredContent=payload,
+                isError=False,
+            )
+        except Exception as exc:
+            err_msg = str(exc)
+            return CallToolResult(
+                isError=True,
+                content=[TextContent(type="text", text=err_msg)],
+                structuredContent={"success": False, "error_code": "render_failed", "error": err_msg},
+            )
 
     async def render_webpage(
         url: str,
         max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS)] = MCP_DEFAULT_MAX_CHARS,
     ) -> CallToolResult:
-        return _unavailable(True)
+        remote_cfg = RemoteBrowserConfig.from_env()
+        if not remote_cfg.is_configured:
+            return _unavailable(True)
+        try:
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, _execute_sync, url, True, max_chars)
+            html_text = result.get("html", "") or result.get("content", "")
+            payload = {
+                "success": True,
+                "requested_url": url,
+                "final_url": result.get("final_url", url),
+                "status_code": result.get("status_code", 200),
+                "render_method": "browser",
+                "elapsed_ms": result.get("elapsed_ms", 0),
+                "title": result.get("title", ""),
+                "html": html_text,
+                "content": result.get("content", ""),
+                "markdown": result.get("markdown", ""),
+            }
+            return CallToolResult(
+                content=[TextContent(type="text", text=html_text)],
+                structuredContent=payload,
+                isError=False,
+            )
+        except Exception as exc:
+            err_msg = str(exc)
+            return CallToolResult(
+                isError=True,
+                content=[TextContent(type="text", text=err_msg)],
+                structuredContent={"success": False, "error_code": "render_failed", "error": err_msg},
+            )
 
+    remote_cfg = RemoteBrowserConfig.from_env()
+    is_available = remote_cfg.is_configured
     for name, description, handler in (
-        (MCP_TOOL, "Temporarily unavailable in emergency fail-closed mode; webpage retrieval cannot execute.", fetch_webpage),
-        ("webpage_to_markdown", "Temporarily unavailable in emergency fail-closed mode; Markdown retrieval cannot execute.", webpage_to_markdown),
-        ("extract_webpage_text", "Temporarily unavailable in emergency fail-closed mode; text extraction cannot execute.", extract_webpage_text),
-        ("render_webpage", "Browser rendering is temporarily unavailable in emergency fail-closed mode.", render_webpage),
+        (MCP_TOOL, "Fetch webpage content and structure using isolated browser.", fetch_webpage),
+        ("webpage_to_markdown", "Convert webpage content to Markdown using isolated browser.", webpage_to_markdown),
+        ("extract_webpage_text", "Extract plain text from webpage using isolated browser.", extract_webpage_text),
+        ("render_webpage", "Render webpage with headless Chromium in isolated VPS worker.", render_webpage),
     ):
         mcp.tool(
             name=name,
             description=description,
-            meta={"availability": "unavailable", "payment_challenge_enabled": False},
+            meta={"availability": "available" if is_available else "unavailable", "payment_challenge_enabled": False},
             structured_output=False,
         )(handler)
 

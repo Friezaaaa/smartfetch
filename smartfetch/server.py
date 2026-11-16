@@ -56,6 +56,17 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                     "cache-control": "no-store",
                 },
             )
+        from .remote_browser import RemoteBrowserConfig
+        remote_cfg = RemoteBrowserConfig.from_env()
+        if remote_cfg.is_configured:
+            return {
+                "ok": True,
+                "service": SERVICE_NAME,
+                "version": SERVICE_VERSION,
+                "retrieval_available": True,
+                "browser_available": True,
+                "mode": "isolated_browser",
+            }
         return {
             "ok": True,
             "service": SERVICE_NAME,

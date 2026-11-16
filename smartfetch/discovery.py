@@ -913,15 +913,18 @@ def _emergency_identities():
 
 
 def emergency_meta(urls: dict) -> dict:
+    from .remote_browser import RemoteBrowserConfig
+    remote_cfg = RemoteBrowserConfig.from_env()
+    is_available = remote_cfg.is_configured
     return {
         "service": SERVICE_NAME,
         "version": SERVICE_VERSION,
-        "mode": "emergency_fail_closed",
-        "retrieval_available": False,
-        "browser_available": False,
+        "mode": "production" if is_available else "emergency_fail_closed",
+        "retrieval_available": is_available,
+        "browser_available": is_available,
         "fetch": {
             "url": urls["fetch"],
-            "availability": "unavailable",
+            "availability": "available" if is_available else "unavailable",
             "payment_challenge_enabled": False,
         },
         "mcp": {"url": urls["mcp"]},

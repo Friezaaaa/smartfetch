@@ -126,7 +126,9 @@ class EmergencyDispatch:
             if terminal_unhealthy:
                 await _send_json(send, 503, _UNAVAILABLE["service_unhealthy"], unavailable=True)
                 return
-            if isinstance(call, FreeMCPMethod):
+            from .remote_browser import RemoteBrowserConfig
+            remote_cfg = RemoteBrowserConfig.from_env()
+            if isinstance(call, FreeMCPMethod) or remote_cfg.is_configured:
                 await self.app(scope, receive, send)
                 return
             await _send_json(send, 200, _mcp_unavailable(call.jsonrpc_id, call.browser))
