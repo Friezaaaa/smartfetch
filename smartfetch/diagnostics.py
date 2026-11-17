@@ -78,7 +78,7 @@ class RetrievalDiagnostics:
 class RetrievalFailure(RuntimeError):
     """Final retrieval failure carrying typed diagnostics for the API layer."""
 
-    def __init__(self, message: str, diagnostics: RetrievalDiagnostics):
+    def __init__(self, message: str, diagnostics: Optional[RetrievalDiagnostics] = None):
         super().__init__(message)
         self.retrieval_diagnostics = diagnostics
 

@@ -28,6 +28,7 @@ LEGACY_TOOLS = (
     "render_webpage",
     "screenshot_webpage",
     "inspect_webpage",
+    "batch_fetch_webpages",
 )
 FREE_MCP_METHODS = (
     "initialize",
@@ -64,6 +65,23 @@ INSPECT_INPUT_SCHEMA = {
     "required": ["url"],
 }
 _INSPECT_VALIDATOR = Draft202012Validator(INSPECT_INPUT_SCHEMA, format_checker=FormatChecker())
+
+BATCH_FETCH_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "urls": {
+            "type": "array",
+            "items": {"type": "string", "format": "uri", "pattern": "^https?://"},
+            "minItems": 1,
+            "maxItems": 5,
+        },
+        "max_chars_per_url": {"type": "integer", "minimum": 1000, "maximum": 20000},
+        "render_mode": {"type": "string", "enum": ["auto", "http_only"]},
+        "no_cache": {"type": "boolean"},
+    },
+    "required": ["urls"],
+}
+_BATCH_FETCH_VALIDATOR = Draft202012Validator(BATCH_FETCH_INPUT_SCHEMA, format_checker=FormatChecker())
 
 MCP_FETCH_ARGUMENT_SCHEMA = {
     "type": "object",
@@ -102,10 +120,26 @@ MCP_INSPECT_ARGUMENT_SCHEMA = {
     },
     "required": ["url"],
 }
+MCP_BATCH_FETCH_ARGUMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "urls": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": 5,
+        },
+        "max_chars_per_url": {"type": "integer", "minimum": 1000, "maximum": 20000},
+        "render_mode": {"type": "string", "enum": ["auto", "http_only"]},
+        "no_cache": {"type": "boolean"},
+    },
+    "required": ["urls"],
+}
 _MCP_FETCH_VALIDATOR = Draft202012Validator(MCP_FETCH_ARGUMENT_SCHEMA)
 _MCP_RENDER_VALIDATOR = Draft202012Validator(MCP_RENDER_ARGUMENT_SCHEMA)
 _MCP_SCREENSHOT_VALIDATOR = Draft202012Validator(MCP_SCREENSHOT_ARGUMENT_SCHEMA)
 _MCP_INSPECT_VALIDATOR = Draft202012Validator(MCP_INSPECT_ARGUMENT_SCHEMA)
+_MCP_BATCH_FETCH_VALIDATOR = Draft202012Validator(MCP_BATCH_FETCH_ARGUMENT_SCHEMA)
 _FREE_MCP_MODELS = {
     "initialize": InitializeRequest,
     "notifications/initialized": InitializedNotification,
@@ -262,6 +296,31 @@ def classify_inspect(
     )
 
 
+def classify_batch_fetch(
+    body: bytes,
+    headers: tuple[tuple[bytes, bytes], ...],
+    *,
+    allow_unpaid_probe: bool = False,
+) -> ValidatedCall | None:
+    if allow_unpaid_probe:
+        try:
+            payload = _parse_json(body, headers)
+            if not payload or not payload.get("urls"):
+                return None
+        except EmergencyRequestError:
+            return None
+    else:
+        payload = _parse_json(body, headers)
+    if not _BATCH_FETCH_VALIDATOR.is_valid(payload):
+        raise EmergencyRequestError(422, "invalid_request")
+    return ValidatedCall(
+        transport="http",
+        tool="batch_fetch_webpages",
+        browser=False,
+        jsonrpc_id=None,
+    )
+
+
 def classify_mcp(
     body: bytes,
     headers: tuple[tuple[bytes, bytes], ...],
@@ -319,6 +378,15 @@ def classify_mcp(
             transport="mcp",
             tool=tool,
             browser=arguments.get("force_browser") is True or arguments.get("render_mode") == "browser",
+            jsonrpc_id=request_id,
+        )
+    if tool == "batch_fetch_webpages":
+        if not _MCP_BATCH_FETCH_VALIDATOR.is_valid(arguments):
+            raise EmergencyRequestError(422, "invalid_request", request_id)
+        return ValidatedCall(
+            transport="mcp",
+            tool=tool,
+            browser=False,
             jsonrpc_id=request_id,
         )
     _validate_arguments(arguments, render=tool == "render_webpage", mcp=True)

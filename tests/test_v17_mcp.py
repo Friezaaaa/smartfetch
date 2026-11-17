@@ -121,6 +121,7 @@ class V17MCPDiscoveryTests(unittest.TestCase):
                 'render_webpage',
                 'screenshot_webpage',
                 'inspect_webpage',
+                'batch_fetch_webpages',
             ],
         )
         tool = listed['result']['tools'][0]
@@ -173,6 +174,7 @@ class V17MCPDiscoveryTests(unittest.TestCase):
             'fetch_webpage', 'webpage_to_markdown',
             'extract_webpage_text', 'render_webpage',
             'screenshot_webpage', 'inspect_webpage',
+            'batch_fetch_webpages',
         ])
         self.assertTrue(all(tool['availability'] == 'unavailable'
                             for tool in meta['tools']))
@@ -198,7 +200,7 @@ class V17MCPPaymentTests(unittest.TestCase):
             unavailable_response = call_fetch(client)
 
         get_supported.assert_not_called()
-        self.assertEqual(len(listed['result']['tools']), 6)
+        self.assertEqual(len(listed['result']['tools']), 7)
         result = unavailable_response['result']
         self.assertTrue(result['isError'])
         self.assertEqual(result['structuredContent']['error_code'],
@@ -255,7 +257,7 @@ class V17MCPPaymentTests(unittest.TestCase):
             })
 
         self.assertIn('result', initialize_response)
-        self.assertEqual(len(list_response['result']['tools']), 6)
+        self.assertEqual(len(list_response['result']['tools']), 7)
         self.assertTrue(mcp_challenge['result']['isError'])
         self.assertEqual(mcp_challenge['result']['structuredContent']['error_code'],
                          'retrieval_unavailable')
@@ -289,7 +291,7 @@ class V17MCPPaymentTests(unittest.TestCase):
                 listed = rpc(client, 'tools/list', {}, request_id=2)
 
         self.assertIn('result', initialized)
-        self.assertEqual(len(listed['result']['tools']), 6)
+        self.assertEqual(len(listed['result']['tools']), 7)
         resource.assert_not_called()
         exposed = stdout.getvalue() + stderr.getvalue()
         self.assertNotIn(CDP_KEY_ID, exposed)

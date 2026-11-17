@@ -33,7 +33,7 @@ def test_mcp_list_tools_caching(mcp_server):
     async def _run():
         # First call: populates cache
         tools1 = await fastmcp.list_tools()
-        assert len(tools1) == 6
+        assert len(tools1) == 7
         tool_names = [t.name for t in tools1]
         assert "fetch_webpage" in tool_names
         assert "webpage_to_markdown" in tool_names
@@ -41,6 +41,7 @@ def test_mcp_list_tools_caching(mcp_server):
         assert "render_webpage" in tool_names
         assert "screenshot_webpage" in tool_names
         assert "inspect_webpage" in tool_names
+        assert "batch_fetch_webpages" in tool_names
 
         # Second call: returns cached result
         tools2 = await fastmcp.list_tools()
@@ -51,7 +52,7 @@ def test_mcp_list_tools_caching(mcp_server):
         res1 = await handler(ListToolsRequest())
         res2 = await handler(ListToolsRequest())
 
-        assert len(res1.root.tools) == 6
+        assert len(res1.root.tools) == 7
         assert [t.name for t in res1.root.tools] == tool_names
         assert [t.name for t in res2.root.tools] == tool_names
 

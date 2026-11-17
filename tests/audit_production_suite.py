@@ -113,22 +113,22 @@ def test_audit():
         print(f"  - {t['name']}: {t['description'][:60]}... | meta={meta_info}")
         assert meta_info.get("payment_challenge_enabled") is True
         assert meta_info.get("availability") == "available"
-    assert len(tools) == 6
+    assert len(tools) == 7
     tool_names = [t["name"] for t in tools]
-    for required in ("fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage", "screenshot_webpage", "inspect_webpage"):
+    for required in ("fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage", "screenshot_webpage", "inspect_webpage", "batch_fetch_webpages"):
         assert required in tool_names
-    print("VERIFIED: MCP tools/list returned all 6 production tools with payment challenges enabled.")
+    print("VERIFIED: MCP tools/list returned all 7 production tools with payment challenges enabled.")
 
-    # 5. MCP tools/call - Verify Payment Enforcement across ALL 6 Tools
+    # 5. MCP tools/call - Verify Payment Enforcement across ALL 7 Tools
     print("\n--- 5. Testing MCP tools/call Unpaid Payment Challenges ---")
-    for tool_name in ("fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage", "screenshot_webpage", "inspect_webpage"):
+    for tool_name in ("fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage", "screenshot_webpage", "inspect_webpage", "batch_fetch_webpages"):
         call_payload = {
             "jsonrpc": "2.0",
             "id": f"call-{tool_name}",
             "method": "tools/call",
             "params": {
                 "name": tool_name,
-                "arguments": {"url": "https://example.com"},
+                "arguments": {"urls": ["https://example.com"]} if tool_name == "batch_fetch_webpages" else {"url": "https://example.com"},
             },
         }
         r_call = requests.post(f"{BASE_URL}/mcp", json=call_payload, headers=headers, timeout=10)

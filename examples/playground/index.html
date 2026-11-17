@@ -185,6 +185,9 @@
               <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #fff;">
                 <input type="radio" name="operationMode" value="inspect" onchange="onModeChange()"> Inspect Site ($0.005)
               </label>
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #fff;">
+                <input type="radio" name="operationMode" value="batch_fetch" onchange="onModeChange()"> Batch Fetch ($0.015)
+              </label>
             </div>
           </div>
 
@@ -193,11 +196,30 @@
             <input type="text" id="gatewayUrl" value="https://smartfetch-production-ea53.up.railway.app">
           </div>
 
-          <div class="form-group">
+          <div class="form-group" id="singleUrlGroup">
             <label for="targetUrl">Target Webpage / PDF URL</label>
             <input type="text" id="targetUrl" value="https://quotes.toscrape.com/js/">
             <div id="ssrfWarning" class="alert alert-warning" style="margin-top: 8px;">
               &#9888; <strong>Security Warning:</strong> Internal addresses, localhost, private IP subnets, and metadata endpoints (e.g. 169.254.169.254) are forbidden by the SSRF defense layer.
+            </div>
+          </div>
+
+          <div id="batchFetchOptions" style="display: none;">
+            <div class="form-group">
+              <label for="batchUrlsInput">Target URLs (1 to 5 URLs, one per line)</label>
+              <textarea id="batchUrlsInput" rows="4" style="width: 100%; background: #0f172a; color: #fff; border: 1px solid var(--card-border); border-radius: 6px; padding: 10px; font-family: monospace; font-size: 0.85rem;" oninput="updateSnippets()">https://example.com/
+https://quotes.toscrape.com/js/</textarea>
+            </div>
+            <div class="form-group">
+              <label for="batchMaxChars">Max Characters Per URL</label>
+              <input type="number" id="batchMaxChars" min="1000" max="20000" value="8000" style="width: 100%; background: #0f172a; color: #fff; border: 1px solid var(--card-border); border-radius: 6px; padding: 8px;" oninput="updateSnippets()">
+            </div>
+            <div class="form-group">
+              <label for="batchRenderMode">Rendering Mode</label>
+              <select id="batchRenderMode" onchange="updateSnippets()">
+                <option value="auto" selected>auto (HTTP first, browser fallback capped at 2)</option>
+                <option value="http_only">http_only (fast HTTP stream without browser)</option>
+              </select>
             </div>
           </div>
 
@@ -305,6 +327,7 @@
             <button class="tab" onclick="switchOutputTab('html')">Sandboxed HTML</button>
             <button class="tab" onclick="switchOutputTab('screenshot')">Screenshot</button>
             <button class="tab" onclick="switchOutputTab('inspect')">Site Intelligence</button>
+            <button class="tab" onclick="switchOutputTab('batch')">Batch Results</button>
             <button class="tab" onclick="switchOutputTab('meta')">Metadata &amp; JSON</button>
           </div>
 
@@ -363,6 +386,12 @@
             </div>
           </div>
 
+          <div id="tabBatch" class="tab-content">
+            <div id="batchMetrics" style="margin-bottom: 8px; color: var(--text-muted); font-size: 0.85rem;"></div>
+            <div id="batchPlaceholder" style="color: var(--text-muted); padding: 40px; text-align: center;">Execute a batch fetch request to view multiple retrieved pages.</div>
+            <div id="batchCards" style="display: none; display: flex; flex-direction: column; gap: 14px;"></div>
+          </div>
+
           <div id="tabMeta" class="tab-content">
             <pre id="metaOutput">Execute a request to view full structured metadata and response JSON.</pre>
           </div>
@@ -388,15 +417,28 @@
     return 'fetch';
   }
 
+  function getBatchUrls() {
+    const raw = document.getElementById('batchUrlsInput').value;
+    return raw.split('\n').map(u => u.trim()).filter(u => u.length > 0);
+  }
+  function getBatchMaxChars() {
+    const val = parseInt(document.getElementById('batchMaxChars').value, 10);
+    return isNaN(val) ? 8000 : Math.max(1000, Math.min(20000, val));
+  }
+
   function onModeChange() {
     const mode = getOperationMode();
+    document.getElementById('singleUrlGroup').style.display = mode === 'batch_fetch' ? 'none' : 'block';
     document.getElementById('fetchOptions').style.display = mode === 'fetch' ? 'block' : 'none';
     document.getElementById('screenshotOptions').style.display = mode === 'screenshot' ? 'block' : 'none';
     document.getElementById('inspectOptions').style.display = mode === 'inspect' ? 'block' : 'none';
+    document.getElementById('batchFetchOptions').style.display = mode === 'batch_fetch' ? 'block' : 'none';
     if (mode === 'screenshot') {
       document.getElementById('paidBtn').innerHTML = '&#9889; Connect Wallet &amp; Screenshot ($0.01 USDC)';
     } else if (mode === 'inspect') {
       document.getElementById('paidBtn').innerHTML = '&#9889; Connect Wallet &amp; Inspect ($0.005 USDC)';
+    } else if (mode === 'batch_fetch') {
+      document.getElementById('paidBtn').innerHTML = '&#9889; Connect Wallet &amp; Batch Fetch ($0.015 USDC)';
     } else {
       document.getElementById('paidBtn').innerHTML = '&#9889; Connect Wallet &amp; Fetch ($0.005 USDC)';
     }
@@ -502,6 +544,11 @@
         probeBody = { url: target, render_mode: document.getElementById('inspectRenderMode').value };
         expectedAmount = '5000';
         opName = 'Inspect Site';
+      } else if (mode === 'batch_fetch') {
+        endpoint = `${gateway}/batch-fetch`;
+        probeBody = { urls: getBatchUrls(), max_chars_per_url: getBatchMaxChars(), render_mode: document.getElementById('batchRenderMode').value };
+        expectedAmount = '15000';
+        opName = 'Batch Fetch';
       }
 
       const fetchResp = await fetch(endpoint, {
@@ -615,14 +662,18 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
         endpoint = `${gateway}/inspect`;
         expectedAmount = '5000';
         opName = "SmartFetch Site Inspector";
+      } else if (mode === 'batch_fetch') {
+        endpoint = `${gateway}/batch-fetch`;
+        expectedAmount = '15000';
+        opName = "SmartFetch Batch Fetcher";
       }
-      const priceLabel = mode === 'screenshot' ? '$0.01' : '$0.005';
+      const priceLabel = mode === 'screenshot' ? '$0.01' : (mode === 'batch_fetch' ? '$0.015' : '$0.005');
 
       showStatus("Obtaining live 402 payment requirements from gateway...", "info");
       const initialResp = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: target })
+        body: JSON.stringify(mode === 'batch_fetch' ? { urls: getBatchUrls() } : { url: target })
       });
 
       const reqHeader = initialResp.headers.get('payment-required') || initialResp.headers.get('PAYMENT-REQUIRED');
@@ -731,6 +782,13 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
           render_mode: document.getElementById('inspectRenderMode').value,
           no_cache: noCacheCheckbox.checked
         };
+      } else if (mode === 'batch_fetch') {
+        reqBody = {
+          urls: getBatchUrls(),
+          max_chars_per_url: getBatchMaxChars(),
+          render_mode: document.getElementById('batchRenderMode').value,
+          no_cache: noCacheCheckbox.checked
+        };
       } else {
         reqBody = {
           url: target,
@@ -786,6 +844,9 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
         } else if (mode === 'inspect') {
           renderInspectOutput(respData);
           switchOutputTab('inspect');
+        } else if (mode === 'batch_fetch') {
+          renderBatchOutput(respData);
+          switchOutputTab('batch');
         } else {
           // Populate Tabs
           document.getElementById('markdownOutput').textContent = respData.markdown || respData.content || "No Markdown returned.";
@@ -859,6 +920,35 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     `;
   }
 
+  function renderBatchOutput(data) {
+    document.getElementById('batchPlaceholder').style.display = 'none';
+    const container = document.getElementById('batchCards');
+    container.style.display = 'flex';
+    document.getElementById('batchMetrics').textContent = 
+      `Total URLs: ${data.total_urls} | Succeeded: ${data.succeeded_count} | Failed: ${data.failed_count} | Elapsed: ${data.elapsed_ms}ms`;
+    let html = '';
+    (data.results || []).forEach((item, idx) => {
+      const isSuccess = item.success;
+      const statusBadge = isSuccess ? `<span class="badge" style="background:#10b981;color:#fff;">${item.status_code || 200} OK</span>` : `<span class="badge" style="background:#ef4444;color:#fff;">Failed</span>`;
+      const title = item.title ? escapeHtml(item.title) : (item.url || `Item ${idx+1}`);
+      const method = item.render_method ? `[${item.render_method}] ` : '';
+      const contentSnippet = item.markdown ? escapeHtml(item.markdown.slice(0, 300)) + (item.markdown.length > 300 ? '...' : '') : (item.error ? `<span style="color:#ef4444;">${escapeHtml(item.error)}</span>` : '');
+      html += `
+        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--card-border); border-radius: 8px; padding: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <strong style="color: #fff; font-size: 0.95rem;">${title}</strong>
+            <div>${statusBadge}</div>
+          </div>
+          <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px;">
+            <code>${escapeHtml(item.url || item.final_url || '')}</code> ${method}${item.word_count ? `(${item.word_count} words)` : ''}
+          </div>
+          <pre style="background: rgba(0,0,0,0.4); border-radius: 4px; padding: 10px; font-size: 0.8rem; white-space: pre-wrap; margin: 0;">${contentSnippet}</pre>
+        </div>
+      `;
+    });
+    container.innerHTML = html;
+  }
+
   function downloadScreenshot() {
     if (!currentScreenshotBase64) return;
     const a = document.createElement('a');
@@ -876,7 +966,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
 
   // Tab Switching
   function switchOutputTab(name) {
-    const tabs = ['markdown', 'text', 'html', 'screenshot', 'inspect', 'meta'];
+    const tabs = ['markdown', 'text', 'html', 'screenshot', 'inspect', 'batch', 'meta'];
     tabs.forEach(t => {
       const btn = document.querySelector(`#outputTabs button[onclick*="${t}"]`);
       if (btn) btn.classList.toggle('active', t === name);
@@ -987,6 +1077,53 @@ import { base } from 'viem/chains';
 const client = createWalletClient({ chain: base, transport: custom(window.ethereum) });
 // 1. Fetch challenge from ${gateway}/inspect ($0.005 USDC)
 // 2. Sign EIP-712 TransferWithAuthorization (amount: 5000 atomic units)
+// 3. Retry with PAYMENT-SIGNATURE: <base64_payload>`;
+    } else if (mode === 'batch_fetch') {
+      const urls = getBatchUrls();
+      const maxChars = getBatchMaxChars();
+      const renderMode = document.getElementById('batchRenderMode').value;
+      const urlsJson = JSON.stringify(urls);
+
+      // cURL
+      document.getElementById('snippetCurl').textContent = 
+`curl -X POST "${gateway}/batch-fetch" \\
+  -H "Content-Type: application/json" \\
+  -H "PAYMENT-SIGNATURE: <BASE64_X402_ENVELOPE>" \\
+  -d '{
+    "urls": ${urlsJson},
+    "max_chars_per_url": ${maxChars},
+    "render_mode": "${renderMode}",
+    "no_cache": ${noCache}
+  }'`;
+
+      // Python (x402)
+      document.getElementById('snippetPython').textContent = 
+`import httpx
+from x402.client import x402Client
+
+client = x402Client()
+response = client.post(
+    "${gateway}/batch-fetch",
+    json={
+        "urls": ${urlsJson},
+        "max_chars_per_url": ${maxChars},
+        "render_mode": "${renderMode}",
+        "no_cache": ${noCache}
+    }
+)
+data = response.json()
+print("Succeeded:", data.get("succeeded_count"), "/", data.get("total_urls"))
+for item in data.get("results", []):
+    print(" -", item.get("title"), "(words:", item.get("word_count"), ")")`;
+
+      // TypeScript (viem)
+      document.getElementById('snippetTypescript').textContent = 
+`import { createWalletClient, custom } from 'viem';
+import { base } from 'viem/chains';
+
+const client = createWalletClient({ chain: base, transport: custom(window.ethereum) });
+// 1. Fetch challenge from ${gateway}/batch-fetch ($0.015 USDC)
+// 2. Sign EIP-712 TransferWithAuthorization (amount: 15000 atomic units)
 // 3. Retry with PAYMENT-SIGNATURE: <base64_payload>`;
     } else {
       const maxChars = parseInt(maxCharsSlider.value, 10);

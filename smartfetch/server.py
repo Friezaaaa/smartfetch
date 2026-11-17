@@ -9,7 +9,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from .access_logging import uvicorn_log_config
+from .batch import batch_fetch_urls
 from .bazaar import (
+    BATCH_FETCH_DESCRIPTION,
+    BATCH_FETCH_TAGS,
     FETCH_DESCRIPTION,
     INSPECT_DESCRIPTION,
     INSPECT_TAGS,
@@ -18,12 +21,14 @@ from .bazaar import (
     SCREENSHOT_DESCRIPTION,
     SCREENSHOT_TAGS,
     TEXT_DESCRIPTION,
+    batch_fetch_discovery_extension,
     inspect_discovery_extension,
     screenshot_discovery_extension,
 )
 from .browser_fetch import browser_screenshot
 from .config import HOST, PORT, SERVICE_NAME, SERVICE_VERSION
 from .core import smart_fetch
+from .diagnostics import RetrievalFailure
 from .inspect import inspect_webpage_url
 from .discovery import (
     agent_card_document,
@@ -170,6 +175,24 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         result["service_version"] = SERVICE_VERSION
         return result
 
+    async def _run_batch_fetch(
+        urls: list[str],
+        *,
+        max_chars_per_url: int = 8000,
+        render_mode: str = "auto",
+        no_cache: bool = False,
+    ) -> dict:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: batch_fetch_urls(
+                urls,
+                max_chars_per_url=max_chars_per_url,
+                render_mode=render_mode,
+                no_cache=no_cache,
+            ),
+        )
+
     remote_cfg = RemoteBrowserConfig.from_env()
     if remote_cfg.is_configured:
         mcp = create_smartfetch_mcp(
@@ -177,6 +200,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             _run_mcp_fetch,
             screenshot_handler=_run_screenshot,
             inspect_handler=_run_inspect,
+            batch_fetch_handler=_run_batch_fetch,
         )
     else:
         mcp = create_emergency_mcp()
@@ -331,6 +355,49 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         except Exception as exc:
             return JSONResponse(status_code=502, content={"success": False, "error_code": "inspect_failed", "error": str(exc)})
 
+    @application.post("/batch-fetch")
+    async def batch_fetch_endpoint(request: Request):
+        remote_cfg = RemoteBrowserConfig.from_env()
+        if not remote_cfg.is_configured:
+            return JSONResponse(
+                status_code=503,
+                content={"success": False, "error_code": "retrieval_unavailable", "error": "Retrieval is temporarily unavailable"},
+                headers={"Retry-After": "3600", "Cache-Control": "no-store"},
+            )
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
+        if not isinstance(body, dict):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_request", "error": "Invalid request"})
+        urls = body.get("urls")
+        if not isinstance(urls, (list, tuple)) or not urls:
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_urls", "error": "urls must be a non-empty list of strings"})
+        max_chars = body.get("max_chars_per_url", 8000)
+        try:
+            max_chars = int(max_chars)
+        except (ValueError, TypeError):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_max_chars", "error": "max_chars_per_url must be an integer"})
+        render_mode = str(body.get("render_mode", "auto"))
+        if render_mode not in ("auto", "http_only"):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_render_mode", "error": "render_mode must be 'auto' or 'http_only'"})
+        no_cache = bool(body.get("no_cache", False)) or request.headers.get("cache-control") == "no-cache"
+        try:
+            result = await _run_batch_fetch(
+                urls,
+                max_chars_per_url=max_chars,
+                render_mode=render_mode,
+                no_cache=no_cache,
+            )
+            return JSONResponse(status_code=200, content=result)
+        except RetrievalFailure as exc:
+            return JSONResponse(status_code=502, content={"success": False, "error_code": "batch_retrieval_failed", "error": str(exc)})
+        except Exception as exc:
+            return JSONResponse(
+                status_code=422 if ("urls" in str(exc).lower() or "batch" in str(exc).lower()) else 502,
+                content={"success": False, "error_code": "batch_fetch_failed", "error": str(exc)},
+            )
+
     @application.get("/", response_class=HTMLResponse)
     async def root(request: Request):
         remote_cfg = RemoteBrowserConfig.from_env()
@@ -367,6 +434,12 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                     "payment_challenge_enabled": settings.enabled,
                     "price": "$0.005",
                 },
+                "batch_fetch": {
+                    "url": urls["batch_fetch"],
+                    "availability": "available",
+                    "payment_challenge_enabled": settings.enabled,
+                    "price": "$0.015",
+                },
                 "mcp": {
                     "url": urls["mcp"],
                     "transport": "streamable-http",
@@ -385,7 +458,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                         "name": name,
                         "availability": "available",
                         "payment_challenge_enabled": settings.enabled,
-                        "price": "$0.01" if name == "screenshot_webpage" else settings.price,
+                        "price": "$0.015" if name == "batch_fetch_webpages" else ("$0.01" if name == "screenshot_webpage" else ("$0.005" if name == "inspect_webpage" else settings.price)),
                         "network": settings.network,
                         "asset": "USDC",
                     }
@@ -417,6 +490,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 {"name": "render_webpage", "description": RENDER_DESCRIPTION},
                 {"name": "screenshot_webpage", "description": SCREENSHOT_DESCRIPTION},
                 {"name": "inspect_webpage", "description": INSPECT_DESCRIPTION},
+                {"name": "batch_fetch_webpages", "description": BATCH_FETCH_DESCRIPTION},
             ],
         }
 
@@ -520,6 +594,19 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 service_name="SmartFetch",
                 tags=INSPECT_TAGS,
                 extensions=inspect_discovery_extension(),
+            ),
+            "POST /batch-fetch": RouteConfig(
+                accepts=PaymentOption(
+                    scheme="exact",
+                    pay_to=settings.pay_to,
+                    price="$0.015",
+                    network=settings.network,
+                ),
+                description=BATCH_FETCH_DESCRIPTION,
+                mime_type="application/json",
+                service_name="SmartFetch",
+                tags=BATCH_FETCH_TAGS,
+                extensions=batch_fetch_discovery_extension(),
             ),
         }
         install_x402(application, settings, additional_routes=extra_routes)

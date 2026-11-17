@@ -279,7 +279,7 @@ class DiscoveryCompatibilityTests(unittest.TestCase):
         document = discovery.emergency_openapi_document(self.urls)
 
         self.assertEqual(document['info']['version'], '1.13.1')
-        self.assertEqual(list(document['paths']), ['/fetch', '/screenshot', '/inspect'])
+        self.assertEqual(list(document['paths']), ['/fetch', '/screenshot', '/inspect', '/batch-fetch'])
         operation = document['paths']['/fetch']['post']
         self.assertEqual(operation['x-smartfetch-availability'], 'unavailable')
         self.assertNotIn('x-x402', operation)

@@ -10,7 +10,7 @@ from .diagnostics import (
     diagnostics_for_exception,
     make_diagnostics,
 )
-from .extract import extract_content, extract_pdf
+from .extract import extract_content, extract_pdf, extract_plain_document
 from .http_fetch import http_fetch
 from .limits import normalize_max_chars, shape_output
 from .observability import ObservabilityRecord, record_retrieval
@@ -61,6 +61,7 @@ def smart_fetch(
     render_mode: str = "auto",
     no_cache: bool = False,
     include_html: bool = False,
+    _browser_limiter=None,
 ) -> dict:
     started = time.perf_counter()
     max_chars = normalize_max_chars(max_chars)
@@ -158,6 +159,63 @@ def smart_fetch(
                     'telemetry': obs.to_dict(),
                     **extracted,
                 }
+                if not no_cache and page.get('status_code') == 200:
+                    get_cache_provider().set(cache_key, payload)
+                return shape_output(payload, max_chars)
+
+            # Tier 1 Non-HTML structured text handling (.md, .json, .csv, .xml, etc.)
+            content_type = page.get('content_type', '').lower()
+            is_structured_text = any(t in content_type for t in (
+                'text/markdown',
+                'text/x-markdown',
+                'text/csv',
+                'application/json',
+                'application/xml',
+                'text/xml',
+                'application/rss+xml',
+                'application/atom+xml',
+            ))
+            if is_structured_text:
+                try:
+                    extracted = extract_plain_document(page['html'], page['final_url'], content_type)
+                    if not extracted.get('content'):
+                        raise ValueError(f"Empty structured text document: {content_type}")
+                except Exception as error:
+                    obs.failure_reason = str(error)
+                    record_retrieval(obs)
+                    diag = make_diagnostics(
+                        url,
+                        'http',
+                        'extract',
+                        'invalid_content',
+                        http_attempted=True,
+                        http_retry_attempted=bool(
+                            http_attempt_state.get('retry_attempted', False)
+                        ),
+                        upstream_status=page.get('status_code'),
+                    )
+                    raise RetrievalFailure(
+                        f"SmartFetch structured text retrieval failed: {error}",
+                        diag,
+                    ) from error
+
+                obs.retrieval_tier = "http"
+                record_retrieval(obs)
+                payload = {
+                    'success': True,
+                    'requested_url': url,
+                    'final_url': page['final_url'],
+                    'status_code': page['status_code'],
+                    'render_method': 'http',
+                    'retrieval_tier': 'http',
+                    'content_type': content_type,
+                    'cache_hit': False,
+                    'elapsed_ms': round((time.perf_counter() - started) * 1000),
+                    'telemetry': obs.to_dict(),
+                    **extracted,
+                }
+                if include_html:
+                    payload['html'] = page['html']
                 if not no_cache and page.get('status_code') == 200:
                     get_cache_provider().set(cache_key, payload)
                 return shape_output(payload, max_chars)
@@ -262,6 +320,14 @@ def smart_fetch(
                 raise
 
     # 3. Tier 3: Isolated browser execution
+    if _browser_limiter is not None and not _browser_limiter.allow_escalation():
+        if http_error:
+            annotated = attach_diagnostics(
+                RuntimeError(f"SmartFetch browser escalation limit reached; HTTP failed: {http_error}"),
+                http_diagnostics,
+            )
+            raise annotated
+        raise RuntimeError("SmartFetch browser escalation limit reached for this batch")
     browser_start = time.perf_counter()
     try:
         page = browser_fetch(url)

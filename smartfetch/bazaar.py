@@ -708,3 +708,154 @@ def inspect_mcp_discovery_extension():
         output_schema=INSPECT_OUTPUT_SCHEMA,
         output_example=INSPECT_OUTPUT_EXAMPLE,
     )
+
+
+BATCH_FETCH_DESCRIPTION = (
+    "Parallel batch webpage and document retrieval tool. Fetches up to 5 public URLs "
+    "concurrently with fair settlement (returns 502 without settling if all fail), "
+    "VPS browser concurrency protection, and native Markdown/plain text output."
+)
+BATCH_FETCH_TAGS = [
+    "batch",
+    "parallel",
+    "web-scraper",
+    "markdown",
+    "agents",
+]
+BATCH_FETCH_INPUT_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "urls": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://",
+            },
+            "minItems": 1,
+            "maxItems": 5,
+            "description": "List of 1 to 5 public HTTP/HTTPS URLs to retrieve in parallel.",
+        },
+        "max_chars_per_url": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 20000,
+            "default": 8000,
+            "description": "Maximum characters returned per URL.",
+        },
+        "render_mode": {
+            "type": "string",
+            "enum": ["auto", "http_only"],
+            "default": "auto",
+            "description": "Rendering strategy: 'auto' (fast HTTP with browser fallback capped at 2) or 'http_only'.",
+        },
+        "no_cache": {
+            "type": "boolean",
+            "default": False,
+            "description": "Bypass cache lookup.",
+        },
+    },
+    "required": ["urls"],
+}
+BATCH_FETCH_INPUT_EXAMPLE = {
+    "urls": [
+        "https://example.com/article-1",
+        "https://example.com/article-2",
+    ],
+    "max_chars_per_url": 8000,
+    "render_mode": "auto",
+    "no_cache": False,
+}
+BATCH_FETCH_OUTPUT_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "success": {"type": "boolean"},
+        "results": {
+            "type": "array",
+            "items": {"type": "object"},
+        },
+        "total_urls": {"type": "integer", "minimum": 1, "maximum": 5},
+        "succeeded_count": {"type": "integer", "minimum": 0, "maximum": 5},
+        "failed_count": {"type": "integer", "minimum": 0, "maximum": 5},
+        "elapsed_ms": {"type": "integer", "minimum": 0},
+        "request_id": {"type": "string"},
+        "service_version": {"type": "string"},
+    },
+    "required": [
+        "success",
+        "results",
+        "total_urls",
+        "succeeded_count",
+        "failed_count",
+        "elapsed_ms",
+        "request_id",
+        "service_version",
+    ],
+}
+BATCH_FETCH_OUTPUT_EXAMPLE = {
+    "success": True,
+    "results": [
+        {
+            "success": True,
+            "requested_url": "https://example.com/article-1",
+            "final_url": "https://example.com/article-1",
+            "status_code": 200,
+            "render_method": "http",
+            "title": "Article 1",
+            "content": "Clean plain text content...",
+            "markdown": "# Article 1\n\nClean markdown content...",
+            "links": [],
+            "word_count": 4,
+        },
+        {
+            "success": True,
+            "requested_url": "https://example.com/article-2",
+            "final_url": "https://example.com/article-2",
+            "status_code": 200,
+            "render_method": "http",
+            "title": "Article 2",
+            "content": "Clean plain text content...",
+            "markdown": "# Article 2\n\nClean markdown content...",
+            "links": [],
+            "word_count": 4,
+        },
+    ],
+    "total_urls": 2,
+    "succeeded_count": 2,
+    "failed_count": 0,
+    "elapsed_ms": 140,
+    "request_id": "b1c2d3e4f5a6b7c8",
+    "service_version": SERVICE_VERSION,
+}
+
+
+def batch_fetch_discovery_extension():
+    """Build the official x402 v2 Bazaar declaration for POST /batch-fetch."""
+    from x402.extensions.bazaar import OutputConfig, declare_discovery_extension
+
+    extension = declare_discovery_extension(
+        input=BATCH_FETCH_INPUT_EXAMPLE,
+        input_schema=BATCH_FETCH_INPUT_SCHEMA,
+        body_type="json",
+        output=OutputConfig(
+            example=BATCH_FETCH_OUTPUT_EXAMPLE,
+            schema=BATCH_FETCH_OUTPUT_SCHEMA,
+        ),
+    )
+    extension["bazaar"]["info"]["input"]["method"] = "POST"
+    return extension
+
+
+def batch_fetch_mcp_discovery_extension():
+    """Build the official x402 v2 Bazaar declaration for batch_fetch_webpages."""
+    return mcp_discovery_extension(
+        tool_name="batch_fetch_webpages",
+        description=BATCH_FETCH_DESCRIPTION,
+        input_schema=BATCH_FETCH_INPUT_SCHEMA,
+        input_example=BATCH_FETCH_INPUT_EXAMPLE,
+        output_schema=BATCH_FETCH_OUTPUT_SCHEMA,
+        output_example=BATCH_FETCH_OUTPUT_EXAMPLE,
+    )
+

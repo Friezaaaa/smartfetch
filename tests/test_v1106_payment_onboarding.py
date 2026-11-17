@@ -203,6 +203,7 @@ class PaymentOnboardingDocumentationTests(unittest.TestCase):
             'render_webpage',
             'screenshot_webpage',
             'inspect_webpage',
+            'batch_fetch_webpages',
         ))
 
 

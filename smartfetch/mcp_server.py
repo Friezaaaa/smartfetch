@@ -14,6 +14,11 @@ from starlette.routing import Route
 
 from .activity import emit_activity
 from .bazaar import (
+    BATCH_FETCH_DESCRIPTION,
+    BATCH_FETCH_INPUT_EXAMPLE,
+    BATCH_FETCH_INPUT_SCHEMA,
+    BATCH_FETCH_OUTPUT_EXAMPLE,
+    BATCH_FETCH_OUTPUT_SCHEMA,
     FETCH_DESCRIPTION,
     FETCH_INPUT_EXAMPLE,
     FETCH_INPUT_SCHEMA,
@@ -44,6 +49,7 @@ from .bazaar import (
     mcp_discovery_extension,
     screenshot_mcp_discovery_extension,
 )
+from .batch import batch_fetch_urls
 from .browser_fetch import browser_screenshot
 from .config import HOST, MAX_REQUEST_BODY_BYTES, SERVICE_NAME, SERVICE_VERSION
 from .inspect import inspect_webpage_url
@@ -61,6 +67,7 @@ MCP_TOOLS = (
     "render_webpage",
     "screenshot_webpage",
     "inspect_webpage",
+    "batch_fetch_webpages",
 )
 V111_MCP_TOOLS = ("search_and_extract", "extract_structured_data")
 MCP_TRANSPORT = "streamable-http"
@@ -71,6 +78,7 @@ MCP_MAX_CHARS = 50000
 FetchHandler = Callable[..., Awaitable[dict[str, Any]]]
 ScreenshotHandler = Callable[..., Awaitable[dict[str, Any]]]
 InspectHandler = Callable[..., Awaitable[dict[str, Any]]]
+BatchFetchHandler = Callable[..., Awaitable[dict[str, Any]]]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -93,6 +101,7 @@ def _initialize_payment(settings: X402Settings):
     resource_server = None
     accepts = []
     screenshot_accepts = []
+    batch_fetch_accepts = []
     try:
         from x402.server import ResourceConfig
 
@@ -113,13 +122,19 @@ def _initialize_payment(settings: X402Settings):
             price="$0.01",
             network=settings.network,
         ))
+        batch_fetch_accepts = resource_server.build_payment_requirements(ResourceConfig(
+            scheme="exact",
+            payTo=settings.pay_to,
+            price="$0.015",
+            network=settings.network,
+        ))
     except Exception as exc:
         _LOGGER.error("Failed to initialize x402 MCP payment server: %s", exc)
         initialization_failed = True
 
     if initialization_failed:
         raise RuntimeError("x402 MCP initialization failed")
-    return resource_server, accepts, screenshot_accepts
+    return resource_server, accepts, screenshot_accepts, batch_fetch_accepts
 
 
 def create_smartfetch_mcp(
@@ -128,6 +143,7 @@ def create_smartfetch_mcp(
     *,
     screenshot_handler: ScreenshotHandler | None = None,
     inspect_handler: InspectHandler | None = None,
+    batch_fetch_handler: BatchFetchHandler | None = None,
     v111_service=None,
 ) -> SmartFetchMCP:
     """Build the production MCP server with optional x402 payment protection."""
@@ -145,8 +161,9 @@ def create_smartfetch_mcp(
     resource_server = None
     accepts = []
     screenshot_accepts = []
+    batch_fetch_accepts = []
     if settings.enabled:
-        resource_server, accepts, screenshot_accepts = _initialize_payment(settings)
+        resource_server, accepts, screenshot_accepts, batch_fetch_accepts = _initialize_payment(settings)
 
     # Handlers for each of the 4 tools: fetch_webpage is the flagship tool,
     # and the remaining three tools delegate internally to fetch_handler.
@@ -295,6 +312,25 @@ def create_smartfetch_mcp(
             lambda: inspect_webpage_url(url.strip(), force_browser=force_browser, render_mode=render_mode),
         )
 
+    async def batch_fetch_webpages(
+        urls: Annotated[list[str], Field(description="List of 1 to 5 public HTTP/HTTPS URLs to retrieve in parallel.")],
+        max_chars_per_url: Annotated[int, Field(ge=1000, le=20000, description="Maximum characters returned per URL.")] = 8000,
+        render_mode: Annotated[str, Field(description="Rendering strategy: 'auto' (fast HTTP with browser fallback capped at 2) or 'http_only'.")] = "auto",
+        no_cache: Annotated[bool, Field(description="Bypass cache lookup.")] = False,
+    ) -> dict[str, Any]:
+        if not isinstance(urls, (list, tuple)) or not urls:
+            raise ValueError("urls must be a non-empty list of URL strings")
+        if render_mode not in ("auto", "http_only"):
+            raise ValueError("render_mode must be 'auto' or 'http_only'")
+        if batch_fetch_handler is not None:
+            return await batch_fetch_handler(urls, max_chars_per_url=max_chars_per_url, render_mode=render_mode, no_cache=no_cache)
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: batch_fetch_urls(urls, max_chars_per_url=max_chars_per_url, render_mode=render_mode, no_cache=no_cache),
+        )
+
     def protect(
         name: str,
         description: str,
@@ -433,6 +469,17 @@ def create_smartfetch_mcp(
             accepts,
             settings.price,
         ),
+        (
+            "batch_fetch_webpages",
+            BATCH_FETCH_DESCRIPTION,
+            batch_fetch_webpages,
+            BATCH_FETCH_INPUT_SCHEMA,
+            BATCH_FETCH_INPUT_EXAMPLE,
+            BATCH_FETCH_OUTPUT_SCHEMA,
+            BATCH_FETCH_OUTPUT_EXAMPLE,
+            batch_fetch_accepts,
+            "$0.015",
+        ),
     )
 
     remote_cfg = RemoteBrowserConfig.from_env()
@@ -516,9 +563,17 @@ def create_emergency_mcp() -> SmartFetchMCP:
             "error": "Retrieval is temporarily unavailable",
         }
 
+    async def _dummy_batch_fetch(urls: list[str], max_chars_per_url: int = 8000, render_mode: str = "auto", no_cache: bool = False) -> dict[str, Any]:
+        return {
+            "success": False,
+            "error_code": "retrieval_unavailable",
+            "error": "Retrieval is temporarily unavailable",
+        }
+
     return create_smartfetch_mcp(
         settings,
         _dummy_fetch,
         screenshot_handler=_dummy_screenshot,
         inspect_handler=_dummy_inspect,
+        batch_fetch_handler=_dummy_batch_fetch,
     )

@@ -10,6 +10,12 @@ from x402.http.utils import encode_payment_required_header
 from x402.schemas import PaymentRequired, PaymentRequirements, ResourceInfo
 
 from .bazaar import (
+    BATCH_FETCH_DESCRIPTION,
+    BATCH_FETCH_INPUT_EXAMPLE,
+    BATCH_FETCH_INPUT_SCHEMA,
+    BATCH_FETCH_OUTPUT_EXAMPLE,
+    BATCH_FETCH_OUTPUT_SCHEMA,
+    BATCH_FETCH_TAGS,
     FETCH_DESCRIPTION,
     FETCH_INPUT_EXAMPLE,
     FETCH_INPUT_SCHEMA,
@@ -31,6 +37,7 @@ from .bazaar import (
     SCREENSHOT_OUTPUT_SCHEMA,
     SCREENSHOT_TAGS,
     TEXT_DESCRIPTION,
+    batch_fetch_discovery_extension,
     fetch_discovery_extension,
     inspect_discovery_extension,
     screenshot_discovery_extension,
@@ -71,6 +78,7 @@ TOOL_NAMES = (
     "render_webpage",
     "screenshot_webpage",
     "inspect_webpage",
+    "batch_fetch_webpages",
 )
 V111_TOOL_NAMES = (
     "search_and_extract",
@@ -106,6 +114,7 @@ def public_urls(request):
         "fetch": f"{base}/fetch",
         "screenshot": f"{base}/screenshot",
         "inspect": f"{base}/inspect",
+        "batch_fetch": f"{base}/batch-fetch",
         "mcp": f"{base}/mcp",
     }
 
@@ -143,6 +152,7 @@ def x402_manifest(urls, settings, v111_accepts=None):
             [urls["fetch"]]
             + ([urls["screenshot"]] if "screenshot" in urls else [])
             + ([urls["inspect"]] if "inspect" in urls else [])
+            + ([urls["batch_fetch"]] if "batch_fetch" in urls else [])
         ),
         "payment": {
             "protocol": "x402",
@@ -215,6 +225,7 @@ def agent_card_document(urls, settings=None):
                 "url": urls["fetch"],
                 "screenshot": urls.get("screenshot", f"{urls['base']}/screenshot"),
                 "inspect": urls.get("inspect", f"{urls['base']}/inspect"),
+                "batch_fetch": urls.get("batch_fetch", f"{urls['base']}/batch-fetch"),
                 "openapi": urls["openapi"],
             },
             "x402": {
@@ -250,6 +261,10 @@ def agent_card_document(urls, settings=None):
             {
                 "name": "inspect_webpage",
                 "description": INSPECT_DESCRIPTION,
+            },
+            {
+                "name": "batch_fetch_webpages",
+                "description": BATCH_FETCH_DESCRIPTION,
             },
         ],
         "contact": {
@@ -706,6 +721,88 @@ def openapi_document(
                     },
                 },
             },
+            "/batch-fetch": {
+                "post": {
+                    "operationId": "batchFetchWebpages",
+                    "summary": "Batch retrieve multiple webpages in parallel",
+                    "description": (
+                        "Paid x402 exact parallel batch retrieval of up to 5 public HTTP or "
+                        "HTTPS webpages or documents. Fetches concurrently with VPS browser "
+                        "concurrency protection (capped at <= 2 browser renders per batch) and "
+                        "returns 502 without settling payment if all URLs fail. "
+                        f"The configured price is $0.015 per execution using USDC on {network_name}."
+                    ),
+                    "x-x402": {
+                        "x402Version": 2,
+                        "scheme": scheme,
+                        "network": network,
+                        "assetSymbol": "USDC",
+                        "price": "$0.015",
+                        "amount": _atomic_usdc_amount("$0.015"),
+                        **({"asset": asset} if asset is not None else {}),
+                    },
+                    "x-payment-info": {
+                        "price": {
+                            "mode": "fixed",
+                            "currency": "USD",
+                            "amount": _agentcash_usd_amount("$0.015"),
+                        },
+                        "protocols": [{"x402": {}}],
+                    },
+                    "security": [],
+                    "parameters": [
+                        {
+                            "name": "PAYMENT-SIGNATURE",
+                            "in": "header",
+                            "required": False,
+                            "description": (
+                                "Base64-encoded x402 v2 PaymentPayload on the paid retry request."
+                            ),
+                            "schema": {"type": "string"},
+                        },
+                    ],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": BATCH_FETCH_INPUT_SCHEMA,
+                                "example": BATCH_FETCH_INPUT_EXAMPLE,
+                            },
+                        },
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Batch retrieval completed with at least one succeeded URL.",
+                            "content": {
+                                "application/json": {
+                                    "schema": BATCH_FETCH_OUTPUT_SCHEMA,
+                                    "example": BATCH_FETCH_OUTPUT_EXAMPLE,
+                                },
+                            },
+                        },
+                        "400": _error_response("Invalid request payload or unsupported options"),
+                        "402": {
+                            "description": "Payment required. Sign the returned challenge.",
+                            "headers": {
+                                "PAYMENT-REQUIRED": payment_required_header,
+                            },
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "detail": {"type": "string"},
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                        "422": _error_response("Invalid URL or batch argument limits"),
+                        "502": _error_response("Batch retrieval failed: all URLs failed upstream"),
+                        "503": _error_response("Batch retrieval service unavailable"),
+                    },
+                },
+            },
         },
     }
     requirements = _v111_requirements(v111_accepts)
@@ -1030,6 +1127,7 @@ def docs_html(
       <li><code>POST {safe['fetch']}</code> — paid webpage retrieval</li>
       <li><code>POST {safe['screenshot']}</code> — paid webpage screenshot ($0.01)</li>
       <li><code>POST {safe.get('inspect', safe['base'] + '/inspect')}</code> — paid site intelligence ($0.005)</li>
+      <li><code>POST {safe.get('batch_fetch', safe['base'] + '/batch-fetch')}</code> — paid parallel batch retrieval ($0.015)</li>
     </ul>
     <h2>Live interactive playground</h2>
     <p>Test SmartFetch live in your browser with Base Mainnet EIP-712 payments, free 402 challenge inspection, and sandboxed HTML preview at the <a href="{playground}">SmartFetch Playground</a> (or the <a href="{playground_mirror}">GitHub Pages mirror</a>).</p>
@@ -1041,6 +1139,7 @@ def docs_html(
       <dt><code>render_webpage</code></dt><dd>Forced headless Chromium browser renderer for JavaScript SPAs returning post-JS rendered HTML DOM and extracted content.</dd>
       <dt><code>screenshot_webpage</code></dt><dd>Isolated Chromium browser screenshot capture returning JPEG or PNG image bytes (base64) and dimensions ($0.01).</dd>
       <dt><code>inspect_webpage</code></dt><dd>Structured site intelligence and SEO inspection tool extracting metadata, OpenGraph, JSON-LD, contacts, tech stack, and security headers ($0.005).</dd>
+      <dt><code>batch_fetch_webpages</code></dt><dd>Parallel batch retrieval of up to 5 URLs concurrently with fair settlement and VPS protection ($0.015).</dd>
     </dl>
     <h2>Paying client examples</h2>
     <p>The examples list tools for free, enforce a $0.005 maximum payment, then perform the x402 challenge, payment, retry, and settlement flow. Running them can spend real Base-mainnet USDC.</p>
@@ -1134,6 +1233,7 @@ Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['pric
 - [Paid HTTP retrieval]({urls['fetch']}): POST only ($0.005)
 - [Paid HTTP screenshot]({urls.get('screenshot', urls['base'] + '/screenshot')}): POST only ($0.01)
 - [Paid HTTP site intelligence]({urls.get('inspect', urls['base'] + '/inspect')}): POST only ($0.005)
+- [Paid HTTP batch retrieval]({urls.get('batch_fetch', urls['base'] + '/batch-fetch')}): POST only ($0.015)
 
 ## Agent Onboarding & Payment Guide
 - [Comprehensive Agent Payment Integration Guide]({GITHUB_URL}/blob/main/docs/agent-payment-guide.md)
@@ -1152,6 +1252,7 @@ Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['pric
 - render_webpage: forced browser renderer returning rendered HTML DOM and extracted content
 - screenshot_webpage: isolated Chromium browser screenshot capture returning JPEG or PNG base64 ($0.01)
 - inspect_webpage: structured site intelligence extracting metadata, OpenGraph, JSON-LD, contacts, tech stack, and security headers ($0.005)
+- batch_fetch_webpages: parallel batch retrieval of up to 5 URLs concurrently with fair settlement and VPS protection ($0.015)
 
 ## Paying MCP client examples
 - [Python MCP example]({PYTHON_EXAMPLE_URL})
@@ -1239,6 +1340,12 @@ def emergency_meta(urls: dict) -> dict:
             "payment_challenge_enabled": False,
             "price": "$0.005",
         },
+        "batch_fetch": {
+            "url": urls.get("batch_fetch", f"{urls.get('base', '')}/batch-fetch"),
+            "availability": "available" if is_available else "unavailable",
+            "payment_challenge_enabled": False,
+            "price": "$0.015",
+        },
         "mcp": {"url": urls["mcp"]},
         "discovery": {
             "x402": urls["x402"],
@@ -1285,6 +1392,12 @@ def emergency_x402_manifest(urls: dict) -> dict:
             "availability": "unavailable",
             "payment_challenge_enabled": False,
             "price": "$0.005",
+        },
+        "batch_fetch": {
+            "url": urls.get("batch_fetch", f"{urls.get('base', '')}/batch-fetch"),
+            "availability": "unavailable",
+            "payment_challenge_enabled": False,
+            "price": "$0.015",
         },
         "tools": _emergency_identities(),
     }
@@ -1359,6 +1472,22 @@ def emergency_openapi_document(urls: dict) -> dict:
                         "503": unavailable,
                         "400": {"description": "Invalid request"},
                         "422": {"description": "Invalid inspection arguments"},
+                    },
+                }
+            },
+            "/batch-fetch": {
+                "post": {
+                    "summary": "Unavailable batch retrieval identity",
+                    "x-smartfetch-availability": "unavailable",
+                    "payment_challenge_enabled": False,
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": BATCH_FETCH_INPUT_SCHEMA}},
+                    },
+                    "responses": {
+                        "503": unavailable,
+                        "400": {"description": "Invalid request"},
+                        "422": {"description": "Invalid batch fetch arguments"},
                     },
                 }
             },

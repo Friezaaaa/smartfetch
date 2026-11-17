@@ -193,7 +193,20 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
         is_octet_pdf = 'application/octet-stream' in content_type and parsed_path.endswith('.pdf')
         is_pdf_candidate = is_pdf_content_type or is_octet_pdf
 
-        if not (any(x in content_type for x in ('text/html', 'application/xhtml+xml', 'text/plain')) or is_pdf_candidate):
+        SUPPORTED_TEXT_TYPES = (
+            'text/html',
+            'application/xhtml+xml',
+            'text/plain',
+            'text/markdown',
+            'text/x-markdown',
+            'text/csv',
+            'application/json',
+            'application/xml',
+            'text/xml',
+            'application/rss+xml',
+            'application/atom+xml',
+        )
+        if not (any(x in content_type for x in SUPPORTED_TEXT_TYPES) or is_pdf_candidate):
             response.close()
             error = RuntimeError(
                 f'Unsupported content-type: {content_type or "unknown"}'

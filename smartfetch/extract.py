@@ -1,5 +1,6 @@
 import hashlib
 import io
+import json
 import re
 from urllib.parse import urljoin, urlparse
 
@@ -185,3 +186,52 @@ def extract_pdf(
         'page_count': page_count,
         'pages_extracted': pages_extracted,
     }
+
+
+def extract_plain_document(raw_text: str, page_url: str, content_type: str) -> dict:
+    """Extracts clean Markdown and plain text from structured text documents (.md, .json, .csv, .xml)."""
+    text = raw_text or ""
+    ct = (content_type or "").lower()
+
+    # 1. Derive fallback title from URL filename or domain
+    parsed_path = urlparse(page_url).path
+    filename = parsed_path.split("/")[-1] if parsed_path else ""
+    if filename:
+        title = filename.strip()
+    else:
+        title = urlparse(page_url).netloc or "Document"
+
+    # 2. Pretty-formatting or fencing for markdown
+    if "json" in ct or page_url.lower().endswith(".json"):
+        try:
+            parsed_json = json.loads(text)
+            formatted = json.dumps(parsed_json, indent=2, ensure_ascii=False)
+            markdown = f"```json\n{formatted}\n```"
+        except Exception:
+            markdown = f"```json\n{text.strip()}\n```"
+        content = text.strip()
+    elif "markdown" in ct or page_url.lower().endswith((".md", ".markdown")):
+        markdown = text.strip()
+        content = text.strip()
+    elif "csv" in ct or page_url.lower().endswith(".csv"):
+        markdown = f"```csv\n{text.strip()}\n```"
+        content = text.strip()
+    elif "xml" in ct or page_url.lower().endswith((".xml", ".rss", ".atom")):
+        markdown = f"```xml\n{text.strip()}\n```"
+        content = text.strip()
+    else:
+        markdown = text.strip()
+        content = text.strip()
+
+    low_quality = len(text.strip()) == 0
+
+    return {
+        'title': title,
+        'content': content,
+        'markdown': markdown,
+        'links': [],
+        'word_count': len(content.split()),
+        'content_hash': hashlib.sha256(content.encode('utf-8')).hexdigest(),
+        'low_quality': low_quality,
+    }
+
