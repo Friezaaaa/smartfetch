@@ -113,6 +113,19 @@ def test_existing_manifests_regression(client):
     assert "agent-card.json" in resp_llms.text
     assert "owners.json" in resp_llms.text
     assert "agent-payment-guide.md" in resp_llms.text
+    assert "smartfetch-playground.pages.dev" in resp_llms.text
+
+    # /openapi.json contains security: [] on POST /fetch
+    resp_openapi = client.get("/openapi.json")
+    assert resp_openapi.status_code == 200
+    fetch_post = resp_openapi.json()["paths"]["/fetch"]["post"]
+    assert "security" in fetch_post
+    assert fetch_post["security"] == []
+
+    # /docs contains smartfetch-playground.pages.dev
+    resp_docs = client.get("/docs")
+    assert resp_docs.status_code == 200
+    assert "smartfetch-playground.pages.dev" in resp_docs.text
 
     # /health
     resp_health = client.get("/health")

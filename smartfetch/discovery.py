@@ -48,6 +48,8 @@ PYTHON_HTTP_EXAMPLE_URL = (
 OFFICIAL_X402_BUYER_URL = (
     "https://docs.x402.org/getting-started/quickstart-for-buyers"
 )
+PLAYGROUND_URL = "https://smartfetch-playground.pages.dev"
+PLAYGROUND_MIRROR_URL = "https://friezaaaa.github.io/smartfetch/"
 TOOL_NAMES = (
     "fetch_webpage",
     "webpage_to_markdown",
@@ -427,6 +429,7 @@ def openapi_document(
                         },
                         "protocols": [{"x402": {}}],
                     },
+                    "security": [],
                     "parameters": [
                         {
                             "name": "PAYMENT-SIGNATURE",
@@ -790,6 +793,8 @@ def docs_html(
     typescript_example = escape(TYPESCRIPT_EXAMPLE_URL, quote=True)
     python_http_example = escape(PYTHON_HTTP_EXAMPLE_URL, quote=True)
     official_x402_buyer = escape(OFFICIAL_X402_BUYER_URL, quote=True)
+    playground = escape(PLAYGROUND_URL, quote=True)
+    playground_mirror = escape(PLAYGROUND_MIRROR_URL, quote=True)
     payment = {
         key: escape(str(value), quote=True)
         for key, value in _payment_details(
@@ -828,6 +833,8 @@ def docs_html(
       <li><a href="{safe['mcp']}">POST /mcp</a> — MCP Streamable HTTP</li>
       <li><code>POST {safe['fetch']}</code> — paid webpage retrieval</li>
     </ul>
+    <h2>Live interactive playground</h2>
+    <p>Test SmartFetch live in your browser with Base Mainnet EIP-712 payments, free 402 challenge inspection, and sandboxed HTML preview at the <a href="{playground}">SmartFetch Playground</a> (or the <a href="{playground_mirror}">GitHub Pages mirror</a>).</p>
     <h2>MCP tools</h2>
     <dl>
       <dt><code>fetch_webpage</code></dt><dd>Primary webpage and PDF retrieval tool returning clean text, Markdown, links, and metadata with automatic browser fallback.</dd>
@@ -930,6 +937,11 @@ Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['pric
 - [Comprehensive Agent Payment Integration Guide]({GITHUB_URL}/blob/main/docs/agent-payment-guide.md)
 - Complete Python (`httpx` + `eth-account`) and TypeScript (`viem`) Base Mainnet USDC EIP-712 signing examples.
 - Execution workflow: Discover tool -> inspect price ($0.005 USDC) -> authorize payment -> execute fetch -> receive browser-rendered content.
+
+## Live Interactive Playground
+- [SmartFetch Playground (Cloudflare Pages)]({PLAYGROUND_URL})
+- [GitHub Pages Mirror]({PLAYGROUND_MIRROR_URL})
+- Free live 402 challenge inspection, Base Mainnet USDC EIP-712 payment authorization, client-side SSRF defenses, and sandboxed HTML preview.
 
 ## MCP tools
 - fetch_webpage: primary webpage and PDF retrieval tool with automatic browser fallback

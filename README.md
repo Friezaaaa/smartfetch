@@ -4,6 +4,21 @@ SmartFetch provides reliable, high-performance public webpage retrieval and rend
 
 ---
 
+## Live Interactive Playground
+
+Explore SmartFetch directly from your browser without installing anything:
+- **Primary Playground (Cloudflare Pages)**: [https://smartfetch-playground.pages.dev](https://smartfetch-playground.pages.dev)
+- **GitHub Pages Mirror**: [https://friezaaaa.github.io/smartfetch/](https://friezaaaa.github.io/smartfetch/)
+
+**Features**:
+- **Free Live 402 Inspection**: Decode and inspect the live Base Mainnet x402 challenge header, pricing ($0.005 USDC), seller treasury address, and service health without a wallet.
+- **Web3 Wallet Payments**: Sign EIP-712 `TransferWithAuthorization` authorizations via MetaMask, Coinbase Wallet, or Rabby on Base Mainnet (`0x2105` / `8453`) and test end-to-end settlements.
+- **HTML DOM + Local PDF Support**: Interactive previews featuring sandboxed HTML rendering (`sandbox="allow-scripts"`), formatted Markdown, extracted plain text, and local PDF extraction.
+- **Client-Side SSRF Protection**: Real-time validation preventing requests to internal IPs, localhost, or cloud metadata endpoints (`169.254.169.254`).
+- **Interactive Code Generator**: Ready-to-copy integration code in cURL, Python (`x402`), TypeScript (`viem`), and MCP configuration JSON.
+
+---
+
 ## Architecture Overview
 
 SmartFetch separates the public API/MCP interface from headless browser execution across two isolated tiers:
