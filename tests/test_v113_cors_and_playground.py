@@ -116,6 +116,25 @@ class TestPlaygroundSandbox(unittest.TestCase):
         self.assertIn("8453", content)
         self.assertIn("x402Version: 2", content)
 
+    def test_playground_solana_dual_chain_structure(self):
+        """examples/playground/index.html includes Solana SVM Wallet Standard, mint, and payTo definitions."""
+        repo_root = Path(__file__).resolve().parent.parent
+        playground_path = repo_root / "examples" / "playground" / "index.html"
+        content = playground_path.read_text(encoding="utf-8")
+
+        # Solana network CAIP-2 & Asset
+        self.assertIn("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", content)
+        self.assertIn("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", content)
+        self.assertIn("88hE4EB4yZwb4F2arPXcG7efwQyU5FDN26DuVpVKVk2W", content)
+        self.assertIn("BENrLoUbndxoNMUS5JXApGMtNykLjFXXixMtpDwDR9SP", content)
+
+        # Solana Wallet Standard & transaction building
+        self.assertIn("wallet-standard:register-wallet", content)
+        self.assertIn("VersionedTransaction", content)
+        self.assertIn("solscan.io/tx/", content)
+        self.assertIn("solanaRpcUrl", content)
+        self.assertIn("performSolanaPreflightChecks", content)
+
 
 
 if __name__ == "__main__":

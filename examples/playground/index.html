@@ -4,6 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SmartFetch Developer Playground &amp; x402 Tester</title>
+  <!-- Solana Web3 SDK via CDN with jsdelivr fallback -->
+  <script src="https://cdn.jsdelivr.net/npm/@solana/web3.js@1.95.8/lib/index.iife.min.js"></script>
+  <script>
+    if (typeof solanaWeb3 === 'undefined') {
+      document.write('<script src="https://unpkg.com/@solana/web3.js@1.95.8/lib/index.iife.min.js"><\/script>');
+    }
+  </script>
   <style>
     :root {
       --bg: #090d16;
@@ -14,6 +21,7 @@
       --text: #f1f5f9;
       --text-muted: #94a3b8;
       --accent: #38bdf8;
+      --solana-accent: #a855f7;
       --success: #10b981;
       --warning: #f59e0b;
       --danger: #ef4444;
@@ -46,6 +54,11 @@
       background: rgba(59, 130, 246, 0.2);
       color: var(--accent);
       border: 1px solid rgba(56, 189, 248, 0.4);
+    }
+    .badge-solana {
+      background: rgba(168, 85, 247, 0.2);
+      color: #c084fc;
+      border: 1px solid rgba(192, 132, 252, 0.4);
     }
     .grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
     @media(min-width: 900px) {
@@ -160,9 +173,10 @@
     <header>
       <div>
         <h1>SmartFetch Playground <span class="badge">x402 &amp; Isolated Browser</span></h1>
-        <p style="color: var(--text-muted); font-size: 0.85rem;">Interactive test console for SmartFetch production gateway with Base Mainnet EIP-712 micropayments.</p>
+        <p style="color: var(--text-muted); font-size: 0.85rem;">Interactive test console for SmartFetch production gateway with Base Mainnet (EVM) and Solana Mainnet (SVM) micropayments.</p>
       </div>
       <div id="walletBadge" style="display: flex; align-items: center; gap: 8px;">
+        <span id="chainBadge" class="badge" style="display: none;">Base Mainnet</span>
         <span id="walletAddress" style="font-family: monospace; font-size: 0.85rem; color: var(--text-muted);">No wallet connected</span>
       </div>
     </header>
@@ -188,6 +202,33 @@
               <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #fff;">
                 <input type="radio" name="operationMode" value="batch_fetch" onchange="onModeChange()"> Batch Fetch ($0.015)
               </label>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Payment Network</label>
+            <div style="display: flex; gap: 16px; margin-top: 6px; flex-wrap: wrap;">
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #fff;">
+                <input type="radio" name="paymentChain" value="base" checked onchange="onChainChange()"> Base Mainnet (EVM USDC)
+              </label>
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #fff;">
+                <input type="radio" name="paymentChain" value="solana" onchange="onChainChange()"> Solana Mainnet (SVM USDC)
+              </label>
+            </div>
+          </div>
+
+          <div id="solanaConfigGroup" style="display: none; background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.25); border-radius: 8px; padding: 14px; margin-bottom: 16px;">
+            <div class="form-group" style="margin-bottom: 12px;">
+              <label for="solanaWalletSelect">Solana Wallet Provider (Wallet Standard / Injected)</label>
+              <select id="solanaWalletSelect" onchange="onSolanaWalletSelectChange()">
+                <option value="auto">Auto-detect (Active Solana Extension / Standard)</option>
+              </select>
+              <span id="solanaWalletStatus" style="font-size: 0.78rem; color: var(--text-muted); display: block; margin-top: 4px;">Supports MetaMask Solana, Phantom, Solflare, Backpack, or Wallet Standard.</span>
+            </div>
+            <div class="form-group" style="margin-bottom: 4px;">
+              <label for="solanaRpcUrl">Solana RPC Endpoint (CORS-friendly)</label>
+              <input type="text" id="solanaRpcUrl" value="https://solana.publicnode.com" placeholder="https://solana.publicnode.com">
+              <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px;">Used for recent blockhash and balance pre-flight checks. Fallbacks: debridge.finance, ankr, solana-mainnet.</span>
             </div>
           </div>
 
@@ -303,7 +344,7 @@ https://quotes.toscrape.com/js/</textarea>
           <div class="tabs" id="codeTabs">
             <button class="tab active" onclick="switchCodeTab('curl')">cURL</button>
             <button class="tab" onclick="switchCodeTab('python')">Python (x402)</button>
-            <button class="tab" onclick="switchCodeTab('typescript')">TypeScript (viem)</button>
+            <button class="tab" onclick="switchCodeTab('typescript')">TypeScript (viem / @solana)</button>
             <button class="tab" onclick="switchCodeTab('mcp')">MCP Config</button>
           </div>
           <pre id="snippetCurl" class="snippet-content" style="display: block;"></pre>
@@ -401,13 +442,111 @@ https://quotes.toscrape.com/js/</textarea>
   </div>
 
 <script>
+  // Chain and Network Constants
   const BASE_CHAIN_ID = 8453;
   const BASE_CHAIN_HEX = "0x2105";
+  const BASE_USDC_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const BASE_PAY_TO = "0xE29Fcb6ef1534d5F138E48a8A71370BE7770A786";
+
+  const SOLANA_NETWORK = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+  const SOLANA_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const SOLANA_PAY_TO = "88hE4EB4yZwb4F2arPXcG7efwQyU5FDN26DuVpVKVk2W";
+  const SOLANA_FEE_PAYER = "BENrLoUbndxoNMUS5JXApGMtNykLjFXXixMtpDwDR9SP";
+  const TOKEN_PROGRAM_ID_STR = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+  const ATA_PROGRAM_ID_STR = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+  const COMPUTE_BUDGET_PROGRAM_STR = "ComputeBudget111111111111111111111111111111";
+  const MEMO_PROGRAM_STR = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
 
   let buyerAccount = null;
+  let solanaBuyerPubkey = null;
   let cached402Challenge = null;
   let currentScreenshotBase64 = null;
   let currentScreenshotMime = null;
+
+  // Wallet Standard Discovery State
+  const registeredWallets = new Map();
+
+  function isSolanaWalletStandard(wallet) {
+    if (!wallet || !wallet.features) return false;
+    const hasSignTx = !!wallet.features['solana:signTransaction'];
+    const hasConnect = !!wallet.features['standard:connect'];
+    const hasSolanaChain = wallet.chains && wallet.chains.some(c => c && c.startsWith('solana:'));
+    return hasSignTx || (hasConnect && hasSolanaChain);
+  }
+
+  function registerWalletStandard(wallet) {
+    if (!wallet || !wallet.name) return;
+    if (isSolanaWalletStandard(wallet) || wallet.name.toLowerCase().includes('solana') || wallet.name.toLowerCase().includes('phantom') || wallet.name.toLowerCase().includes('solflare')) {
+      if (!registeredWallets.has(wallet.name)) {
+        registeredWallets.set(wallet.name, wallet);
+        refreshSolanaWalletOptions();
+      }
+    }
+  }
+
+  window.addEventListener('wallet-standard:register-wallet', (event) => {
+    if (event.detail) registerWalletStandard(event.detail);
+  });
+
+  try {
+    if (window.navigator && window.navigator.wallets && Array.isArray(window.navigator.wallets)) {
+      window.navigator.wallets.forEach(registerWalletStandard);
+    }
+  } catch(e) {}
+
+  try {
+    window.dispatchEvent(new CustomEvent('wallet-standard:app-ready'));
+  } catch(e) {}
+
+  function refreshSolanaWalletOptions() {
+    const sel = document.getElementById('solanaWalletSelect');
+    if (!sel) return;
+    const currentVal = sel.value;
+    const options = [];
+
+    options.push({ value: 'auto', label: 'Auto-detect (Active Solana Extension / Standard)' });
+
+    // Discovered Wallet Standard
+    for (const [name, wallet] of registeredWallets.entries()) {
+      options.push({ value: 'standard:' + name, label: `${name} (Wallet Standard)` });
+    }
+
+    // Injected providers
+    if (window.phantom && window.phantom.solana) {
+      if (!registeredWallets.has('Phantom')) {
+        options.push({ value: 'phantom', label: 'Phantom (Injected)' });
+      }
+    }
+    if (window.solflare) {
+      if (!registeredWallets.has('Solflare')) {
+        options.push({ value: 'solflare', label: 'Solflare (Injected)' });
+      }
+    }
+    if (window.backpack) {
+      if (!registeredWallets.has('Backpack')) {
+        options.push({ value: 'backpack', label: 'Backpack (Injected)' });
+      }
+    }
+    if (window.ethereum) {
+      options.push({ value: 'metamask_snap', label: 'MetaMask (Solana Snap via Solflare)' });
+    }
+    if (window.solana && !window.phantom) {
+      options.push({ value: 'solana_injected', label: 'Generic window.solana' });
+    }
+
+    sel.innerHTML = '';
+    options.forEach(opt => {
+      const el = document.createElement('option');
+      el.value = opt.value;
+      el.textContent = opt.label;
+      if (opt.value === currentVal) el.selected = true;
+      sel.appendChild(el);
+    });
+  }
+
+  function onSolanaWalletSelectChange() {
+    // Optional status update
+  }
 
   function getOperationMode() {
     const radios = document.getElementsByName('operationMode');
@@ -415,6 +554,14 @@ https://quotes.toscrape.com/js/</textarea>
       if (r.checked) return r.value;
     }
     return 'fetch';
+  }
+
+  function getPaymentChain() {
+    const radios = document.getElementsByName('paymentChain');
+    for (const r of radios) {
+      if (r.checked) return r.value;
+    }
+    return 'base';
   }
 
   function getBatchUrls() {
@@ -426,6 +573,18 @@ https://quotes.toscrape.com/js/</textarea>
     return isNaN(val) ? 8000 : Math.max(1000, Math.min(20000, val));
   }
 
+  function updatePaidBtnText() {
+    const mode = getOperationMode();
+    const chain = getPaymentChain();
+    const isSolana = chain === 'solana';
+    const prefix = isSolana ? 'Connect Solana Wallet &amp; ' : 'Connect Wallet &amp; ';
+    let action = 'Fetch ($0.005 USDC)';
+    if (mode === 'screenshot') action = 'Screenshot ($0.01 USDC)';
+    else if (mode === 'inspect') action = 'Inspect ($0.005 USDC)';
+    else if (mode === 'batch_fetch') action = 'Batch Fetch ($0.015 USDC)';
+    document.getElementById('paidBtn').innerHTML = `&#9889; ${prefix}${action}`;
+  }
+
   function onModeChange() {
     const mode = getOperationMode();
     document.getElementById('singleUrlGroup').style.display = mode === 'batch_fetch' ? 'none' : 'block';
@@ -433,16 +592,23 @@ https://quotes.toscrape.com/js/</textarea>
     document.getElementById('screenshotOptions').style.display = mode === 'screenshot' ? 'block' : 'none';
     document.getElementById('inspectOptions').style.display = mode === 'inspect' ? 'block' : 'none';
     document.getElementById('batchFetchOptions').style.display = mode === 'batch_fetch' ? 'block' : 'none';
-    if (mode === 'screenshot') {
-      document.getElementById('paidBtn').innerHTML = '&#9889; Connect Wallet &amp; Screenshot ($0.01 USDC)';
-    } else if (mode === 'inspect') {
-      document.getElementById('paidBtn').innerHTML = '&#9889; Connect Wallet &amp; Inspect ($0.005 USDC)';
-    } else if (mode === 'batch_fetch') {
-      document.getElementById('paidBtn').innerHTML = '&#9889; Connect Wallet &amp; Batch Fetch ($0.015 USDC)';
-    } else {
-      document.getElementById('paidBtn').innerHTML = '&#9889; Connect Wallet &amp; Fetch ($0.005 USDC)';
-    }
+    updatePaidBtnText();
     cached402Challenge = null;
+    updateSnippets();
+  }
+
+  function onChainChange() {
+    const chain = getPaymentChain();
+    const isSolana = chain === 'solana';
+    const configGroup = document.getElementById('solanaConfigGroup');
+    if (configGroup) configGroup.style.display = isSolana ? 'block' : 'none';
+    const chainBadge = document.getElementById('chainBadge');
+    if (chainBadge) {
+      chainBadge.style.display = 'inline-block';
+      chainBadge.textContent = isSolana ? 'Solana Mainnet' : 'Base Mainnet';
+      chainBadge.className = isSolana ? 'badge badge-solana' : 'badge';
+    }
+    updatePaidBtnText();
     updateSnippets();
   }
 
@@ -569,16 +735,30 @@ https://quotes.toscrape.com/js/</textarea>
       }
 
       const bodyData = await fetchResp.json().catch(() => null);
-      const acc = (challenge && challenge.accepts && challenge.accepts[0]) || {};
-      const network = acc.network || 'eip155:8453';
-      const payTo = acc.payTo || '0xE29Fcb6ef1534d5F138E48a8A71370BE7770A786';
-      const price = acc.amount === '10000' ? '$0.01 USDC' : '$0.005 USDC';
+      const accepts = (challenge && challenge.accepts) || [];
+      const baseAccept = accepts.find(a => a.network && a.network.startsWith('eip155:')) || accepts[0] || {};
+      const solanaAccept = accepts.find(a => a.network && a.network.startsWith('solana:')) || null;
+
+      const network = baseAccept.network || 'eip155:8453';
+      const payTo = baseAccept.payTo || BASE_PAY_TO;
+      const price = (baseAccept.amount === '10000' || expectedAmount === '10000') ? '$0.01 USDC' : ((baseAccept.amount === '15000' || expectedAmount === '15000') ? '$0.015 USDC' : '$0.005 USDC');
+
+      let solanaHtml = '';
+      let solanaMd = '';
+      let solanaTxt = '';
+      if (solanaAccept) {
+        const solPayTo = solanaAccept.payTo || SOLANA_PAY_TO;
+        const solFeePayer = (solanaAccept.extra && solanaAccept.extra.feePayer) || SOLANA_FEE_PAYER;
+        solanaHtml = `<br>&bull; <strong>Solana Mainnet (SVM):</strong> <code>${solanaAccept.network}</code> | Pay To: <code style="word-break:break-all;">${solPayTo}</code> | Fee Payer: <code>${solFeePayer}</code>`;
+        solanaMd = `\n\n#### 2. Solana Mainnet (SVM SPL Token)\n- **Network:** \`${solanaAccept.network}\`\n- **Pay To:** \`${solPayTo}\`\n- **Asset Contract:** \`${solanaAccept.asset}\`\n- **Facilitator Fee Payer:** \`${solFeePayer}\``;
+        solanaTxt = `\n- Solana SVM: ${solanaAccept.network} -> ${solPayTo} (Fee Payer: ${solFeePayer})`;
+      }
 
       showStatus(`&#10004; <strong>Gateway Online (mode: ${hData.mode || 'isolated_browser'})</strong><br>
 Operation: <strong>${opName}</strong><br>
-Payment Requirement: <strong>${price}</strong> (${acc.amount || expectedAmount} atomic units)<br>
+Payment Requirement: <strong>${price}</strong> (${baseAccept.amount || expectedAmount} atomic units)<br>
 Network: <code>${network}</code><br>
-Pay To: <code style="word-break:break-all;">${payTo}</code>`, "warning");
+Pay To: <code style="word-break:break-all;">${payTo}</code>${solanaHtml}`, "warning");
 
       document.getElementById('metaOutput').textContent = JSON.stringify({
         health: hData,
@@ -592,17 +772,21 @@ Pay To: <code style="word-break:break-all;">${payTo}</code>`, "warning");
 `# HTTP 402 Payment Required
 
 - **Operation:** ${opName}
-- **Price:** ${price} (${acc.amount || expectedAmount} atomic units)
+- **Price:** ${price} (${baseAccept.amount || expectedAmount} atomic units)
+
+### Accepted Payment Rails
+
+#### 1. Base Mainnet (EVM EIP-712)
 - **Network:** \`${network}\`
 - **Pay To:** \`${payTo}\`
-- **Asset Contract:** \`${acc.asset || '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'}\`
+- **Asset Contract:** \`${baseAccept.asset || BASE_USDC_CONTRACT}\`${solanaMd}
 
 Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
 
       document.getElementById('textOutput').textContent = 
-`HTTP 402 Payment Required\nOperation: ${opName}\nPrice: ${price}\nNetwork: ${network}\nPay To: ${payTo}`;
+`HTTP 402 Payment Required\nOperation: ${opName}\nPrice: ${price}\nNetwork: ${network}\nPay To: ${payTo}${solanaTxt}`;
 
-      document.getElementById('previewIframe').srcdoc = "<p style='padding:20px;font-family:sans-serif;color:#d97706;'>HTTP 402 Payment Required. Sign in MetaMask to render webpage.</p>";
+      document.getElementById('previewIframe').srcdoc = "<p style='padding:20px;font-family:sans-serif;color:#d97706;'>HTTP 402 Payment Required. Connect wallet and sign to render webpage.</p>";
       switchOutputTab('meta');
     } catch(err) {
       showStatus(`&#10060; Request failed: ${err.message}`, "danger");
@@ -610,8 +794,632 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     }
   }
 
-  // Web3 Wallet Connect & Paid Fetch / Screenshot
-  async function connectAndFetchPaid() {
+  // Solana RPC and ATA Helpers
+  async function callSolanaRpc(method, params) {
+    const userRpc = document.getElementById('solanaRpcUrl').value.trim();
+    const rpcCandidates = [
+      userRpc,
+      "https://solana.publicnode.com",
+      "https://solana-rpc.debridge.finance",
+      "https://api.mainnet-beta.solana.com"
+    ].filter(Boolean);
+
+    let lastErr = null;
+    for (const endpoint of rpcCandidates) {
+      try {
+        const resp = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: Date.now(),
+            method: method,
+            params: params
+          })
+        });
+        if (!resp.ok) continue;
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+        return data.result;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error(`RPC call ${method} failed across endpoints`);
+  }
+
+  async function fetchRecentSolanaBlockhash() {
+    const result = await callSolanaRpc("getLatestBlockhash", [{ commitment: "confirmed" }]);
+    if (result && result.value && result.value.blockhash) {
+      return result.value.blockhash;
+    }
+    throw new Error("Unable to obtain recent blockhash from Solana RPC.");
+  }
+
+  function deriveAta(ownerStr, mintStr) {
+    if (typeof solanaWeb3 === 'undefined') return null;
+    const ownerPubkey = new solanaWeb3.PublicKey(ownerStr);
+    const mintPubkey = new solanaWeb3.PublicKey(mintStr);
+    const tokenProg = new solanaWeb3.PublicKey(TOKEN_PROGRAM_ID_STR);
+    const ataProg = new solanaWeb3.PublicKey(ATA_PROGRAM_ID_STR);
+    const [ata] = solanaWeb3.PublicKey.findProgramAddressSync(
+      [ownerPubkey.toBuffer(), tokenProg.toBuffer(), mintPubkey.toBuffer()],
+      ataProg
+    );
+    return ata;
+  }
+
+  async function performSolanaPreflightChecks(buyerPubkeyStr, accept) {
+    const sellerPubkeyStr = accept.payTo || SOLANA_PAY_TO;
+    const mintStr = accept.asset || SOLANA_USDC_MINT;
+    const requiredAmount = BigInt(accept.amount || "5000");
+
+    // 1. Check Seller ATA
+    const sellerAta = deriveAta(sellerPubkeyStr, mintStr);
+    if (sellerAta) {
+      try {
+        const sellerInfo = await callSolanaRpc("getAccountInfo", [sellerAta.toBase58(), { encoding: "base64" }]);
+        if (!sellerInfo || !sellerInfo.value) {
+          showStatus(
+            `&#9888; <strong>Seller ATA Warning:</strong> The Seller USDC ATA (<code style="word-break:break-all;">${sellerAta.toBase58()}</code>) has not been initialized on Solana mainnet yet.<br>` +
+            `Before this transfer can succeed, send $0.01 Solana USDC to the seller address <code style="word-break:break-all;">${sellerPubkeyStr}</code> once to initialize its ATA.`,
+            "warning"
+          );
+        }
+      } catch(e) {
+        console.warn("Seller ATA preflight warning:", e);
+      }
+    }
+
+    // 2. Check Buyer ATA & balance
+    const buyerAta = deriveAta(buyerPubkeyStr, mintStr);
+    if (buyerAta) {
+      try {
+        const buyerInfo = await callSolanaRpc("getAccountInfo", [buyerAta.toBase58(), { encoding: "base64" }]);
+        if (!buyerInfo || !buyerInfo.value) {
+          throw new Error(
+            `Buyer account (${buyerPubkeyStr.slice(0, 6)}...${buyerPubkeyStr.slice(-4)}) has no USDC token account (ATA: ${buyerAta.toBase58().slice(0, 6)}...). You need at least 0.005 USDC on Solana Mainnet to pay. (Network gas is sponsored by facilitator).`
+          );
+        }
+        if (buyerInfo.value.data && buyerInfo.value.data[0]) {
+          const binStr = atob(buyerInfo.value.data[0]);
+          const rawBytes = new Uint8Array(binStr.length);
+          for (let i = 0; i < binStr.length; i++) rawBytes[i] = binStr.charCodeAt(i);
+          if (rawBytes.length >= 72) {
+            const dv = new DataView(rawBytes.buffer);
+            const balance = dv.getBigUint64(64, true);
+            if (balance < requiredAmount) {
+              const balanceUsdc = (Number(balance) / 1000000).toFixed(4);
+              const requiredUsdc = (Number(requiredAmount) / 1000000).toFixed(4);
+              throw new Error(
+                `Insufficient USDC balance: Account has ${balanceUsdc} USDC (${balance} atomic units), but retrieval requires ${requiredUsdc} USDC (${requiredAmount} units).`
+              );
+            }
+          }
+        }
+      } catch (err) {
+        if (err.message.includes("Insufficient") || err.message.includes("no USDC")) {
+          throw err;
+        }
+        console.warn("Buyer ATA preflight check warning:", err);
+      }
+    }
+  }
+
+  function buildSolanaTransaction(blockhash, buyerPubkey, solanaAccept) {
+    const feePayer = new solanaWeb3.PublicKey((solanaAccept.extra && solanaAccept.extra.feePayer) || SOLANA_FEE_PAYER);
+    const seller = new solanaWeb3.PublicKey(solanaAccept.payTo || SOLANA_PAY_TO);
+    const mint = new solanaWeb3.PublicKey(solanaAccept.asset || SOLANA_USDC_MINT);
+    const tokenProg = new solanaWeb3.PublicKey(TOKEN_PROGRAM_ID_STR);
+    const memoProg = new solanaWeb3.PublicKey(MEMO_PROGRAM_STR);
+
+    const buyerAta = deriveAta(buyerPubkey.toBase58(), mint.toBase58());
+    const sellerAta = deriveAta(seller.toBase58(), mint.toBase58());
+
+    // 1. SetComputeUnitLimit instruction (20,000 units)
+    const cuLimitIx = solanaWeb3.ComputeBudgetProgram.setComputeUnitLimit({ units: 20000 });
+
+    // 2. SetComputeUnitPrice instruction (1 microLamport)
+    const cuPriceIx = solanaWeb3.ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1 });
+
+    // 3. SPL TransferChecked instruction
+    // Data: [12 (discriminator), u64 amount (little-endian), u8 decimals (6)]
+    const amountVal = BigInt(solanaAccept.amount || "5000");
+    const transferData = new Uint8Array(10);
+    transferData[0] = 12;
+    const dv = new DataView(transferData.buffer);
+    dv.setBigUint64(1, amountVal, true);
+    transferData[9] = 6;
+
+    const transferIx = new solanaWeb3.TransactionInstruction({
+      programId: tokenProg,
+      keys: [
+        { pubkey: buyerAta, isSigner: false, isWritable: true },
+        { pubkey: mint, isSigner: false, isWritable: false },
+        { pubkey: sellerAta, isSigner: false, isWritable: true },
+        { pubkey: buyerPubkey, isSigner: true, isWritable: false }
+      ],
+      data: transferData
+    });
+
+    // 4. Memo instruction (16 random hex bytes)
+    let memoStr = (solanaAccept.extra && solanaAccept.extra.memo) || null;
+    if (!memoStr) {
+      const memoBytes = new Uint8Array(16);
+      crypto.getRandomValues(memoBytes);
+      let hex = '';
+      for (let i = 0; i < memoBytes.length; i++) hex += memoBytes[i].toString(16).padStart(2, '0');
+      memoStr = hex;
+    }
+    const memoData = new TextEncoder().encode(memoStr);
+    const memoIx = new solanaWeb3.TransactionInstruction({
+      programId: memoProg,
+      keys: [],
+      data: memoData
+    });
+
+    const msg = new solanaWeb3.TransactionMessage({
+      payerKey: feePayer,
+      recentBlockhash: blockhash,
+      instructions: [cuLimitIx, cuPriceIx, transferIx, memoIx]
+    }).compileToV0Message();
+
+    return new solanaWeb3.VersionedTransaction(msg);
+  }
+
+  async function getConnectedSolanaSigner() {
+    const sel = document.getElementById('solanaWalletSelect');
+    const selectedMode = sel ? sel.value : 'auto';
+
+    // 1. Specific Wallet Standard selection
+    if (selectedMode.startsWith('standard:')) {
+      const name = selectedMode.slice('standard:'.length);
+      const wallet = registeredWallets.get(name);
+      if (!wallet) throw new Error(`Selected wallet ${name} is no longer available.`);
+      const connectFeature = wallet.features['standard:connect'];
+      if (!connectFeature) throw new Error(`Wallet ${name} does not implement standard:connect.`);
+      const connResult = await connectFeature.connect();
+      const account = connResult.accounts[0];
+      if (!account) throw new Error(`No account returned from ${name}.`);
+      const pubkey = new solanaWeb3.PublicKey(account.publicKey || account.address);
+      return {
+        type: 'standard',
+        name: wallet.name,
+        account: account,
+        pubkey: pubkey,
+        signTransaction: async (tx) => {
+          const signFeature = wallet.features['solana:signTransaction'];
+          if (!signFeature) throw new Error(`Wallet ${name} does not support solana:signTransaction.`);
+          let results;
+          try {
+            results = await signFeature.signTransaction({
+              transaction: tx.serialize(),
+              account: account
+            });
+          } catch(e) {
+            results = await signFeature.signTransaction({
+              transaction: tx,
+              account: account
+            });
+          }
+          const item = results[0];
+          return item.signedTransaction || (item.serialize ? item.serialize() : item);
+        }
+      };
+    }
+
+    // 2. MetaMask Solana Snap
+    if (selectedMode === 'metamask_snap') {
+      if (!window.ethereum) throw new Error("MetaMask is not detected in this browser.");
+      const snapId = 'npm:@solflare-wallet/metamask-snap';
+      await window.ethereum.request({
+        method: 'wallet_requestSnaps',
+        params: { [snapId]: {} }
+      });
+      const snapAccount = await window.ethereum.request({
+        method: 'wallet_invokeSnap',
+        params: {
+          snapId: snapId,
+          request: { method: 'getAccount' }
+        }
+      });
+      if (!snapAccount || (!snapAccount.publicKey && !snapAccount.address)) {
+        throw new Error("Could not retrieve Solana public key from MetaMask Snap.");
+      }
+      const pubkey = new solanaWeb3.PublicKey(snapAccount.publicKey || snapAccount.address);
+      return {
+        type: 'snap',
+        name: 'MetaMask Solana Snap',
+        pubkey: pubkey,
+        signTransaction: async (tx) => {
+          const raw = tx.serialize();
+          let binary = '';
+          for (let i = 0; i < raw.length; i++) binary += String.fromCharCode(raw[i]);
+          const txBase64 = btoa(binary);
+          const snapRes = await window.ethereum.request({
+            method: 'wallet_invokeSnap',
+            params: {
+              snapId: snapId,
+              request: {
+                method: 'signTransaction',
+                params: { transaction: txBase64 }
+              }
+            }
+          });
+          const signedB64 = snapRes.transaction || snapRes;
+          const binStr = atob(signedB64);
+          const out = new Uint8Array(binStr.length);
+          for (let i = 0; i < binStr.length; i++) out[i] = binStr.charCodeAt(i);
+          return out;
+        }
+      };
+    }
+
+    // 3. Phantom explicit or auto
+    if (selectedMode === 'phantom' || (selectedMode === 'auto' && window.phantom && window.phantom.solana)) {
+      const provider = window.phantom ? window.phantom.solana : window.solana;
+      const resp = await provider.connect();
+      const pubkey = resp.publicKey || provider.publicKey;
+      return {
+        type: 'injected',
+        name: 'Phantom',
+        pubkey: pubkey,
+        signTransaction: async (tx) => {
+          const signed = await provider.signTransaction(tx);
+          return signed.serialize();
+        }
+      };
+    }
+
+    // 4. Solflare explicit or auto
+    if (selectedMode === 'solflare' || (selectedMode === 'auto' && window.solflare)) {
+      const provider = window.solflare;
+      await provider.connect();
+      const pubkey = provider.publicKey;
+      return {
+        type: 'injected',
+        name: 'Solflare',
+        pubkey: pubkey,
+        signTransaction: async (tx) => {
+          const signed = await provider.signTransaction(tx);
+          return signed.serialize();
+        }
+      };
+    }
+
+    // 5. Backpack explicit or auto
+    if (selectedMode === 'backpack' || (selectedMode === 'auto' && window.backpack)) {
+      const provider = window.backpack;
+      await provider.connect();
+      const pubkey = provider.publicKey;
+      return {
+        type: 'injected',
+        name: 'Backpack',
+        pubkey: pubkey,
+        signTransaction: async (tx) => {
+          const signed = await provider.signTransaction(tx);
+          return signed.serialize();
+        }
+      };
+    }
+
+    // 6. Generic window.solana
+    if (window.solana) {
+      const provider = window.solana;
+      const resp = await provider.connect();
+      const pubkey = (resp && resp.publicKey) || provider.publicKey;
+      return {
+        type: 'injected',
+        name: 'Solana Wallet',
+        pubkey: pubkey,
+        signTransaction: async (tx) => {
+          const signed = await provider.signTransaction(tx);
+          return signed.serialize();
+        }
+      };
+    }
+
+    // 7. Check if any Wallet Standard wallet is registered
+    if (registeredWallets.size > 0) {
+      const firstWallet = registeredWallets.values().next().value;
+      const connResult = await firstWallet.features['standard:connect'].connect();
+      const account = connResult.accounts[0];
+      const pubkey = new solanaWeb3.PublicKey(account.publicKey || account.address);
+      return {
+        type: 'standard',
+        name: firstWallet.name,
+        account: account,
+        pubkey: pubkey,
+        signTransaction: async (tx) => {
+          const signFeature = firstWallet.features['solana:signTransaction'];
+          const results = await signFeature.signTransaction({
+            transaction: tx.serialize(),
+            account: account
+          });
+          const item = results[0];
+          return item.signedTransaction || item;
+        }
+      };
+    }
+
+    // 8. If only window.ethereum is available, try MetaMask Solana Snap automatically
+    if (window.ethereum) {
+      const snapId = 'npm:@solflare-wallet/metamask-snap';
+      await window.ethereum.request({
+        method: 'wallet_requestSnaps',
+        params: { [snapId]: {} }
+      });
+      const snapAccount = await window.ethereum.request({
+        method: 'wallet_invokeSnap',
+        params: {
+          snapId: snapId,
+          request: { method: 'getAccount' }
+        }
+      });
+      if (snapAccount && (snapAccount.publicKey || snapAccount.address)) {
+        const pubkey = new solanaWeb3.PublicKey(snapAccount.publicKey || snapAccount.address);
+        return {
+          type: 'snap',
+          name: 'MetaMask Solana Snap',
+          pubkey: pubkey,
+          signTransaction: async (tx) => {
+            const raw = tx.serialize();
+            let binary = '';
+            for (let i = 0; i < raw.length; i++) binary += String.fromCharCode(raw[i]);
+            const txBase64 = btoa(binary);
+            const snapRes = await window.ethereum.request({
+              method: 'wallet_invokeSnap',
+              params: {
+                snapId: snapId,
+                request: {
+                  method: 'signTransaction',
+                  params: { transaction: txBase64 }
+                }
+              }
+            });
+            const signedB64 = snapRes.transaction || snapRes;
+            const binStr = atob(signedB64);
+            const out = new Uint8Array(binStr.length);
+            for (let i = 0; i < binStr.length; i++) out[i] = binStr.charCodeAt(i);
+            return out;
+          }
+        };
+      }
+    }
+
+    throw new Error("No Solana wallet detected. Please install Phantom, Solflare, Backpack, or enable the MetaMask Solana Snap.");
+  }
+
+  // Common response result renderer
+  function handlePaidSuccessDisplay(respData, mode, statusCode, settlement, networkLabel) {
+    if (mode === 'screenshot') {
+      currentScreenshotBase64 = respData.image_base64;
+      currentScreenshotMime = respData.mime_type || 'image/jpeg';
+      const img = document.getElementById('screenshotImg');
+      img.src = `data:${currentScreenshotMime};base64,${currentScreenshotBase64}`;
+      img.style.display = 'inline-block';
+      document.getElementById('screenshotPlaceholder').style.display = 'none';
+      document.getElementById('downloadScreenshotBtn').style.display = 'inline-flex';
+      document.getElementById('screenshotMetrics').textContent = 
+        `Dimensions: ${respData.width}x${respData.height} | Format: ${respData.image_format} | Size: ${(respData.byte_size / 1024).toFixed(1)} KB | Viewport: ${respData.viewport} (Full Page: ${respData.full_page})`;
+      switchOutputTab('screenshot');
+    } else if (mode === 'inspect') {
+      renderInspectOutput(respData);
+      switchOutputTab('inspect');
+    } else if (mode === 'batch_fetch') {
+      renderBatchOutput(respData);
+      switchOutputTab('batch');
+    } else {
+      document.getElementById('markdownOutput').textContent = respData.markdown || respData.content || "No Markdown returned.";
+      document.getElementById('textOutput').textContent = respData.content || "";
+      document.getElementById('textMetrics').textContent = `Words: ${respData.word_count || 0} | Chars: ${respData.returned_content_chars || (respData.content ? respData.content.length : 0)} ${respData.page_count ? '| PDF Pages: ' + respData.page_count : ''}`;
+
+      if (respData.html) {
+        document.getElementById('previewIframe').srcdoc = respData.html;
+      } else {
+        document.getElementById('previewIframe').srcdoc = `<pre style="font-family:sans-serif;padding:20px;">${escapeHtml(respData.content || '')}</pre>`;
+      }
+      switchOutputTab('markdown');
+    }
+
+    document.getElementById('metaOutput').textContent = JSON.stringify({
+      status: statusCode,
+      settlement: settlement,
+      result: respData
+    }, null, 2);
+  }
+
+  // Solana Paid Fetch Execution
+  async function connectAndFetchPaidSolana() {
+    const gateway = gatewayUrlInput.value.trim().replace(/\/+$/, '');
+    const target = targetUrlInput.value.trim();
+    const mode = getOperationMode();
+
+    if (isSSRF(target)) {
+      showStatus("&#10060; <strong>SSRF Blocked:</strong> Internal / private address (localhost, 127.0.0.1, 169.254.169.254) forbidden client-side.", "danger");
+      return;
+    }
+
+    const btn = document.getElementById('paidBtn');
+    btn.disabled = true;
+
+    try {
+      showStatus("Connecting to Solana Wallet...", "info");
+      const signer = await getConnectedSolanaSigner();
+      solanaBuyerPubkey = signer.pubkey;
+      const buyerStr = solanaBuyerPubkey.toBase58();
+      document.getElementById('walletAddress').textContent = buyerStr.slice(0, 4) + '...' + buyerStr.slice(-4);
+      const chainBadge = document.getElementById('chainBadge');
+      if (chainBadge) {
+        chainBadge.style.display = 'inline-block';
+        chainBadge.textContent = 'Solana Mainnet';
+        chainBadge.className = 'badge badge-solana';
+      }
+
+      // 1. Fetch challenge
+      let endpoint = `${gateway}/fetch`;
+      let expectedAmount = '5000';
+      let opName = "SmartFetch Web Reader";
+      if (mode === 'screenshot') {
+        endpoint = `${gateway}/screenshot`;
+        expectedAmount = '10000';
+        opName = "SmartFetch Screenshot";
+      } else if (mode === 'inspect') {
+        endpoint = `${gateway}/inspect`;
+        expectedAmount = '5000';
+        opName = "SmartFetch Site Inspector";
+      } else if (mode === 'batch_fetch') {
+        endpoint = `${gateway}/batch-fetch`;
+        expectedAmount = '15000';
+        opName = "SmartFetch Batch Fetcher";
+      }
+      const priceLabel = mode === 'screenshot' ? '$0.01' : (mode === 'batch_fetch' ? '$0.015' : '$0.005');
+
+      showStatus("Obtaining live 402 payment requirements from gateway...", "info");
+      const initialResp = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mode === 'batch_fetch' ? { urls: getBatchUrls() } : { url: target })
+      });
+
+      const reqHeader = initialResp.headers.get('payment-required') || initialResp.headers.get('PAYMENT-REQUIRED');
+      let challenge = null;
+      if (reqHeader) {
+        challenge = JSON.parse(decodeURIComponent(escape(atob(reqHeader))));
+        cached402Challenge = challenge;
+      }
+
+      const accepts = (challenge && challenge.accepts) || [];
+      const solanaAccept = accepts.find(a => a.network && a.network.startsWith('solana:')) || {
+        scheme: "exact",
+        network: SOLANA_NETWORK,
+        asset: SOLANA_USDC_MINT,
+        amount: expectedAmount,
+        payTo: SOLANA_PAY_TO,
+        maxTimeoutSeconds: 300,
+        extra: { feePayer: SOLANA_FEE_PAYER }
+      };
+
+      // 2. Pre-flight checks on-chain (Seller ATA existence & Buyer USDC balance)
+      showStatus("Running on-chain pre-flight checks (verifying Seller & Buyer USDC accounts)...", "info");
+      await performSolanaPreflightChecks(buyerStr, solanaAccept);
+
+      // 3. Fetch recent blockhash
+      showStatus("Fetching recent Solana blockhash...", "info");
+      const blockhash = await fetchRecentSolanaBlockhash();
+
+      // 4. Build VersionedTransaction
+      const tx = buildSolanaTransaction(blockhash, solanaBuyerPubkey, solanaAccept);
+
+      // 5. Sign transaction with wallet
+      showStatus(`<strong>Waiting for ${signer.name} approval...</strong><br>Approve the SPL TransferChecked transaction for ${priceLabel} USDC. (Facilitator sponsors SOL gas fees).`, "info");
+      const signedBytes = await signer.signTransaction(tx);
+
+      // Encode signed transaction to Base64
+      let binary = '';
+      for (let i = 0; i < signedBytes.length; i++) {
+        binary += String.fromCharCode(signedBytes[i]);
+      }
+      const signedTxBase64 = btoa(binary);
+
+      // 6. Construct x402 V2 PaymentPayload envelope
+      const envelope = {
+        x402Version: 2,
+        payload: {
+          transaction: signedTxBase64
+        },
+        accepted: solanaAccept,
+        resource: (challenge && challenge.resource) || {
+          url: endpoint,
+          description: opName,
+          mimeType: "application/json",
+          serviceName: "SmartFetch"
+        }
+      };
+
+      const sigBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(envelope))));
+
+      showStatus("<strong>Signature approved!</strong> Dispatching paid request to SmartFetch gateway &amp; isolated VPS worker...", "info");
+
+      let reqBody;
+      if (mode === 'screenshot') {
+        reqBody = {
+          url: target,
+          viewport: document.getElementById('screenshotViewport').value,
+          full_page: document.getElementById('screenshotFullPage').checked,
+          image_format: document.getElementById('screenshotFormat').value,
+          no_cache: noCacheCheckbox.checked
+        };
+      } else if (mode === 'inspect') {
+        reqBody = {
+          url: target,
+          render_mode: document.getElementById('inspectRenderMode').value,
+          no_cache: noCacheCheckbox.checked
+        };
+      } else if (mode === 'batch_fetch') {
+        reqBody = {
+          urls: getBatchUrls(),
+          max_chars_per_url: getBatchMaxChars(),
+          render_mode: document.getElementById('batchRenderMode').value,
+          no_cache: noCacheCheckbox.checked
+        };
+      } else {
+        reqBody = {
+          url: target,
+          max_chars: parseInt(maxCharsSlider.value, 10),
+          render_mode: renderModeSelect.value,
+          no_cache: noCacheCheckbox.checked,
+          include_html: includeHtmlCheckbox.checked
+        };
+        if (renderModeSelect.value === 'browser') {
+          reqBody.force_browser = true;
+        }
+      }
+
+      const paidResp = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'PAYMENT-SIGNATURE': sigBase64
+        },
+        body: JSON.stringify(reqBody)
+      });
+
+      setBadge(paidResp.status, paidResp.statusText);
+
+      const respData = await paidResp.json().catch(() => null);
+      const prHeader = paidResp.headers.get('payment-response') || paidResp.headers.get('PAYMENT-RESPONSE');
+      let settlement = null;
+      if (prHeader) {
+        try {
+          settlement = JSON.parse(decodeURIComponent(escape(atob(prHeader))));
+        } catch(e) { console.error("Error decoding payment-response header:", e); }
+      }
+
+      if (paidResp.status === 200 && respData && respData.success) {
+        const txSig = (settlement && settlement.transaction) || null;
+        let txHtml = "";
+        if (txSig) {
+          txHtml = `<br>Tx Signature: <a class="tx-link" href="https://solscan.io/tx/${txSig}" target="_blank">${txSig}</a>`;
+        }
+        showStatus(`&#10004; <strong>Success!</strong> Payment verified &amp; settled on Solana Mainnet. Rendered via: <code>${respData.render_method || 'browser'}</code> in ${respData.elapsed_ms || 0}ms.${txHtml}`, "success");
+
+        handlePaidSuccessDisplay(respData, mode, paidResp.status, settlement, "Solana Mainnet");
+      } else {
+        showStatus(`&#10060; Operation failed (HTTP ${paidResp.status}): ${JSON.stringify(respData)}`, "danger");
+        document.getElementById('metaOutput').textContent = JSON.stringify({ status: paidResp.status, body: respData }, null, 2);
+        switchOutputTab('meta');
+      }
+    } catch(err) {
+      showStatus(`&#10060; Solana payment failed: ${err.message}`, "danger");
+      console.error(err);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // Base EVM Paid Fetch Execution
+  async function connectAndFetchPaidBase() {
     if (!window.ethereum) {
       alert("No Web3 wallet (MetaMask / Coinbase Wallet) detected in this browser.");
       return;
@@ -634,6 +1442,12 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
       const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
       buyerAccount = accounts[0];
       document.getElementById('walletAddress').textContent = buyerAccount.slice(0, 6) + '...' + buyerAccount.slice(-4);
+      const chainBadge = document.getElementById('chainBadge');
+      if (chainBadge) {
+        chainBadge.style.display = 'inline-block';
+        chainBadge.textContent = 'Base Mainnet';
+        chainBadge.className = 'badge';
+      }
 
       // Verify Base Mainnet
       const chainIdHex = await window.ethereum.request({ method: 'eth_chainId' });
@@ -683,12 +1497,13 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
         cached402Challenge = challenge;
       }
 
-      const accepted = (challenge && challenge.accepts && challenge.accepts[0]) || {
+      const accepts = (challenge && challenge.accepts) || [];
+      const accepted = accepts.find(a => a.network && a.network.startsWith('eip155:')) || accepts[0] || {
         scheme: "exact",
         network: "eip155:8453",
-        asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        asset: BASE_USDC_CONTRACT,
         amount: expectedAmount,
-        payTo: "0xE29Fcb6ef1534d5F138E48a8A71370BE7770A786",
+        payTo: BASE_PAY_TO,
         maxTimeoutSeconds: 300,
         extra: { name: "USD Coin", version: "2" }
       };
@@ -721,7 +1536,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
           name: (accepted.extra && accepted.extra.name) || "USD Coin",
           version: (accepted.extra && accepted.extra.version) || "2",
           chainId: BASE_CHAIN_ID,
-          verifyingContract: accepted.asset
+          verifyingContract: accepted.asset || BASE_USDC_CONTRACT
         },
         message: {
           from: buyerAccount,
@@ -830,42 +1645,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
         }
         showStatus(`&#10004; <strong>Success!</strong> Payment verified &amp; settled on Base Mainnet. Rendered via: <code>${respData.render_method || 'browser'}</code> in ${respData.elapsed_ms || 0}ms.${txHtml}`, "success");
 
-        if (mode === 'screenshot') {
-          currentScreenshotBase64 = respData.image_base64;
-          currentScreenshotMime = respData.mime_type || 'image/jpeg';
-          const img = document.getElementById('screenshotImg');
-          img.src = `data:${currentScreenshotMime};base64,${currentScreenshotBase64}`;
-          img.style.display = 'inline-block';
-          document.getElementById('screenshotPlaceholder').style.display = 'none';
-          document.getElementById('downloadScreenshotBtn').style.display = 'inline-flex';
-          document.getElementById('screenshotMetrics').textContent = 
-            `Dimensions: ${respData.width}x${respData.height} | Format: ${respData.image_format} | Size: ${(respData.byte_size / 1024).toFixed(1)} KB | Viewport: ${respData.viewport} (Full Page: ${respData.full_page})`;
-          switchOutputTab('screenshot');
-        } else if (mode === 'inspect') {
-          renderInspectOutput(respData);
-          switchOutputTab('inspect');
-        } else if (mode === 'batch_fetch') {
-          renderBatchOutput(respData);
-          switchOutputTab('batch');
-        } else {
-          // Populate Tabs
-          document.getElementById('markdownOutput').textContent = respData.markdown || respData.content || "No Markdown returned.";
-          document.getElementById('textOutput').textContent = respData.content || "";
-          document.getElementById('textMetrics').textContent = `Words: ${respData.word_count || 0} | Chars: ${respData.returned_content_chars || (respData.content ? respData.content.length : 0)} ${respData.page_count ? '| PDF Pages: ' + respData.page_count : ''}`;
-
-          if (respData.html) {
-            document.getElementById('previewIframe').srcdoc = respData.html;
-          } else {
-            document.getElementById('previewIframe').srcdoc = `<pre style="font-family:sans-serif;padding:20px;">${escapeHtml(respData.content || '')}</pre>`;
-          }
-          switchOutputTab('markdown');
-        }
-
-        document.getElementById('metaOutput').textContent = JSON.stringify({
-          status: paidResp.status,
-          settlement: settlement,
-          result: respData
-        }, null, 2);
+        handlePaidSuccessDisplay(respData, mode, paidResp.status, settlement, "Base Mainnet");
       } else {
         showStatus(`&#10060; Operation failed (HTTP ${paidResp.status}): ${JSON.stringify(respData)}`, "danger");
         document.getElementById('metaOutput').textContent = JSON.stringify({ status: paidResp.status, body: respData }, null, 2);
@@ -876,6 +1656,16 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
       console.error(err);
     } finally {
       btn.disabled = false;
+    }
+  }
+
+  // Main Entrypoint for Paid Actions
+  async function connectAndFetchPaid() {
+    const chain = getPaymentChain();
+    if (chain === 'solana') {
+      await connectAndFetchPaidSolana();
+    } else {
+      await connectAndFetchPaidBase();
     }
   }
 
@@ -988,6 +1778,8 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     const gateway = gatewayUrlInput.value.trim().replace(/\/+$/, '');
     const target = targetUrlInput.value.trim();
     const mode = getOperationMode();
+    const chain = getPaymentChain();
+    const isSolana = chain === 'solana';
     const noCache = noCacheCheckbox.checked;
 
     if (mode === 'screenshot') {
@@ -1011,7 +1803,13 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
       // Python (x402)
       document.getElementById('snippetPython').textContent = 
 `import httpx
-from x402.client import x402Client
+from x402 import x402Client
+# Dual-chain payment support:
+# Base Mainnet (EVM):
+# from x402.mechanisms.evm.exact import ExactEvmClientScheme; client.register("eip155:8453", ExactEvmClientScheme(account))
+# Solana Mainnet (SVM):
+# from x402.mechanisms.svm.exact import ExactSvmClientScheme; from solders.keypair import Keypair
+# client.register("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", ExactSvmClientScheme(KeypairSigner(keypair)))
 
 client = x402Client()
 response = client.post(
@@ -1027,15 +1825,25 @@ response = client.post(
 data = response.json()
 print("Captured:", data.get("width"), "x", data.get("height"), "size:", data.get("byte_size"))`;
 
-      // TypeScript (viem)
-      document.getElementById('snippetTypescript').textContent = 
-`import { createWalletClient, custom } from 'viem';
+      // TypeScript
+      document.getElementById('snippetTypescript').textContent = isSolana
+? `// Solana Mainnet (SVM) Micropayment ($0.01 USDC)
+import { VersionedTransaction, TransactionMessage, PublicKey } from '@solana/web3.js';
+
+// 1. Fetch 402 challenge from ${gateway}/screenshot
+// 2. Build ComputeBudget + TransferChecked (amount: 10000) + Memo instruction
+// 3. Compile MessageV0 with feePayer: BENrLoUbndxoNMUS5JXApGMtNykLjFXXixMtpDwDR9SP
+// 4. Sign with wallet.features['solana:signTransaction']
+// 5. Retry POST with PAYMENT-SIGNATURE: <base64_x402_envelope>`
+: `// Base Mainnet (EVM) Micropayment ($0.01 USDC)
+import { createWalletClient, custom } from 'viem';
 import { base } from 'viem/chains';
 
 const client = createWalletClient({ chain: base, transport: custom(window.ethereum) });
 // 1. Fetch challenge from ${gateway}/screenshot ($0.01 USDC)
 // 2. Sign EIP-712 TransferWithAuthorization (amount: 10000 atomic units)
 // 3. Retry with PAYMENT-SIGNATURE: <base64_payload>`;
+
     } else if (mode === 'inspect') {
       const renderMode = document.getElementById('inspectRenderMode').value;
 
@@ -1053,7 +1861,8 @@ const client = createWalletClient({ chain: base, transport: custom(window.ethere
       // Python (x402)
       document.getElementById('snippetPython').textContent = 
 `import httpx
-from x402.client import x402Client
+from x402 import x402Client
+# Supports both Base Mainnet (eip155:8453) and Solana Mainnet (solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp)
 
 client = x402Client()
 response = client.post(
@@ -1069,15 +1878,24 @@ print("Title:", data.get("metadata", {}).get("title"))
 print("Tech Stack:", data.get("tech_stack"))
 print("Emails:", data.get("contacts", {}).get("emails"))`;
 
-      // TypeScript (viem)
-      document.getElementById('snippetTypescript').textContent = 
-`import { createWalletClient, custom } from 'viem';
+      // TypeScript
+      document.getElementById('snippetTypescript').textContent = isSolana
+? `// Solana Mainnet (SVM) Micropayment ($0.005 USDC)
+import { VersionedTransaction, TransactionMessage } from '@solana/web3.js';
+// 1. Fetch 402 challenge from ${gateway}/inspect
+// 2. Build ComputeBudget + TransferChecked (amount: 5000) + Memo instruction
+// 3. Compile MessageV0 with feePayer: BENrLoUbndxoNMUS5JXApGMtNykLjFXXixMtpDwDR9SP
+// 4. Sign with wallet.features['solana:signTransaction']
+// 5. Retry POST with PAYMENT-SIGNATURE: <base64_x402_envelope>`
+: `// Base Mainnet (EVM) Micropayment ($0.005 USDC)
+import { createWalletClient, custom } from 'viem';
 import { base } from 'viem/chains';
 
 const client = createWalletClient({ chain: base, transport: custom(window.ethereum) });
 // 1. Fetch challenge from ${gateway}/inspect ($0.005 USDC)
 // 2. Sign EIP-712 TransferWithAuthorization (amount: 5000 atomic units)
 // 3. Retry with PAYMENT-SIGNATURE: <base64_payload>`;
+
     } else if (mode === 'batch_fetch') {
       const urls = getBatchUrls();
       const maxChars = getBatchMaxChars();
@@ -1099,7 +1917,8 @@ const client = createWalletClient({ chain: base, transport: custom(window.ethere
       // Python (x402)
       document.getElementById('snippetPython').textContent = 
 `import httpx
-from x402.client import x402Client
+from x402 import x402Client
+# Supports dual-chain Base Mainnet & Solana Mainnet micropayments
 
 client = x402Client()
 response = client.post(
@@ -1114,17 +1933,26 @@ response = client.post(
 data = response.json()
 print("Succeeded:", data.get("succeeded_count"), "/", data.get("total_urls"))
 for item in data.get("results", []):
-    print(" -", item.get("title"), "(words:", item.get("word_count"), ")")`;
+    print(" -", item.get("title"), "(words:", item.get("word_count"), ")"`;
 
-      // TypeScript (viem)
-      document.getElementById('snippetTypescript').textContent = 
-`import { createWalletClient, custom } from 'viem';
+      // TypeScript
+      document.getElementById('snippetTypescript').textContent = isSolana
+? `// Solana Mainnet (SVM) Micropayment ($0.015 USDC)
+import { VersionedTransaction, TransactionMessage } from '@solana/web3.js';
+// 1. Fetch 402 challenge from ${gateway}/batch-fetch
+// 2. Build ComputeBudget + TransferChecked (amount: 15000) + Memo instruction
+// 3. Compile MessageV0 with feePayer: BENrLoUbndxoNMUS5JXApGMtNykLjFXXixMtpDwDR9SP
+// 4. Sign with wallet.features['solana:signTransaction']
+// 5. Retry POST with PAYMENT-SIGNATURE: <base64_x402_envelope>`
+: `// Base Mainnet (EVM) Micropayment ($0.015 USDC)
+import { createWalletClient, custom } from 'viem';
 import { base } from 'viem/chains';
 
 const client = createWalletClient({ chain: base, transport: custom(window.ethereum) });
 // 1. Fetch challenge from ${gateway}/batch-fetch ($0.015 USDC)
 // 2. Sign EIP-712 TransferWithAuthorization (amount: 15000 atomic units)
 // 3. Retry with PAYMENT-SIGNATURE: <base64_payload>`;
+
     } else {
       const maxChars = parseInt(maxCharsSlider.value, 10);
       const renderMode = renderModeSelect.value;
@@ -1146,7 +1974,8 @@ const client = createWalletClient({ chain: base, transport: custom(window.ethere
       // Python (x402)
       document.getElementById('snippetPython').textContent = 
 `import httpx
-from x402.client import x402Client
+from x402 import x402Client
+# Supports Base Mainnet (eip155:8453) and Solana Mainnet (solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp)
 
 client = x402Client()
 response = client.post(
@@ -1162,9 +1991,17 @@ response = client.post(
 print("Title:", response.json().get("title"))
 print("Content:", response.json().get("content")[:500])`;
 
-      // TypeScript (viem)
-      document.getElementById('snippetTypescript').textContent = 
-`import { createWalletClient, custom } from 'viem';
+      // TypeScript
+      document.getElementById('snippetTypescript').textContent = isSolana
+? `// Solana Mainnet (SVM) Micropayment ($0.005 USDC)
+import { VersionedTransaction, TransactionMessage } from '@solana/web3.js';
+// 1. Fetch 402 challenge from ${gateway}/fetch
+// 2. Build ComputeBudget + TransferChecked (amount: 5000) + Memo instruction
+// 3. Compile MessageV0 with feePayer: BENrLoUbndxoNMUS5JXApGMtNykLjFXXixMtpDwDR9SP
+// 4. Sign with wallet.features['solana:signTransaction']
+// 5. Retry POST with PAYMENT-SIGNATURE: <base64_x402_envelope>`
+: `// Base Mainnet (EVM) Micropayment ($0.005 USDC)
+import { createWalletClient, custom } from 'viem';
 import { base } from 'viem/chains';
 
 const client = createWalletClient({ chain: base, transport: custom(window.ethereum) });
@@ -1188,6 +2025,8 @@ JSON.stringify({
   }
 
   // Initial setup
+  refreshSolanaWalletOptions();
+  updatePaidBtnText();
   updateSnippets();
 </script>
 </body>

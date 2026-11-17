@@ -112,13 +112,37 @@ async def run_cdp_tests():
             assert "Gateway Online" in live_status, f"Expected Gateway Online in status, got: {live_status}"
             assert "$0.005 USDC" in live_status, f"Expected $0.005 USDC in status, got: {live_status}"
             assert "eip155:8453" in live_status, f"Expected eip155:8453 in status, got: {live_status}"
-            assert "0xE29Fcb6ef1534d5F138E48a8A71370BE7770A786" in live_status, f"Expected payTo in status, got: {live_status}"
+            assert "0xE29Fcb6ef1534d5F138E48a8A71370BE7770A786" in live_status, f"Expected Base payTo in status, got: {live_status}"
+            assert "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" in live_status, f"Expected Solana network in status, got: {live_status}"
+            assert "88hE4EB4yZwb4F2arPXcG7efwQyU5FDN26DuVpVKVk2W" in live_status, f"Expected Solana payTo in status, got: {live_status}"
+            assert "BENrLoUbndxoNMUS5JXApGMtNykLjFXXixMtpDwDR9SP" in live_status, f"Expected Solana feePayer in status, got: {live_status}"
 
             # Verify Markdown tab updated with 402 info
             md_text = await eval_js("document.getElementById('markdownOutput').textContent")
             print(f"[7] Markdown output snippet:\n{md_text[:200]}...")
             assert "HTTP 402 Payment Required" in md_text
             assert "0xE29Fcb6ef1534d5F138E48a8A71370BE7770A786" in md_text
+            assert "88hE4EB4yZwb4F2arPXcG7efwQyU5FDN26DuVpVKVk2W" in md_text
+
+            # Test 1b: Dual-chain switching to Solana
+            print("[7b] Testing chain switch to Solana...")
+            await eval_js("""(() => {
+                const solRadio = document.querySelector('input[name="paymentChain"][value="solana"]');
+                solRadio.checked = true;
+                solRadio.dispatchEvent(new Event('change'));
+            })()""")
+            await asyncio.sleep(0.3)
+            paid_text = await eval_js("document.getElementById('paidBtn').innerHTML")
+            sol_config_display = await eval_js("document.getElementById('solanaConfigGroup').style.display")
+            assert "Connect Solana Wallet" in paid_text, f"Expected Solana button text, got: {paid_text}"
+            assert sol_config_display == "block", f"Expected solanaConfigGroup to be block, got: {sol_config_display}"
+            print("[7c] Verified Solana radio switches button text and reveals Solana config block.")
+
+            # Test 1c: Verify browser Solana blockhash RPC fetch
+            print("[7d] Testing browser Solana blockhash RPC fetch...")
+            blockhash = await eval_js("fetchRecentSolanaBlockhash()")
+            assert blockhash and len(blockhash) > 20, f"Expected valid blockhash, got: {blockhash}"
+            print(f"[7e] Successfully fetched live Solana blockhash from browser: {blockhash[:12]}...")
 
             # Test 2: SSRF client-side defense check
             print("[8] Testing SSRF client-side defense...")
