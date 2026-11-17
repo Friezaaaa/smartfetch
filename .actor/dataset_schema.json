@@ -1,0 +1,48 @@
+{
+  "actorSpecification": 1,
+  "fields": {
+    "type": "object",
+    "properties": {
+      "action": { "type": "string", "title": "Action" },
+      "success": { "type": "boolean", "title": "Success" },
+      "requested_url": { "type": "string", "title": "Requested URL" },
+      "final_url": { "type": "string", "title": "Final URL" },
+      "status_code": { "type": "integer", "title": "HTTP Status Code" },
+      "title": { "type": "string", "title": "Page Title" },
+      "render_method": { "type": "string", "title": "Render Method" },
+      "elapsed_ms": { "type": "integer", "title": "Elapsed (ms)" },
+      "markdown": { "type": "string", "title": "Markdown Content" },
+      "content": { "type": "string", "title": "Plain Text Content" }
+    }
+  },
+  "views": {
+    "overview": {
+      "title": "Overview",
+      "transformation": {
+        "fields": [
+          "action",
+          "success",
+          "requested_url",
+          "final_url",
+          "status_code",
+          "title",
+          "render_method",
+          "elapsed_ms"
+        ]
+      },
+      "display": {
+        "component": "table",
+        "properties": {
+          "action": { "label": "Action", "format": "text" },
+          "success": { "label": "Success", "format": "boolean" },
+          "requested_url": { "label": "Requested URL", "format": "link" },
+          "final_url": { "label": "Final URL", "format": "link" },
+          "status_code": { "label": "Status", "format": "number" },
+          "title": { "label": "Title", "format": "text" },
+          "render_method": { "label": "Tier", "format": "text" },
+          "elapsed_ms": { "label": "Latency (ms)", "format": "number" }
+        }
+      }
+    }
+  }
+}

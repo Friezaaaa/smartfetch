@@ -1,0 +1,22 @@
+{
+  "actor-start": {
+    "eventTitle": "Actor start",
+    "eventDescription": "No startup fee — you only pay for successful page fetches, site inspections, or screenshots.",
+    "eventPriceUsd": 0.0
+  },
+  "page-fetched": {
+    "eventTitle": "Page fetched",
+    "eventDescription": "Charged per successfully retrieved webpage or PDF (Markdown, plain text, and links).",
+    "eventPriceUsd": 0.01
+  },
+  "site-inspected": {
+    "eventTitle": "Site inspected",
+    "eventDescription": "Charged per successful structured site intelligence & SEO inspection.",
+    "eventPriceUsd": 0.01
+  },
+  "screenshot-captured": {
+    "eventTitle": "Screenshot captured",
+    "eventDescription": "Charged per successful headless Chromium webpage screenshot (desktop or mobile).",
+    "eventPriceUsd": 0.02
+  }
+}

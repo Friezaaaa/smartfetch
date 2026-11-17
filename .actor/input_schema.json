@@ -1,0 +1,80 @@
+{
+  "title": "SmartFetch Actor Input",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "action": {
+      "title": "Action",
+      "type": "string",
+      "description": "Operation to perform: fetch (Markdown/text extraction), screenshot (headless Chromium image), inspect (structured SEO & site intelligence), or batch_fetch (parallel multi-URL retrieval).",
+      "enum": ["fetch", "screenshot", "inspect", "batch_fetch"],
+      "enumTitles": [
+        "Fetch Webpage / PDF",
+        "Capture Screenshot",
+        "Inspect Site Intelligence",
+        "Batch Fetch URLs"
+      ],
+      "default": "fetch",
+      "editor": "select"
+    },
+    "url": {
+      "title": "Target URL",
+      "type": "string",
+      "description": "Public HTTP/HTTPS webpage or PDF URL (used for fetch, screenshot, and inspect).",
+      "default": "https://example.com",
+      "editor": "textfield"
+    },
+    "urls": {
+      "title": "Batch Target URLs",
+      "type": "array",
+      "description": "List of public HTTP/HTTPS URLs to retrieve in parallel (up to 5 URLs for paying users, capped at 3 URLs on the Free plan).",
+      "default": [],
+      "editor": "stringList"
+    },
+    "max_chars": {
+      "title": "Maximum Characters",
+      "type": "integer",
+      "description": "Maximum character length returned for extracted Markdown and plain text.",
+      "minimum": 1000,
+      "maximum": 50000,
+      "default": 20000
+    },
+    "render_mode": {
+      "title": "Render Mode",
+      "type": "string",
+      "description": "Rendering strategy: 'auto' (fast HTTP with automatic headless Chromium escalation on SPA shells), 'http_only', or 'browser'.",
+      "enum": ["auto", "http_only", "browser"],
+      "default": "auto",
+      "editor": "select"
+    },
+    "viewport": {
+      "title": "Screenshot Viewport",
+      "type": "string",
+      "description": "Viewport preset for screenshots: 'desktop' (1280x800) or 'mobile' (390x844).",
+      "enum": ["desktop", "mobile"],
+      "default": "desktop",
+      "editor": "select"
+    },
+    "full_page": {
+      "title": "Full Page Screenshot",
+      "type": "boolean",
+      "description": "Capture the full scrollable page height (up to 4000px).",
+      "default": false
+    },
+    "image_format": {
+      "title": "Screenshot Image Format",
+      "type": "string",
+      "description": "Output image format for screenshots ('jpeg' or 'png').",
+      "enum": ["jpeg", "png"],
+      "default": "jpeg",
+      "editor": "select"
+    },
+    "no_cache": {
+      "title": "Bypass Cache",
+      "type": "boolean",
+      "description": "Bypass in-memory response caching.",
+      "default": false
+    }
+  },
+  "required": []
+}

@@ -276,23 +276,44 @@ def browser_screenshot(
             "browser_failure",
         ))
     try:
-        from .browser_pool import get_browser_pool
-        pool = get_browser_pool(_chromium_path())
-        instance = pool.acquire(timeout=10.0)
+        from .browser_pool import WarmChromiumInstance
+
+        timeout = float(os.getenv("BROWSER_TIMEOUT_SECONDS", "18"))
+        instance = WarmChromiumInstance(
+            instance_id=f"local-ss-{int(time.monotonic() * 1000)}",
+            chromium_path=_chromium_path(),
+        )
         try:
+            instance.start(timeout=min(10.0, timeout))
             result = instance.screenshot(
                 safe,
-                deadline=time.monotonic() + 18.0,
+                deadline=time.monotonic() + timeout,
                 viewport=viewport,
                 full_page=full_page,
                 image_format=image_format,
                 quality=quality,
             )
+            final_url = result.get("final_url", safe)
+            try:
+                validate_public_url(final_url)
+            except Exception as error:
+                is_dns = isinstance(error, DNSResolutionError)
+                annotated = attach_diagnostics(error, make_diagnostics(
+                    safe,
+                    "browser",
+                    "dns" if is_dns else "redirect",
+                    "dns" if is_dns else "policy_rejection",
+                    browser_attempted=True,
+                ))
+                if annotated is error:
+                    raise
+                raise annotated from error
+            result["cache_hit"] = False
             if not no_cache and result.get("success"):
                 get_cache_provider().set(cache_key, result)
             return result
         finally:
-            pool.release(instance)
+            instance.close()
     finally:
         _BROWSER_SLOTS.release()
 

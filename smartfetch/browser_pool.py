@@ -124,6 +124,8 @@ class WarmChromiumInstance:
         if self.proxy_host and self.proxy_port:
             flags.insert(1, f"--proxy-server=http://{self.proxy_host}:{self.proxy_port}")
             flags.insert(2, "--proxy-bypass-list=<-loopback>")
+        if os.getenv("CHROMIUM_NO_SANDBOX", "false").lower() in ("1", "true", "yes"):
+            flags.insert(1, "--no-sandbox")
 
         # Start child process
         self.proc = subprocess.Popen(

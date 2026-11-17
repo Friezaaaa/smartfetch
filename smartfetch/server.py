@@ -509,6 +509,15 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             "maintainers": [{"email": "smartfetch.contact@gmail.com"}],
         })
 
+    @application.get("/.well-known/402index-verify.txt", response_class=PlainTextResponse)
+    async def index402_domain_verification():
+        return PlainTextResponse(
+            os.environ.get(
+                "INDEX402_VERIFY_HASH",
+                "7544f08648ac863080cbd821e8cb34add313ecc58d238d7217e498fd08a80e02",
+            )
+        )
+
     @application.get("/.well-known/agent-card.json")
     async def agent_card_discovery(request: Request):
         urls = public_urls(request)
