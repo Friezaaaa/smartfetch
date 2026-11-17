@@ -56,9 +56,9 @@ class TestMCPSchemaAndCompat(unittest.IsolatedAsyncioTestCase):
         self.mcp = create_smartfetch_mcp(FREE_SETTINGS, self.mock_fetch_handler)
 
     async def test_tools_list_parameter_descriptions(self):
-        """All 4 MCP tools expose url and max_chars parameter descriptions in tools/list."""
+        """All MCP tools expose parameter descriptions in tools/list."""
         tools = await self.mcp.fastmcp.list_tools()
-        self.assertEqual(len(tools), 4)
+        self.assertEqual(len(tools), 5)
         for tool in tools:
             schema = tool.inputSchema
             self.assertIn("properties", schema, f"Tool {tool.name} missing properties")
@@ -68,6 +68,10 @@ class TestMCPSchemaAndCompat(unittest.IsolatedAsyncioTestCase):
             self.assertIn("url", props, f"Tool {tool.name} missing 'url' parameter")
             url_desc = props["url"].get("description")
             self.assertTrue(url_desc and len(url_desc) > 10, f"Tool {tool.name} 'url' missing clear description")
+
+            if tool.name == "screenshot_webpage":
+                self.assertIn("viewport", props)
+                continue
 
             # max_chars check
             self.assertIn("max_chars", props, f"Tool {tool.name} missing 'max_chars' parameter")
@@ -152,7 +156,7 @@ class TestMCPAcceptHeaderNormalization(unittest.TestCase):
             r1_tools = client.post("/mcp", json=tools_payload, headers={"Accept": "application/json"})
             self.assertEqual(r1_tools.status_code, 200)
             tools = r1_tools.json().get("result", {}).get("tools", [])
-            self.assertEqual(len(tools), 4)
+            self.assertEqual(len(tools), 5)
 
             # 2. Accept: */*
             r2 = client.post("/mcp", json=init_payload, headers={"Accept": "*/*"})

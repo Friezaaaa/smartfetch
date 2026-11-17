@@ -249,6 +249,7 @@ class DiscoveryCompatibilityTests(unittest.TestCase):
             'sitemap': 'https://agent.example/sitemap.xml',
             'meta': 'https://agent.example/meta',
             'fetch': 'https://agent.example/fetch',
+            'screenshot': 'https://agent.example/screenshot',
             'mcp': 'https://agent.example/mcp',
         }
         self.settings = X402Settings(
@@ -264,7 +265,7 @@ class DiscoveryCompatibilityTests(unittest.TestCase):
         manifest = discovery.x402_manifest(self.urls, self.settings)
 
         self.assertNotIn('tools', manifest)
-        self.assertEqual(manifest['resources'], ['https://agent.example/fetch'])
+        self.assertEqual(manifest['resources'], ['https://agent.example/fetch', 'https://agent.example/screenshot'])
         self.assertEqual(manifest['endpoints']['mcp'], {
             'url': 'https://agent.example/mcp',
             'transport': 'streamable-http',
@@ -277,7 +278,7 @@ class DiscoveryCompatibilityTests(unittest.TestCase):
         document = discovery.emergency_openapi_document(self.urls)
 
         self.assertEqual(document['info']['version'], '1.13.1')
-        self.assertEqual(list(document['paths']), ['/fetch'])
+        self.assertEqual(list(document['paths']), ['/fetch', '/screenshot'])
         operation = document['paths']['/fetch']['post']
         self.assertEqual(operation['x-smartfetch-availability'], 'unavailable')
         self.assertNotIn('x-x402', operation)

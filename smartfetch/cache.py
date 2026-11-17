@@ -59,6 +59,21 @@ def build_cache_key(
     return base
 
 
+def build_screenshot_cache_key(
+    url: str,
+    viewport: str = "desktop",
+    full_page: bool = False,
+    image_format: str = "jpeg",
+) -> str:
+    """Builds a normalized SHA-256 cache key scoped by URL, viewport, full_page, and format."""
+    canonical_url = normalize_cache_url(url)
+    url_digest = hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()[:24]
+    vp = (viewport or "desktop").lower()
+    fp = "full" if full_page else "viewport"
+    fmt = (image_format or "jpeg").lower()
+    return f"sf:screenshot:{url_digest}:{vp}:{fp}:{fmt}"
+
+
 class ResultCacheProvider(ABC):
     """Abstract protocol for retrieval result cache backends (In-memory, Redis, Valkey, etc.)."""
 

@@ -26,6 +26,7 @@ TOOL_NAMES = [
     'webpage_to_markdown',
     'extract_webpage_text',
     'render_webpage',
+    'screenshot_webpage',
 ]
 TOOL_DESCRIPTIONS = {
     'fetch_webpage': bazaar.FETCH_DESCRIPTION,
@@ -41,6 +42,7 @@ TOOL_DESCRIPTIONS = {
         'Browser-render a public JavaScript-heavy webpage or URL, then return '
         'clean text, Markdown, links, and metadata.'
     ),
+    'screenshot_webpage': bazaar.SCREENSHOT_DESCRIPTION,
 }
 SUPPORTED = SupportedResponse(kinds=[SupportedKind(
     x402Version=2,
@@ -111,12 +113,15 @@ def list_tools(client):
 
 def call_tool(client, name, arguments=None, request_id=3):
     if arguments is None:
-        arguments = {
-            'url': 'https://example.com/',
-            'max_chars': 20000,
-        }
-        if name != 'render_webpage':
-            arguments['force_browser'] = False
+        if name == 'screenshot_webpage':
+            arguments = {'url': 'https://example.com/'}
+        else:
+            arguments = {
+                'url': 'https://example.com/',
+                'max_chars': 20000,
+            }
+            if name != 'render_webpage':
+                arguments['force_browser'] = False
     return rpc(client, 'tools/call', {
         'name': name,
         'arguments': arguments,
@@ -143,6 +148,11 @@ class V19MCPToolContractTests(unittest.TestCase):
             schema = by_name[name]['inputSchema']
             self.assertEqual(schema['required'], ['url'])
             self.assertEqual(schema['properties']['url']['type'], 'string')
+            if name == 'screenshot_webpage':
+                self.assertIn('viewport', schema['properties'])
+                self.assertIn('full_page', schema['properties'])
+                self.assertIn('image_format', schema['properties'])
+                continue
             max_chars = schema['properties']['max_chars']
             self.assertEqual(max_chars['default'], 20000)
             self.assertEqual(max_chars['minimum'], 1000)
@@ -163,7 +173,7 @@ class V19MCPToolContractTests(unittest.TestCase):
             }
         for name, result in results.items():
             self.assertTrue(result['isError'])
-            expected = 'browser_unavailable' if name == 'render_webpage' else 'retrieval_unavailable'
+            expected = 'browser_unavailable' if name in ('render_webpage', 'screenshot_webpage') else 'retrieval_unavailable'
             self.assertEqual(result['structuredContent']['error_code'], expected)
             self.assertNotIn('https://example.com/', json.dumps(result))
 
@@ -276,7 +286,7 @@ class V19MCPPaymentDiscoveryTests(unittest.TestCase):
         for name, result in challenges.items():
             self.assertTrue(result['isError'])
             challenge = result['structuredContent']
-            expected = 'browser_unavailable' if name == 'render_webpage' else 'retrieval_unavailable'
+            expected = 'browser_unavailable' if name in ('render_webpage', 'screenshot_webpage') else 'retrieval_unavailable'
             self.assertEqual(challenge['error_code'], expected)
             self.assertNotIn('accepts', json.dumps(challenge))
             self.assertNotIn('payment', json.dumps(challenge).lower())
@@ -327,6 +337,7 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
             'sitemap': 'https://agent.example:9443/sitemap.xml',
             'meta': 'https://agent.example:9443/meta',
             'fetch': 'https://agent.example:9443/fetch',
+            'screenshot': 'https://agent.example:9443/screenshot',
             'mcp': 'https://agent.example:9443/mcp',
         })
 
@@ -339,7 +350,7 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
         self.assertEqual(document['servers'], [{
             'url': 'https://agent.example:9443',
         }])
-        self.assertEqual(list(document['paths']), ['/fetch'])
+        self.assertEqual(list(document['paths']), ['/fetch', '/screenshot'])
         operation = document['paths']['/fetch']['post']
         self.assertEqual(
             operation['requestBody']['content']['application/json']['schema'],
@@ -462,7 +473,7 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
             ),
             'homepage': 'https://agent.example:9443',
             'repository': 'https://github.com/Friezaaaa/smartfetch',
-            'resources': ['https://agent.example:9443/fetch'],
+            'resources': ['https://agent.example:9443/fetch', 'https://agent.example:9443/screenshot'],
             'payment': {
                 'protocol': 'x402',
                 'x402Version': 2,

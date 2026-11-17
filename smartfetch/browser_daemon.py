@@ -123,8 +123,10 @@ class WorkerRunner:
         socket_path: str,
         operation_id: bytes,
         deadline: float,
-        max_chars: int,
-        timeout_seconds: float,
+        max_chars: int = 20000,
+        timeout_seconds: float = 15.0,
+        action: str = "render",
+        **kwargs: Any,
     ) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -142,9 +144,13 @@ class DirectWorkerRunner(WorkerRunner):
         socket_path: str,
         operation_id: bytes,
         deadline: float,
-        max_chars: int,
-        timeout_seconds: float,
+        max_chars: int = 20000,
+        timeout_seconds: float = 15.0,
+        action: str = "render",
+        **kwargs: Any,
     ) -> dict[str, Any]:
+        if action == "screenshot":
+            raise NotImplementedError("DirectWorkerRunner does not support screenshot action; use WarmPoolWorkerRunner")
         return render_in_isolated_worker(
             url,
             socket_path=socket_path,
@@ -168,8 +174,10 @@ class SubprocessWorkerRunner(WorkerRunner):
         socket_path: str,
         operation_id: bytes,
         deadline: float,
-        max_chars: int,
-        timeout_seconds: float,
+        max_chars: int = 20000,
+        timeout_seconds: float = 15.0,
+        action: str = "render",
+        **kwargs: Any,
     ) -> dict[str, Any]:
         output_file = Path(socket_path).parent / "worker_output.json"
         cmd = [
@@ -216,14 +224,25 @@ class WarmPoolWorkerRunner(WorkerRunner):
         socket_path: str,
         operation_id: bytes,
         deadline: float,
-        max_chars: int,
-        timeout_seconds: float,
+        max_chars: int = 20000,
+        timeout_seconds: float = 15.0,
+        action: str = "render",
+        **kwargs: Any,
     ) -> dict[str, Any]:
         from smartfetch.browser_pool import get_browser_pool
         pool = get_browser_pool(self.chromium_path)
         remaining = max(1.0, deadline - time.monotonic())
         instance = pool.acquire(timeout=remaining)
         try:
+            if action == "screenshot":
+                return instance.screenshot(
+                    url,
+                    deadline=deadline,
+                    viewport=kwargs.get("viewport", "desktop"),
+                    full_page=bool(kwargs.get("full_page", False)),
+                    image_format=kwargs.get("image_format", "jpeg"),
+                    quality=int(kwargs.get("quality", 82)),
+                )
             return instance.render(
                 url,
                 deadline=deadline,
@@ -558,8 +577,10 @@ class DockerWarmPoolRunner(WorkerRunner):
         socket_path: str,
         operation_id: bytes,
         deadline: float,
-        max_chars: int,
-        timeout_seconds: float,
+        max_chars: int = 20000,
+        timeout_seconds: float = 15.0,
+        action: str = "render",
+        **kwargs: Any,
     ) -> dict[str, Any]:
         with self._condition:
             while True:
@@ -591,11 +612,13 @@ class DockerWarmPoolRunner(WorkerRunner):
             sock = self._connect_to_control_socket(ctrl_sock, deadline=deadline)
             try:
                 job_payload = {
+                    "action": action,
                     "url": url,
                     "socket_path": container_socket_path,
                     "operation_id": operation_id.hex(),
                     "deadline_seconds": max(1.0, deadline - time.monotonic()),
                     "max_chars": max_chars,
+                    **kwargs,
                 }
                 resp = self._send_job_and_recv(sock, job_payload, deadline=deadline)
             finally:
@@ -658,7 +681,7 @@ class BrowserWorkerHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"success": False, "error_code": ERROR_INVALID_REQUEST, "error": "Not found"})
 
     def do_POST(self) -> None:
-        if self.path != "/v1/render":
+        if self.path not in ("/v1/render", "/v1/screenshot"):
             self._send_json(404, {"success": False, "error_code": ERROR_INVALID_REQUEST, "error": "Not found"})
             return
 
@@ -690,7 +713,7 @@ class BrowserWorkerHandler(BaseHTTPRequestHandler):
             return
 
         header_dict = {k: v for k, v in self.headers.items()}
-        if not verify_signature("POST", "/v1/render", body_bytes, hmac_key, header_dict):
+        if not verify_signature("POST", self.path, body_bytes, hmac_key, header_dict):
             self._send_json(401, {"success": False, "error_code": ERROR_INVALID_REQUEST, "error": "Invalid HMAC signature or timestamp"})
             return
 
@@ -743,7 +766,25 @@ class BrowserWorkerHandler(BaseHTTPRequestHandler):
 
         try:
             self.daemon_server._active_jobs += 1
-            self._handle_render_job(safe_url, timeout_seconds=timeout_seconds, max_chars=max_chars)
+            if self.path == "/v1/screenshot":
+                viewport = str(req_data.get("viewport", "desktop"))
+                if viewport not in ("desktop", "mobile"):
+                    viewport = "desktop"
+                full_page = bool(req_data.get("full_page", False))
+                image_format = str(req_data.get("image_format", "jpeg"))
+                if image_format not in ("jpeg", "png"):
+                    image_format = "jpeg"
+                quality = int(req_data.get("quality", 82))
+                self._handle_screenshot_job(
+                    safe_url,
+                    timeout_seconds=timeout_seconds,
+                    viewport=viewport,
+                    full_page=full_page,
+                    image_format=image_format,
+                    quality=quality,
+                )
+            else:
+                self._handle_render_job(safe_url, timeout_seconds=timeout_seconds, max_chars=max_chars)
         finally:
             self.daemon_server._active_jobs -= 1
             self.daemon_server.semaphore.release()
@@ -855,6 +896,133 @@ class BrowserWorkerHandler(BaseHTTPRequestHandler):
                 "error_code": ERROR_RENDER_FAILED,
                 "phase": "browser_navigate",
                 "error": f"Browser execution failed: {exc}",
+            })
+        finally:
+            if bridge is not None:
+                bridge.close()
+            if broker is not None:
+                broker.close()
+            if job_dir.exists():
+                shutil.rmtree(job_dir, ignore_errors=True)
+
+    def _handle_screenshot_job(
+        self,
+        url: str,
+        *,
+        timeout_seconds: float,
+        viewport: str = "desktop",
+        full_page: bool = False,
+        image_format: str = "jpeg",
+        quality: int = 82,
+    ) -> None:
+        started = time.monotonic()
+        deadline = started + timeout_seconds
+        operation_id = secrets.token_bytes(16)
+        job_id = secrets.token_hex(8)
+
+        ipc_root = Path(self.daemon_server.config.ipc_dir)
+        job_dir = ipc_root / f"job-{job_id}"
+        socket_path = job_dir / "relay.sock"
+
+        broker = None
+        bridge = None
+        try:
+            job_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(job_dir, 0o700)
+                if hasattr(os, "chown") and os.geteuid() == 0:
+                    os.chown(job_dir, 10001, 10001)
+            except OSError:
+                pass
+
+            broker = Broker(DestinationPolicy(), total_deadline=deadline)
+            broker_address = broker.start()
+
+            if hasattr(socket, "AF_UNIX"):
+                allowed_uid = 10001 if os.name != "nt" else None
+                bridge = BridgeServer(
+                    str(socket_path),
+                    broker_address,
+                    operation_id=operation_id,
+                    deadline=deadline,
+                    allowed_uid=allowed_uid,
+                )
+                bridge.start()
+
+                try:
+                    os.chmod(socket_path, 0o600)
+                    if hasattr(os, "chown") and os.geteuid() == 0:
+                        os.chown(socket_path, 10001, 10001)
+                except OSError:
+                    pass
+
+            result = self.daemon_server.runner.run(
+                url,
+                socket_path=str(socket_path),
+                operation_id=operation_id,
+                deadline=deadline,
+                timeout_seconds=timeout_seconds,
+                action="screenshot",
+                viewport=viewport,
+                full_page=full_page,
+                image_format=image_format,
+                quality=quality,
+            )
+
+            elapsed_ms = round((time.monotonic() - started) * 1000)
+
+            response_payload = {
+                "success": True,
+                "requested_url": url,
+                "final_url": result.get("final_url", url),
+                "status_code": result.get("status_code", 200),
+                "render_method": "browser",
+                "elapsed_ms": elapsed_ms,
+                "title": result.get("title", ""),
+                "image_base64": result.get("image_base64", ""),
+                "mime_type": result.get("mime_type", "image/jpeg"),
+                "image_format": result.get("image_format", image_format),
+                "viewport": result.get("viewport", viewport),
+                "full_page": result.get("full_page", full_page),
+                "width": result.get("width", 1280),
+                "height": result.get("height", 800),
+                "byte_size": result.get("byte_size", 0),
+                "diagnostics": {
+                    "worker_elapsed_ms": result.get("elapsed_ms", elapsed_ms),
+                    "broker_bytes": broker.operation_bytes,
+                    "broker_requests": broker.operation_requests,
+                },
+            }
+            self._send_json(200, response_payload)
+
+        except TimeoutError:
+            self._send_json(504, {
+                "success": False,
+                "error_code": ERROR_TIMEOUT,
+                "phase": "browser_navigate",
+                "error": f"Screenshot exceeded deadline of {timeout_seconds}s",
+            })
+        except WorkerBoundaryError as exc:
+            self._send_json(500, {
+                "success": False,
+                "error_code": ERROR_RENDER_FAILED,
+                "phase": "browser_start",
+                "error": f"Worker boundary assertion failed: {exc.code}",
+            })
+        except PolicyError as exc:
+            self._send_json(403, {
+                "success": False,
+                "error_code": ERROR_POLICY_REJECTION,
+                "phase": "connect",
+                "error": f"Broker policy error: {exc.code}",
+            })
+        except Exception as exc:
+            _LOGGER.exception(f"Screenshot job failed for {url}: {exc}")
+            self._send_json(500, {
+                "success": False,
+                "error_code": ERROR_RENDER_FAILED,
+                "phase": "browser_navigate",
+                "error": f"Browser screenshot execution failed: {exc}",
             })
         finally:
             if bridge is not None:

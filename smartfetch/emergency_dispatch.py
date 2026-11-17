@@ -4,7 +4,13 @@ import json
 import secrets
 
 from .activity import emit_unavailable_attempt
-from .emergency_request import EmergencyRequestError, FreeMCPMethod, classify_fetch, classify_mcp
+from .emergency_request import (
+    EmergencyRequestError,
+    FreeMCPMethod,
+    classify_fetch,
+    classify_mcp,
+    classify_screenshot,
+)
 from .request_bounds import BoundedRequest
 
 
@@ -98,7 +104,7 @@ class EmergencyDispatch:
             and scope.get("path") != "/health"
             and getattr(self.app.state, "terminal_unhealthy", False)
         )
-        if scope.get("type") != "http" or scope.get("path") not in ("/fetch", "/mcp"):
+        if scope.get("type") != "http" or scope.get("path") not in ("/fetch", "/mcp", "/screenshot"):
             if terminal_unhealthy:
                 await _send_json(send, 503, _UNAVAILABLE["service_unhealthy"], unavailable=True)
                 return
@@ -150,6 +156,39 @@ class EmergencyDispatch:
                     tool=call.tool,
                     code="browser_unavailable" if call.browser else "retrieval_unavailable",
                     status=200,
+                )
+            except Exception:
+                pass
+            return
+        if path == "/screenshot":
+            from .remote_browser import RemoteBrowserConfig
+            remote_cfg = RemoteBrowserConfig.from_env()
+            has_payment = any(
+                h[0].lower() in (b"payment-signature", b"x-payment")
+                for h in bounded.headers
+            )
+            allow_unpaid_probe = remote_cfg.is_configured and not has_payment
+            try:
+                call = classify_screenshot(
+                    bounded.body, bounded.headers, allow_unpaid_probe=allow_unpaid_probe
+                )
+            except EmergencyRequestError as exc:
+                await _send_json(send, exc.status, _ERRORS[exc.code])
+                return
+            if terminal_unhealthy:
+                await _send_json(send, 503, _UNAVAILABLE["service_unhealthy"], unavailable=True)
+                return
+            if remote_cfg.is_configured:
+                await self.app(scope, receive, send)
+                return
+            await _send_json(send, 503, _UNAVAILABLE["browser_unavailable"], unavailable=True)
+            try:
+                emit_unavailable_attempt(
+                    request_id=scope.get("smartfetch.request_id") or secrets.token_hex(8),
+                    surface="screenshot",
+                    tool="screenshot_webpage",
+                    code="browser_unavailable",
+                    status=503,
                 )
             except Exception:
                 pass

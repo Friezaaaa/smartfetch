@@ -35,8 +35,8 @@ def audit_discovery():
     assert mcp_data["version"] in ("1.12.0", "1.13.0", "1.13.1")
     assert mcp_data["transport"] == "streamable-http"
     tools = [t["name"] for t in mcp_data["tools"]]
-    assert tools == ["fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage"]
-    print("   -> PASS: /.well-known/mcp.json correctly lists 4 production tools")
+    assert tools == ["fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage", "screenshot_webpage"]
+    print("   -> PASS: /.well-known/mcp.json correctly lists 5 production tools")
 
     # 3. /meta
     r_meta = requests.get(f"{BASE_URL}/meta", timeout=10)

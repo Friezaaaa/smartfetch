@@ -8,6 +8,7 @@ and immediately destroyed upon completion (Target.disposeBrowserContext).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import base64
 import json
 import logging
 import os
@@ -372,6 +373,245 @@ class WarmChromiumInstance:
             raise
         finally:
             # 6. Dispose the BrowserContext to wipe all cookies, storage, and page memory
+            if context_id:
+                try:
+                    cdp_send("Target.disposeBrowserContext", {"browserContextId": context_id})
+                except Exception:
+                    pass
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+    def screenshot(
+        self,
+        url: str,
+        *,
+        deadline: float,
+        viewport: str = "desktop",
+        full_page: bool = False,
+        image_format: str = "jpeg",
+        quality: int = 82,
+    ) -> dict[str, Any]:
+        """Capture screenshot of given URL in a dedicated ephemeral BrowserContext."""
+        if not self.ws_endpoint:
+            raise RuntimeError("Warm Chromium instance is not running")
+
+        start_time = time.monotonic()
+        remaining = deadline - start_time
+        if remaining <= 0:
+            raise TimeoutError("Deadline exceeded before browser acquisition")
+
+        ws = websocket.create_connection(self.ws_endpoint, timeout=min(5.0, remaining))
+        msg_id = 0
+
+        def cdp_send(method: str, params: dict | None = None) -> dict:
+            nonlocal msg_id
+            msg_id += 1
+            call_id = msg_id
+            payload = {"id": call_id, "method": method, "params": params or {}}
+            ws.send(json.dumps(payload))
+            while True:
+                rem = deadline - time.monotonic()
+                if rem <= 0:
+                    raise TimeoutError("Browser operation timed out")
+                ws.settimeout(rem)
+                raw = ws.recv()
+                data = json.loads(raw)
+                if data.get("id") == call_id:
+                    if "error" in data:
+                        raise RuntimeError(f"CDP call {method} error: {data['error']}")
+                    return data.get("result", {})
+
+        context_id = None
+        target_id = None
+        session_id = None
+        try:
+            ctx_res = cdp_send("Target.createBrowserContext")
+            context_id = ctx_res["browserContextId"]
+
+            target_res = cdp_send(
+                "Target.createTarget",
+                {"url": "about:blank", "browserContextId": context_id},
+            )
+            target_id = target_res["targetId"]
+
+            attach_res = cdp_send(
+                "Target.attachToTarget",
+                {"targetId": target_id, "flatten": True},
+            )
+            session_id = attach_res["sessionId"]
+
+            def page_send(method: str, params: dict | None = None) -> dict:
+                nonlocal msg_id
+                msg_id += 1
+                call_id = msg_id
+                payload = {
+                    "id": call_id,
+                    "sessionId": session_id,
+                    "method": method,
+                    "params": params or {},
+                }
+                ws.send(json.dumps(payload))
+                while True:
+                    rem = deadline - time.monotonic()
+                    if rem <= 0:
+                        raise TimeoutError("Browser operation timed out")
+                    ws.settimeout(rem)
+                    raw = ws.recv()
+                    data = json.loads(raw)
+                    if data.get("id") == call_id:
+                        if "error" in data:
+                            raise RuntimeError(f"Page call {method} error: {data['error']}")
+                        return data.get("result", {})
+
+            page_send("Page.enable")
+
+            # Configure viewport via Emulation.setDeviceMetricsOverride
+            vp_mode = (viewport or "desktop").lower()
+            if vp_mode == "mobile":
+                width = 390
+                height = 844
+                device_scale_factor = 2
+                mobile = True
+            else:
+                vp_mode = "desktop"
+                width = 1280
+                height = 800
+                device_scale_factor = 1
+                mobile = False
+
+            page_send(
+                "Emulation.setDeviceMetricsOverride",
+                {
+                    "width": width,
+                    "height": height,
+                    "deviceScaleFactor": device_scale_factor,
+                    "mobile": mobile,
+                },
+            )
+
+            page_send("Page.navigate", {"url": url})
+
+            # Wait for document.readyState
+            while time.monotonic() < deadline:
+                time.sleep(0.1)
+                try:
+                    ready_eval = page_send(
+                        "Runtime.evaluate",
+                        {"expression": "document.readyState", "returnByValue": True},
+                    )
+                    ready = ready_eval.get("result", {}).get("value")
+                    if ready in {"interactive", "complete"}:
+                        break
+                except Exception:
+                    pass
+
+            time.sleep(0.4)
+
+            # Check HTTP status
+            status_code = 200
+            try:
+                status_eval = page_send(
+                    "Runtime.evaluate",
+                    {
+                        "expression": '(performance.getEntriesByType("navigation")[0] && performance.getEntriesByType("navigation")[0].responseStatus) || 200',
+                        "returnByValue": True,
+                    },
+                )
+                raw_status = status_eval.get("result", {}).get("value", 200)
+                status_code = int(raw_status or 200)
+            except Exception:
+                status_code = 200
+
+            if status_code >= 400:
+                raise RuntimeError(f"Browser navigation returned HTTP {status_code}")
+
+            # Check full_page option
+            capture_height = height
+            if full_page:
+                try:
+                    scroll_eval = page_send(
+                        "Runtime.evaluate",
+                        {
+                            "expression": f"Math.min(4000, Math.max({height}, document.documentElement.scrollHeight || document.body.scrollHeight || {height}))",
+                            "returnByValue": True,
+                        },
+                    )
+                    clamped_height = int(scroll_eval.get("result", {}).get("value", height))
+                    capture_height = max(height, min(4000, clamped_height))
+                    page_send(
+                        "Emulation.setDeviceMetricsOverride",
+                        {
+                            "width": width,
+                            "height": capture_height,
+                            "deviceScaleFactor": device_scale_factor,
+                            "mobile": mobile,
+                        },
+                    )
+                    time.sleep(0.1)
+                except Exception as exc:
+                    _LOGGER.debug("Failed to calculate scrollHeight for full_page: %s", exc)
+
+            fmt = "png" if (image_format or "jpeg").lower() == "png" else "jpeg"
+            mime_type = "image/png" if fmt == "png" else "image/jpeg"
+            capture_params: dict[str, Any] = {"format": fmt}
+            if fmt == "jpeg":
+                capture_params["quality"] = max(1, min(100, int(quality or 82)))
+
+            screenshot_res = page_send("Page.captureScreenshot", capture_params)
+            image_base64 = screenshot_res.get("data", "")
+            if not image_base64:
+                raise RuntimeError("Failed to capture screenshot: empty data received")
+
+            raw_bytes = base64.b64decode(image_base64)
+            byte_size = len(raw_bytes)
+            if byte_size > 3_000_000:
+                raise RuntimeError(f"Screenshot size ({byte_size} bytes) exceeds maximum limit of 3MB")
+
+            # Extract final URL and title
+            url_eval = page_send(
+                "Runtime.evaluate",
+                {"expression": "window.location.href", "returnByValue": True},
+            )
+            final_url = url_eval.get("result", {}).get("value", url)
+
+            title_eval = page_send(
+                "Runtime.evaluate",
+                {"expression": "document.title || ''", "returnByValue": True},
+            )
+            title = title_eval.get("result", {}).get("value", "")
+
+            elapsed_ms = round((time.monotonic() - start_time) * 1000)
+
+            with self._lock:
+                self.metrics.jobs_executed += 1
+                self.metrics.total_latency_ms += elapsed_ms
+                self.metrics.last_job_at = time.monotonic()
+
+            return {
+                "success": True,
+                "requested_url": url,
+                "final_url": final_url,
+                "status_code": status_code,
+                "render_method": "browser",
+                "elapsed_ms": elapsed_ms,
+                "title": title,
+                "image_base64": image_base64,
+                "mime_type": mime_type,
+                "image_format": fmt,
+                "viewport": vp_mode,
+                "full_page": full_page,
+                "width": width,
+                "height": capture_height,
+                "byte_size": byte_size,
+            }
+
+        except Exception as exc:
+            self._tainted = True
+            _LOGGER.warning("Warm Chromium instance %s marked tainted due to screenshot error: %s", self.instance_id, exc)
+            raise
+        finally:
             if context_id:
                 try:
                     cdp_send("Target.disposeBrowserContext", {"browserContextId": context_id})

@@ -57,7 +57,8 @@ def process_control_job(
     relay: Any,
     instance: Any,
 ) -> dict[str, Any]:
-    """Process a single render request for the warm worker server."""
+    """Process a single render or screenshot request for the warm worker server."""
+    action = req.get("action", "render")
     url = req["url"]
     socket_path = req["socket_path"]
     raw_op_id = req["operation_id"]
@@ -66,26 +67,40 @@ def process_control_job(
     else:
         op_id = bytes(raw_op_id)
     deadline_sec = float(req.get("deadline_seconds", 20.0))
-    max_chars = int(req.get("max_chars", 20000))
     deadline = time.monotonic() + deadline_sec
 
     try:
         relay.set_active_job(socket_path, op_id, deadline)
-        render_result = instance.render(
-            url,
-            deadline=deadline,
-            max_chars=max_chars,
-            wait_ready=True,
-        )
+        if action == "screenshot":
+            viewport = str(req.get("viewport", "desktop"))
+            full_page = bool(req.get("full_page", False))
+            image_format = str(req.get("image_format", "jpeg"))
+            quality = int(req.get("quality", 82))
+            res = instance.screenshot(
+                url,
+                deadline=deadline,
+                viewport=viewport,
+                full_page=full_page,
+                image_format=image_format,
+                quality=quality,
+            )
+        else:
+            max_chars = int(req.get("max_chars", 20000))
+            res = instance.render(
+                url,
+                deadline=deadline,
+                max_chars=max_chars,
+                wait_ready=True,
+            )
         return {
             "ok": True,
-            "result": render_result,
+            "result": res,
             "recycle_recommended": not instance.is_healthy(),
         }
     except Exception as exc:
         return {
             "ok": False,
-            "error_code": "render_failed",
+            "error_code": "screenshot_failed" if action == "screenshot" else "render_failed",
             "error": str(exc),
             "recycle_recommended": True,
         }

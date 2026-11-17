@@ -36,7 +36,7 @@ def audit_no_free_paths():
 
     # 4. MCP Tools Call unpaid
     headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
-    tools = ["fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage"]
+    tools = ["fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage", "screenshot_webpage"]
     for t in tools:
         payload = {
             "jsonrpc": "2.0",

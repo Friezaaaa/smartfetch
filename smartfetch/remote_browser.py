@@ -517,6 +517,133 @@ class RemoteBrowserClient:
         # 6. Parse response envelope with size boundary
         return self._handle_response(response, elapsed_ms, safe_url, url_validator)
 
+    def screenshot(
+        self,
+        url: str,
+        *,
+        viewport: str = "desktop",
+        full_page: bool = False,
+        image_format: str = "jpeg",
+        timeout: float = 18.0,
+        request_id: str | None = None,
+        _url_validator=None,
+    ) -> dict[str, Any]:
+        """Capture screenshot on the isolated worker, failing closed on boundary error."""
+        # 1. Fail closed if not configured
+        if not self.config.is_configured:
+            raise RemoteBrowserError(
+                ERROR_BROWSER_UNAVAILABLE,
+                "Remote browser worker is not configured",
+                url=url,
+                phase="validate",
+            )
+
+        # 2. Check circuit breaker
+        if self.circuit_breaker.is_open:
+            raise RemoteBrowserError(
+                ERROR_BROWSER_UNAVAILABLE,
+                "Remote browser worker circuit breaker is OPEN",
+                url=url,
+                phase="capacity",
+            )
+
+        # 3. Fail closed if mTLS paths are misconfigured
+        self.config.validate_tls_paths()
+
+        # 4. Validate target URL defensively before sending over the wire
+        url_validator = _url_validator if _url_validator is not None else validate_public_url
+        try:
+            safe_url = url_validator(url.strip())
+        except DNSResolutionError as exc:
+            raise RemoteBrowserError(
+                ERROR_POLICY_REJECTION,
+                f"DNS resolution failed: {exc}",
+                url=url,
+                phase="dns",
+            ) from exc
+        except ValueError as exc:
+            raise RemoteBrowserError(
+                ERROR_POLICY_REJECTION,
+                f"URL policy rejection: {exc}",
+                url=url,
+                phase="validate",
+            ) from exc
+
+        # 5. Construct request payload
+        render_timeout = min(timeout, self.config.render_timeout)
+        payload = {
+            "url": safe_url,
+            "timeout_seconds": render_timeout,
+            "viewport": viewport,
+            "full_page": full_page,
+            "image_format": image_format,
+        }
+        payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+        base_url = self.config.worker_url.rstrip("/")
+        endpoint_path = "/v1/screenshot"
+        full_url = f"{base_url}{endpoint_path}"
+
+        headers = sign_request(
+            "POST",
+            endpoint_path,
+            payload_bytes,
+            self.config.hmac_key,
+            request_id=request_id,
+        )
+
+        verify: bool | str = self.config.ca_cert_path if self.config.ca_cert_path else True
+        cert = None
+        if self.config.client_cert_path and self.config.client_key_path:
+            cert = (self.config.client_cert_path, self.config.client_key_path)
+
+        started = time.monotonic()
+        try:
+            response = self._session.post(
+                full_url,
+                data=payload_bytes,
+                headers=headers,
+                timeout=(self.config.connect_timeout, render_timeout + 3.0),
+                verify=verify,
+                cert=cert,
+                stream=True,
+            )
+        except requests.exceptions.Timeout as exc:
+            self.circuit_breaker.record_failure()
+            raise RemoteBrowserError(
+                ERROR_TIMEOUT,
+                f"Remote browser request timed out after {render_timeout}s",
+                url=safe_url,
+                phase="browser_navigate",
+            ) from exc
+        except requests.exceptions.SSLError as exc:
+            self.circuit_breaker.record_failure()
+            raise RemoteBrowserError(
+                ERROR_BROWSER_UNAVAILABLE,
+                f"mTLS handshake failure with browser worker: {exc}",
+                url=safe_url,
+                phase="tls",
+            ) from exc
+        except requests.exceptions.ConnectionError as exc:
+            self.circuit_breaker.record_failure()
+            raise RemoteBrowserError(
+                ERROR_BROWSER_UNAVAILABLE,
+                f"Connection error contacting browser worker: {exc}",
+                url=safe_url,
+                phase="connect",
+            ) from exc
+        except Exception as exc:
+            self.circuit_breaker.record_failure()
+            raise RemoteBrowserError(
+                ERROR_RENDER_FAILED,
+                f"Unexpected transport failure: {exc}",
+                url=safe_url,
+                phase="browser_start",
+            ) from exc
+
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        return self._handle_response(response, elapsed_ms, safe_url, url_validator)
+
     def _handle_response(
         self,
         response: requests.Response,

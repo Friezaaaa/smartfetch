@@ -43,13 +43,17 @@ SmartFetch separates the public API/MCP interface from headless browser executio
 - **Operating Mode**: `isolated_browser`
 - **Supported Network**: Base Mainnet (`eip155:8453`)
 - **Asset**: Native USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`)
-- **Price**: 5000 atomic units ($0.005 USDC) per successful request
+- **Price**: $0.005 USDC (5000 atomic units) for webpage retrieval (`POST /fetch` and retrieval tools); $0.01 USDC (10000 atomic units) for screenshot capture (`POST /screenshot` and `screenshot_webpage`)
 - **Seller Treasury (`payTo`)**: `0xE29Fcb6ef1534d5F138E48a8A71370BE7770A786`
 - **MCP Tools**:
-  - `fetch_webpage`
-  - `webpage_to_markdown`
-  - `extract_webpage_text`
-  - `render_webpage`
+  - `fetch_webpage` ($0.005 USDC)
+  - `webpage_to_markdown` ($0.005 USDC)
+  - `extract_webpage_text` ($0.005 USDC)
+  - `render_webpage` ($0.005 USDC)
+  - `screenshot_webpage` ($0.01 USDC)
+- **REST Endpoints**:
+  - `POST /fetch` ($0.005 USDC)
+  - `POST /screenshot` ($0.01 USDC)
 
 ---
 

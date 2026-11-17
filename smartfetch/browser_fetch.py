@@ -13,6 +13,7 @@ import requests
 import websocket
 
 from .security import DNSResolutionError, validate_public_url
+from .cache import build_screenshot_cache_key, get_cache_provider
 from .config import MAX_CONCURRENT_BROWSERS
 from .diagnostics import (
     attach_diagnostics,
@@ -193,6 +194,105 @@ def browser_fetch(url: str) -> dict:
         if annotated is error:
             raise
         raise annotated from error
+    finally:
+        _BROWSER_SLOTS.release()
+
+
+def browser_screenshot(
+    url: str,
+    *,
+    viewport: str = "desktop",
+    full_page: bool = False,
+    image_format: str = "jpeg",
+    quality: int = 82,
+    no_cache: bool = False,
+    request_id: str | None = None,
+) -> dict:
+    cache_key = build_screenshot_cache_key(
+        url,
+        viewport=viewport,
+        full_page=full_page,
+        image_format=image_format,
+    )
+    if not no_cache:
+        cached = get_cache_provider().get(cache_key)
+        if cached is not None and cached.get("success"):
+            res = dict(cached)
+            res["cache_hit"] = True
+            return res
+
+    remote_config = RemoteBrowserConfig.from_env()
+    if remote_config.is_configured:
+        client = RemoteBrowserClient(remote_config)
+        timeout = float(os.getenv("BROWSER_TIMEOUT_SECONDS", "18"))
+        try:
+            result = client.screenshot(
+                url,
+                viewport=viewport,
+                full_page=full_page,
+                image_format=image_format,
+                timeout=timeout,
+                request_id=request_id,
+            )
+            if not no_cache and result.get("success"):
+                get_cache_provider().set(cache_key, result)
+            return result
+        except RemoteBrowserError as rbe:
+            annotated = attach_diagnostics(rbe, rbe.retrieval_diagnostics)
+            if annotated is rbe:
+                raise
+            raise annotated from rbe
+
+    if os.getenv("BROWSER_WORKER_REQUIRED", "false").lower() in ("1", "true", "yes"):
+        error = RuntimeError("Browser rendering is unavailable: VPS browser worker is required but not configured")
+        raise attach_diagnostics(error, make_diagnostics(
+            url,
+            "browser",
+            "browser_start",
+            "browser_failure",
+        ))
+
+    # Local fallback
+    try:
+        safe = validate_public_url(url)
+    except Exception as error:
+        is_dns = isinstance(error, DNSResolutionError)
+        annotated = attach_diagnostics(error, make_diagnostics(
+            url,
+            "browser",
+            "dns" if is_dns else "validate",
+            "dns" if is_dns else "policy_rejection",
+        ))
+        if annotated is error:
+            raise
+        raise annotated from error
+
+    if not _BROWSER_SLOTS.acquire(timeout=2):
+        error = RuntimeError("Browser capacity is busy; retry shortly")
+        raise attach_diagnostics(error, make_diagnostics(
+            url,
+            "browser",
+            "browser_start",
+            "browser_failure",
+        ))
+    try:
+        from .browser_pool import get_browser_pool
+        pool = get_browser_pool(_chromium_path())
+        instance = pool.acquire(timeout=10.0)
+        try:
+            result = instance.screenshot(
+                safe,
+                deadline=time.monotonic() + 18.0,
+                viewport=viewport,
+                full_page=full_page,
+                image_format=image_format,
+                quality=quality,
+            )
+            if not no_cache and result.get("success"):
+                get_cache_provider().set(cache_key, result)
+            return result
+        finally:
+            pool.release(instance)
     finally:
         _BROWSER_SLOTS.release()
 

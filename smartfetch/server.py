@@ -13,8 +13,12 @@ from .bazaar import (
     FETCH_DESCRIPTION,
     MARKDOWN_DESCRIPTION,
     RENDER_DESCRIPTION,
+    SCREENSHOT_DESCRIPTION,
+    SCREENSHOT_TAGS,
     TEXT_DESCRIPTION,
+    screenshot_discovery_extension,
 )
+from .browser_fetch import browser_screenshot
 from .config import HOST, PORT, SERVICE_NAME, SERVICE_VERSION
 from .core import smart_fetch
 from .discovery import (
@@ -118,9 +122,32 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         result["service_version"] = SERVICE_VERSION
         return result
 
+    async def _run_screenshot(
+        url: str,
+        viewport: str = "desktop",
+        full_page: bool = False,
+        image_format: str = "jpeg",
+        *,
+        no_cache: bool = False,
+    ) -> dict:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: browser_screenshot(
+                url,
+                viewport=viewport,
+                full_page=full_page,
+                image_format=image_format,
+                no_cache=no_cache,
+            ),
+        )
+        result["request_id"] = secrets.token_hex(8)
+        result["service_version"] = SERVICE_VERSION
+        return result
+
     remote_cfg = RemoteBrowserConfig.from_env()
     if remote_cfg.is_configured:
-        mcp = create_smartfetch_mcp(settings, _run_mcp_fetch)
+        mcp = create_smartfetch_mcp(settings, _run_mcp_fetch, screenshot_handler=_run_screenshot)
     else:
         mcp = create_emergency_mcp()
     application = FastAPI(
@@ -202,6 +229,44 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         except Exception as exc:
             return JSONResponse(status_code=502, content={"success": False, "error_code": "fetch_failed", "error": str(exc)})
 
+    @application.post("/screenshot")
+    async def screenshot_endpoint(request: Request):
+        remote_cfg = RemoteBrowserConfig.from_env()
+        if not remote_cfg.is_configured:
+            return JSONResponse(
+                status_code=503,
+                content={"success": False, "error_code": "browser_unavailable", "error": "Browser is temporarily unavailable"},
+                headers={"Retry-After": "3600", "Cache-Control": "no-store"},
+            )
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
+        if not isinstance(body, dict):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_request", "error": "Invalid request"})
+        url = body.get("url")
+        if not isinstance(url, str) or not url.strip():
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_url", "error": "URL must be a non-empty string"})
+        viewport = str(body.get("viewport", "desktop"))
+        if viewport not in ("desktop", "mobile"):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_viewport", "error": "Viewport must be 'desktop' or 'mobile'"})
+        full_page = bool(body.get("full_page", False))
+        image_format = str(body.get("image_format", "jpeg"))
+        if image_format not in ("jpeg", "png"):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_image_format", "error": "Image format must be 'jpeg' or 'png'"})
+        no_cache = bool(body.get("no_cache", False)) or request.headers.get("cache-control") == "no-cache"
+        try:
+            result = await _run_screenshot(
+                url.strip(),
+                viewport=viewport,
+                full_page=full_page,
+                image_format=image_format,
+                no_cache=no_cache,
+            )
+            return JSONResponse(status_code=200, content=result)
+        except Exception as exc:
+            return JSONResponse(status_code=502, content={"success": False, "error_code": "screenshot_failed", "error": str(exc)})
+
     @application.get("/", response_class=HTMLResponse)
     async def root(request: Request):
         remote_cfg = RemoteBrowserConfig.from_env()
@@ -226,10 +291,16 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                     "availability": "available",
                     "payment_challenge_enabled": settings.enabled,
                 },
+                "screenshot": {
+                    "url": urls["screenshot"],
+                    "availability": "available",
+                    "payment_challenge_enabled": settings.enabled,
+                    "price": "$0.01",
+                },
                 "mcp": {
                     "url": urls["mcp"],
                     "transport": "streamable-http",
-                    "tools": ["fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage"],
+                    "tools": list(MCP_TOOLS),
                 },
                 "discovery": {
                     "x402": urls["x402"],
@@ -244,7 +315,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                         "name": name,
                         "availability": "available",
                         "payment_challenge_enabled": settings.enabled,
-                        "price": settings.price,
+                        "price": "$0.01" if name == "screenshot_webpage" else settings.price,
                         "network": settings.network,
                         "asset": "USDC",
                     }
@@ -274,6 +345,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 {"name": "webpage_to_markdown", "description": MARKDOWN_DESCRIPTION},
                 {"name": "extract_webpage_text", "description": TEXT_DESCRIPTION},
                 {"name": "render_webpage", "description": RENDER_DESCRIPTION},
+                {"name": "screenshot_webpage", "description": SCREENSHOT_DESCRIPTION},
             ],
         }
 
@@ -348,7 +420,25 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         )
 
     if settings.enabled and remote_cfg.is_configured:
-        install_x402(application, settings)
+        from x402.http import PaymentOption
+        from x402.http.types import RouteConfig
+
+        screenshot_route = {
+            "POST /screenshot": RouteConfig(
+                accepts=PaymentOption(
+                    scheme="exact",
+                    pay_to=settings.pay_to,
+                    price="$0.01",
+                    network=settings.network,
+                ),
+                description=SCREENSHOT_DESCRIPTION,
+                mime_type="application/json",
+                service_name="SmartFetch",
+                tags=SCREENSHOT_TAGS,
+                extensions=screenshot_discovery_extension(),
+            )
+        }
+        install_x402(application, settings, additional_routes=screenshot_route)
 
     cors_wrapped = SmartFetchCORSMiddleware(
         EmergencyDispatch(MCPAcceptNormalization(application)),

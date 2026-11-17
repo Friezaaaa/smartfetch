@@ -18,8 +18,15 @@ from .bazaar import (
     FETCH_TAGS,
     MARKDOWN_DESCRIPTION,
     RENDER_DESCRIPTION,
+    SCREENSHOT_DESCRIPTION,
+    SCREENSHOT_INPUT_EXAMPLE,
+    SCREENSHOT_INPUT_SCHEMA,
+    SCREENSHOT_OUTPUT_EXAMPLE,
+    SCREENSHOT_OUTPUT_SCHEMA,
+    SCREENSHOT_TAGS,
     TEXT_DESCRIPTION,
     fetch_discovery_extension,
+    screenshot_discovery_extension,
 )
 from .config import SERVICE_NAME, SERVICE_VERSION
 from .media import MEDIA_LIMITS
@@ -55,6 +62,7 @@ TOOL_NAMES = (
     "webpage_to_markdown",
     "extract_webpage_text",
     "render_webpage",
+    "screenshot_webpage",
 )
 V111_TOOL_NAMES = (
     "search_and_extract",
@@ -88,6 +96,7 @@ def public_urls(request):
         "sitemap": f"{base}/sitemap.xml",
         "meta": f"{base}/meta",
         "fetch": f"{base}/fetch",
+        "screenshot": f"{base}/screenshot",
         "mcp": f"{base}/mcp",
     }
 
@@ -121,7 +130,7 @@ def x402_manifest(urls, settings, v111_accepts=None):
         ),
         "homepage": urls["base"],
         "repository": GITHUB_URL,
-        "resources": [urls["fetch"]],
+        "resources": [urls["fetch"]] + ([urls["screenshot"]] if "screenshot" in urls else []),
         "payment": {
             "protocol": "x402",
             "x402Version": 2,
@@ -191,6 +200,7 @@ def agent_card_document(urls, settings=None):
             },
             "rest": {
                 "url": urls["fetch"],
+                "screenshot": urls["screenshot"],
                 "openapi": urls["openapi"],
             },
             "x402": {
@@ -218,6 +228,10 @@ def agent_card_document(urls, settings=None):
             {
                 "name": "render_webpage",
                 "description": RENDER_DESCRIPTION,
+            },
+            {
+                "name": "screenshot_webpage",
+                "description": SCREENSHOT_DESCRIPTION,
             },
         ],
         "contact": {
@@ -512,6 +526,85 @@ def openapi_document(
                         ),
                         "503": _error_response("Service is at capacity"),
                         "504": _error_response("Retrieval timed out"),
+                    },
+                },
+            },
+            "/screenshot": {
+                "post": {
+                    "operationId": "screenshotWebpage",
+                    "summary": "Capture a webpage screenshot",
+                    "description": (
+                        "Paid x402 exact screenshot capture of one public HTTP or "
+                        "HTTPS URL rendered in an isolated browser. The configured "
+                        f"price is $0.01 per execution using USDC on {network_name}."
+                    ),
+                    "x-x402": {
+                        "x402Version": 2,
+                        "scheme": scheme,
+                        "network": network,
+                        "assetSymbol": "USDC",
+                        "price": "$0.01",
+                        "amount": _atomic_usdc_amount("$0.01"),
+                        **({"asset": asset} if asset is not None else {}),
+                    },
+                    "x-payment-info": {
+                        "price": {
+                            "mode": "fixed",
+                            "currency": "USD",
+                            "amount": _agentcash_usd_amount("$0.01"),
+                        },
+                        "protocols": [{"x402": {}}],
+                    },
+                    "security": [],
+                    "parameters": [
+                        {
+                            "name": "PAYMENT-SIGNATURE",
+                            "in": "header",
+                            "required": False,
+                            "description": (
+                                "Base64-encoded x402 v2 PaymentPayload on the paid retry request."
+                            ),
+                            "schema": {"type": "string"},
+                        },
+                    ],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": SCREENSHOT_INPUT_SCHEMA,
+                                "example": SCREENSHOT_INPUT_EXAMPLE,
+                            },
+                        },
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Webpage screenshot captured successfully.",
+                            "content": {
+                                "application/json": {
+                                    "schema": SCREENSHOT_OUTPUT_SCHEMA,
+                                    "example": SCREENSHOT_OUTPUT_EXAMPLE,
+                                },
+                            },
+                        },
+                        "400": _error_response("Invalid request payload or unsupported options"),
+                        "402": {
+                            "description": "Payment required. Sign the returned challenge.",
+                            "headers": {
+                                "PAYMENT-REQUIRED": payment_required_header,
+                            },
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "detail": {"type": "string"},
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                        "502": _error_response("Screenshot rendering failed in upstream browser worker"),
+                        "503": _error_response("Browser worker unavailable"),
                     },
                 },
             },
@@ -837,6 +930,7 @@ def docs_html(
       <li><a href="{safe['llms']}">GET /llms.txt</a> — agent discovery summary</li>
       <li><a href="{safe['mcp']}">POST /mcp</a> — MCP Streamable HTTP</li>
       <li><code>POST {safe['fetch']}</code> — paid webpage retrieval</li>
+      <li><code>POST {safe['screenshot']}</code> — paid webpage screenshot ($0.01)</li>
     </ul>
     <h2>Live interactive playground</h2>
     <p>Test SmartFetch live in your browser with Base Mainnet EIP-712 payments, free 402 challenge inspection, and sandboxed HTML preview at the <a href="{playground}">SmartFetch Playground</a> (or the <a href="{playground_mirror}">GitHub Pages mirror</a>).</p>
@@ -846,6 +940,7 @@ def docs_html(
       <dt><code>webpage_to_markdown</code></dt><dd>Token-efficient converter returning clean Markdown and core metadata from a webpage or PDF.</dd>
       <dt><code>extract_webpage_text</code></dt><dd>Token-efficient extractor returning clean plain text and core metadata from a webpage or PDF.</dd>
       <dt><code>render_webpage</code></dt><dd>Forced headless Chromium browser renderer for JavaScript SPAs returning post-JS rendered HTML DOM and extracted content.</dd>
+      <dt><code>screenshot_webpage</code></dt><dd>Isolated Chromium browser screenshot capture returning JPEG or PNG image bytes (base64) and dimensions ($0.01).</dd>
     </dl>
     <h2>Paying client examples</h2>
     <p>The examples list tools for free, enforce a $0.005 maximum payment, then perform the x402 challenge, payment, retry, and settlement flow. Running them can spend real Base-mainnet USDC.</p>
@@ -936,7 +1031,8 @@ Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['pric
 - [OpenAPI 3.1]({urls['openapi']})
 - [Metadata]({urls['meta']})
 - [Remote MCP Streamable HTTP]({urls['mcp']})
-- [Paid HTTP retrieval]({urls['fetch']}): POST only
+- [Paid HTTP retrieval]({urls['fetch']}): POST only ($0.005)
+- [Paid HTTP screenshot]({urls['screenshot']}): POST only ($0.01)
 
 ## Agent Onboarding & Payment Guide
 - [Comprehensive Agent Payment Integration Guide]({GITHUB_URL}/blob/main/docs/agent-payment-guide.md)
@@ -953,6 +1049,7 @@ Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['pric
 - webpage_to_markdown: clean Markdown and core metadata from a webpage or PDF
 - extract_webpage_text: clean plain text and core metadata from a webpage or PDF
 - render_webpage: forced browser renderer returning rendered HTML DOM and extracted content
+- screenshot_webpage: isolated Chromium browser screenshot capture returning JPEG or PNG base64 ($0.01)
 
 ## Paying MCP client examples
 - [Python MCP example]({PYTHON_EXAMPLE_URL})
@@ -1007,7 +1104,7 @@ def _emergency_identities():
     identities = []
     for name in TOOL_NAMES:
         identity = {"name": name, "availability": "unavailable", "payment_challenge_enabled": False}
-        if name == "render_webpage":
+        if name in ("render_webpage", "screenshot_webpage"):
             identity["error_code"] = "browser_unavailable"
         identities.append(identity)
     return identities
@@ -1027,6 +1124,12 @@ def emergency_meta(urls: dict) -> dict:
             "url": urls["fetch"],
             "availability": "available" if is_available else "unavailable",
             "payment_challenge_enabled": False,
+        },
+        "screenshot": {
+            "url": urls.get("screenshot", f"{urls.get('base', '')}/screenshot"),
+            "availability": "available" if is_available else "unavailable",
+            "payment_challenge_enabled": False,
+            "price": "$0.01",
         },
         "mcp": {"url": urls["mcp"]},
         "discovery": {
@@ -1062,6 +1165,12 @@ def emergency_x402_manifest(urls: dict) -> dict:
             "url": urls["fetch"],
             "availability": "unavailable",
             "payment_challenge_enabled": False,
+        },
+        "screenshot": {
+            "url": urls.get("screenshot", f"{urls.get('base', '')}/screenshot"),
+            "availability": "unavailable",
+            "payment_challenge_enabled": False,
+            "price": "$0.01",
         },
         "tools": _emergency_identities(),
     }
@@ -1106,7 +1215,23 @@ def emergency_openapi_document(urls: dict) -> dict:
                         "422": {"description": "Invalid retrieval arguments"},
                     },
                 }
-            }
+            },
+            "/screenshot": {
+                "post": {
+                    "summary": "Unavailable screenshot identity",
+                    "x-smartfetch-availability": "unavailable",
+                    "payment_challenge_enabled": False,
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": SCREENSHOT_INPUT_SCHEMA}},
+                    },
+                    "responses": {
+                        "503": unavailable,
+                        "400": {"description": "Invalid request"},
+                        "422": {"description": "Invalid screenshot arguments"},
+                    },
+                }
+            },
         },
     }
 

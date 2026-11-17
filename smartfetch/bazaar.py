@@ -36,6 +36,18 @@ RENDER_DESCRIPTION = (
     "returns the post-JS rendered HTML DOM alongside extracted text, Markdown, "
     "links, and metadata. Do not use for PDFs or static pages (use fetch_webpage instead)."
 )
+SCREENSHOT_DESCRIPTION = (
+    "Browser-based webpage screenshot capture tool. Captures high-resolution JPEG or "
+    "PNG screenshots of public webpages using isolated headless Chromium with "
+    "configurable desktop/mobile viewport and optional full-page capture."
+)
+SCREENSHOT_TAGS = [
+    "screenshot",
+    "webpage-capture",
+    "browser",
+    "visual-ai",
+    "agents",
+]
 FETCH_INPUT_EXAMPLE = {
     "url": "https://example.com/article",
     "max_chars": 20000,
@@ -322,4 +334,131 @@ def fetch_mcp_discovery_extension():
         input_example=FETCH_INPUT_EXAMPLE,
         output_schema=FETCH_OUTPUT_SCHEMA,
         output_example=FETCH_OUTPUT_EXAMPLE,
+    )
+
+
+SCREENSHOT_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "description": "Public HTTP or HTTPS webpage URL to capture.",
+        },
+        "viewport": {
+            "type": "string",
+            "enum": ["desktop", "mobile"],
+            "default": "desktop",
+            "description": "Device viewport preset (desktop: 1280x800, mobile: 390x844).",
+        },
+        "full_page": {
+            "type": "boolean",
+            "default": False,
+            "description": "Capture the full scrollable page height up to 4000px.",
+        },
+        "image_format": {
+            "type": "string",
+            "enum": ["jpeg", "png"],
+            "default": "jpeg",
+            "description": "Output image format (jpeg or png).",
+        },
+    },
+    "required": ["url"],
+}
+SCREENSHOT_INPUT_EXAMPLE = {
+    "url": "https://example.com",
+    "viewport": "desktop",
+    "full_page": False,
+    "image_format": "jpeg",
+}
+SCREENSHOT_OUTPUT_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "success": {"type": "boolean"},
+        "requested_url": {"type": "string", "format": "uri"},
+        "final_url": {"type": "string", "format": "uri"},
+        "status_code": {"type": "integer"},
+        "render_method": {"type": "string", "enum": ["browser"]},
+        "elapsed_ms": {"type": "integer", "minimum": 0},
+        "title": {"type": "string"},
+        "image_base64": {"type": "string", "description": "Base64-encoded image data."},
+        "mime_type": {"type": "string", "enum": ["image/jpeg", "image/png"]},
+        "image_format": {"type": "string", "enum": ["jpeg", "png"]},
+        "viewport": {"type": "string", "enum": ["desktop", "mobile"]},
+        "full_page": {"type": "boolean"},
+        "width": {"type": "integer"},
+        "height": {"type": "integer"},
+        "byte_size": {"type": "integer"},
+        "request_id": {"type": "string"},
+        "service_version": {"type": "string"},
+    },
+    "required": [
+        "success",
+        "requested_url",
+        "final_url",
+        "status_code",
+        "render_method",
+        "elapsed_ms",
+        "title",
+        "image_base64",
+        "mime_type",
+        "image_format",
+        "viewport",
+        "full_page",
+        "width",
+        "height",
+        "byte_size",
+        "request_id",
+        "service_version",
+    ],
+}
+SCREENSHOT_OUTPUT_EXAMPLE = {
+    "success": True,
+    "requested_url": "https://example.com",
+    "final_url": "https://example.com",
+    "status_code": 200,
+    "render_method": "browser",
+    "elapsed_ms": 612,
+    "title": "Example Domain",
+    "image_base64": "/9j/4AAQSkZJRgABAQEASABIAAD/2wBD...",
+    "mime_type": "image/jpeg",
+    "image_format": "jpeg",
+    "viewport": "desktop",
+    "full_page": False,
+    "width": 1280,
+    "height": 800,
+    "byte_size": 45120,
+    "request_id": "a1b2c3d4e5f60708",
+    "service_version": SERVICE_VERSION,
+}
+
+
+def screenshot_discovery_extension():
+    """Build the official x402 v2 Bazaar declaration for POST /screenshot."""
+    from x402.extensions.bazaar import OutputConfig, declare_discovery_extension
+
+    extension = declare_discovery_extension(
+        input=SCREENSHOT_INPUT_EXAMPLE,
+        input_schema=SCREENSHOT_INPUT_SCHEMA,
+        body_type="json",
+        output=OutputConfig(
+            example=SCREENSHOT_OUTPUT_EXAMPLE,
+            schema=SCREENSHOT_OUTPUT_SCHEMA,
+        ),
+    )
+    extension["bazaar"]["info"]["input"]["method"] = "POST"
+    return extension
+
+
+def screenshot_mcp_discovery_extension():
+    """Build the official x402 v2 Bazaar declaration for screenshot_webpage."""
+    return mcp_discovery_extension(
+        tool_name="screenshot_webpage",
+        description=SCREENSHOT_DESCRIPTION,
+        input_schema=SCREENSHOT_INPUT_SCHEMA,
+        input_example=SCREENSHOT_INPUT_EXAMPLE,
+        output_schema=SCREENSHOT_OUTPUT_SCHEMA,
+        output_example=SCREENSHOT_OUTPUT_EXAMPLE,
     )

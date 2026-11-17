@@ -57,12 +57,13 @@ def test_agent_card_manifest_endpoint(client):
     assert protocols["x402"]["price"] == "$0.005"
     assert protocols["x402"]["enabled"] is True
 
-    # Verify capabilities list all 4 tools
+    # Verify capabilities list all tools
     cap_names = [c["name"] for c in data["capabilities"]]
     assert "fetch_webpage" in cap_names
     assert "webpage_to_markdown" in cap_names
     assert "extract_webpage_text" in cap_names
     assert "render_webpage" in cap_names
+    assert "screenshot_webpage" in cap_names
 
     # Verify no secrets or internal infrastructure IPs are leaked
     body_str = response.text

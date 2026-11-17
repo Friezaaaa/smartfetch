@@ -21,7 +21,7 @@ FREE = (
     "/", "/meta", "/docs", "/openapi.json", "/llms.txt",
     "/.well-known/x402", "/robots.txt", "/sitemap.xml",
 )
-TOOLS = ("fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage")
+TOOLS = ("fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage", "screenshot_webpage")
 MCP_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 
 

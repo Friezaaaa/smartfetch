@@ -201,6 +201,7 @@ class PaymentOnboardingDocumentationTests(unittest.TestCase):
             'webpage_to_markdown',
             'extract_webpage_text',
             'render_webpage',
+            'screenshot_webpage',
         ))
 
 

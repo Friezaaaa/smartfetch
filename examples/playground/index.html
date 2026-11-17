@@ -174,6 +174,18 @@
           <h2>1. Request Parameters</h2>
           
           <div class="form-group">
+            <label>Operation</label>
+            <div style="display: flex; gap: 16px; margin-top: 6px;">
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #fff;">
+                <input type="radio" name="operationMode" value="fetch" checked onchange="onModeChange()"> Fetch Webpage ($0.005)
+              </label>
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #fff;">
+                <input type="radio" name="operationMode" value="screenshot" onchange="onModeChange()"> Screenshot ($0.01)
+              </label>
+            </div>
+          </div>
+
+          <div class="form-group">
             <label for="gatewayUrl">Gateway URL</label>
             <input type="text" id="gatewayUrl" value="https://smartfetch-production-ea53.up.railway.app">
           </div>
@@ -186,30 +198,55 @@
             </div>
           </div>
 
-          <div class="form-group">
-            <label for="maxCharsSlider">Max Characters: <span id="maxCharsVal" style="color: var(--accent);">20000</span></label>
-            <div class="slider-container">
-              <input type="range" id="maxCharsSlider" min="1000" max="50000" step="1000" value="20000">
+          <div id="fetchOptions">
+            <div class="form-group">
+              <label for="maxCharsSlider">Max Characters: <span id="maxCharsVal" style="color: var(--accent);">20000</span></label>
+              <div class="slider-container">
+                <input type="range" id="maxCharsSlider" min="1000" max="50000" step="1000" value="20000">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="renderMode">Rendering Mode</label>
+              <select id="renderMode">
+                <option value="auto" selected>auto (HTTP first, fallback to isolated browser)</option>
+                <option value="browser">browser (force isolated Chromium on VPS)</option>
+                <option value="http_only">http_only (fast HTTP stream without browser)</option>
+              </select>
+            </div>
+
+            <div class="form-group checkbox-group">
+              <input type="checkbox" id="includeHtml" checked>
+              <label for="includeHtml" style="margin-bottom: 0; cursor: pointer;">Include Bounded HTML (include_html: true)</label>
             </div>
           </div>
 
-          <div class="form-group">
-            <label for="renderMode">Rendering Mode</label>
-            <select id="renderMode">
-              <option value="auto" selected>auto (HTTP first, fallback to isolated browser)</option>
-              <option value="browser">browser (force isolated Chromium on VPS)</option>
-              <option value="http_only">http_only (fast HTTP stream without browser)</option>
-            </select>
+          <div id="screenshotOptions" style="display: none;">
+            <div class="form-group">
+              <label for="screenshotViewport">Viewport</label>
+              <select id="screenshotViewport" onchange="updateSnippets()">
+                <option value="desktop" selected>Desktop (1280x800)</option>
+                <option value="mobile">Mobile (390x844, 2x scale)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="screenshotFormat">Image Format</label>
+              <select id="screenshotFormat" onchange="updateSnippets()">
+                <option value="jpeg" selected>JPEG (quality: 82)</option>
+                <option value="png">PNG</option>
+              </select>
+            </div>
+
+            <div class="form-group checkbox-group">
+              <input type="checkbox" id="screenshotFullPage" onchange="updateSnippets()">
+              <label for="screenshotFullPage" style="margin-bottom: 0; cursor: pointer;">Full Page (up to 4000px clamp)</label>
+            </div>
           </div>
 
-          <div class="form-group checkbox-group">
+          <div class="form-group checkbox-group" style="margin-top: 10px;">
             <input type="checkbox" id="noCache">
             <label for="noCache" style="margin-bottom: 0; cursor: pointer;">Bypass Server Cache (no_cache: true)</label>
-          </div>
-
-          <div class="form-group checkbox-group">
-            <input type="checkbox" id="includeHtml" checked>
-            <label for="includeHtml" style="margin-bottom: 0; cursor: pointer;">Include Bounded HTML (include_html: true)</label>
           </div>
 
           <div id="executionStatus" class="alert" style="margin-top: 14px;"></div>
@@ -252,6 +289,7 @@
             <button class="tab active" onclick="switchOutputTab('markdown')">Markdown</button>
             <button class="tab" onclick="switchOutputTab('text')">Plain Text</button>
             <button class="tab" onclick="switchOutputTab('html')">Sandboxed HTML</button>
+            <button class="tab" onclick="switchOutputTab('screenshot')">Screenshot</button>
             <button class="tab" onclick="switchOutputTab('meta')">Metadata &amp; JSON</button>
           </div>
 
@@ -269,6 +307,19 @@
             <iframe id="previewIframe" class="preview-frame" sandbox="allow-scripts" srcdoc="<p style='color:#64748b;font-family:sans-serif;padding:16px;'>Sandboxed preview will appear here.</p>"></iframe>
           </div>
 
+          <div id="tabScreenshot" class="tab-content">
+            <div id="screenshotMetrics" style="margin-bottom: 8px; color: var(--text-muted); font-size: 0.85rem;"></div>
+            <div style="margin-bottom: 12px;">
+              <button id="downloadScreenshotBtn" class="btn-secondary" style="display: none; padding: 6px 14px; font-size: 0.85rem;" onclick="downloadScreenshot()">
+                &#11015; Download Image
+              </button>
+            </div>
+            <div style="text-align: center; background: #000; border-radius: 8px; padding: 8px; border: 1px solid var(--card-border); max-height: 600px; overflow: auto;">
+              <img id="screenshotImg" style="max-width: 100%; border-radius: 4px; display: none;" alt="Captured screenshot">
+              <p id="screenshotPlaceholder" style="color: var(--text-muted); padding: 40px;">Execute a screenshot request to preview image.</p>
+            </div>
+          </div>
+
           <div id="tabMeta" class="tab-content">
             <pre id="metaOutput">Execute a request to view full structured metadata and response JSON.</pre>
           </div>
@@ -283,6 +334,28 @@
 
   let buyerAccount = null;
   let cached402Challenge = null;
+  let currentScreenshotBase64 = null;
+  let currentScreenshotMime = null;
+
+  function getOperationMode() {
+    const radios = document.getElementsByName('operationMode');
+    for (const r of radios) {
+      if (r.checked) return r.value;
+    }
+    return 'fetch';
+  }
+
+  function onModeChange() {
+    const mode = getOperationMode();
+    const isScreenshot = mode === 'screenshot';
+    document.getElementById('fetchOptions').style.display = isScreenshot ? 'none' : 'block';
+    document.getElementById('screenshotOptions').style.display = isScreenshot ? 'block' : 'none';
+    document.getElementById('paidBtn').innerHTML = isScreenshot 
+      ? '&#9889; Connect Wallet &amp; Screenshot ($0.01 USDC)'
+      : '&#9889; Connect Wallet &amp; Fetch ($0.005 USDC)';
+    cached402Challenge = null;
+    updateSnippets();
+  }
 
   // Elements
   const gatewayUrlInput = document.getElementById('gatewayUrl');
@@ -353,6 +426,7 @@
   async function inspectHealthAnd402() {
     const gateway = gatewayUrlInput.value.trim().replace(/\/+$/, '');
     const target = targetUrlInput.value.trim();
+    const mode = getOperationMode();
 
     if (isSSRF(target)) {
       showStatus("&#10060; <strong>SSRF Blocked:</strong> Internal / private address (localhost, 127.0.0.1, 169.254.169.254) forbidden client-side.", "danger");
@@ -366,11 +440,16 @@
       const hResp = await fetch(`${gateway}/health`);
       const hData = await hResp.json();
 
-      // 2. Unauthenticated POST /fetch to capture 402
-      const fetchResp = await fetch(`${gateway}/fetch`, {
+      // 2. Unauthenticated POST to capture 402
+      const endpoint = mode === 'screenshot' ? `${gateway}/screenshot` : `${gateway}/fetch`;
+      const probeBody = mode === 'screenshot'
+        ? { url: target, viewport: document.getElementById('screenshotViewport').value }
+        : { url: target, max_chars: parseInt(maxCharsSlider.value, 10) };
+
+      const fetchResp = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: target, max_chars: parseInt(maxCharsSlider.value, 10) })
+        body: JSON.stringify(probeBody)
       });
 
       setBadge(fetchResp.status, fetchResp.statusText);
@@ -388,10 +467,12 @@
       const acc = (challenge && challenge.accepts && challenge.accepts[0]) || {};
       const network = acc.network || 'eip155:8453';
       const payTo = acc.payTo || '0xE29Fcb6ef1534d5F138E48a8A71370BE7770A786';
-      const price = acc.amount === '5000' ? '$0.005 USDC' : (acc.amount ? `${acc.amount} (${network})` : '$0.005 USDC');
+      const expectedAmount = mode === 'screenshot' ? '10000' : '5000';
+      const price = acc.amount === '10000' ? '$0.01 USDC' : (acc.amount === '5000' ? '$0.005 USDC' : (acc.amount ? `${acc.amount} (${network})` : (mode === 'screenshot' ? '$0.01 USDC' : '$0.005 USDC')));
 
       showStatus(`&#10004; <strong>Gateway Online (mode: ${hData.mode || 'isolated_browser'})</strong><br>
-Payment Requirement: <strong>${price}</strong> (${acc.amount || '5000'} atomic units)<br>
+Operation: <strong>${mode === 'screenshot' ? 'Screenshot Webpage' : 'Fetch Webpage'}</strong><br>
+Payment Requirement: <strong>${price}</strong> (${acc.amount || expectedAmount} atomic units)<br>
 Network: <code>${network}</code><br>
 Pay To: <code style="word-break:break-all;">${payTo}</code>`, "warning");
 
@@ -406,7 +487,8 @@ Pay To: <code style="word-break:break-all;">${payTo}</code>`, "warning");
       document.getElementById('markdownOutput').textContent = 
 `# HTTP 402 Payment Required
 
-- **Price:** ${price} (${acc.amount || '5000'} atomic units)
+- **Operation:** ${mode === 'screenshot' ? 'Screenshot Webpage' : 'Fetch Webpage'}
+- **Price:** ${price} (${acc.amount || expectedAmount} atomic units)
 - **Network:** \`${network}\`
 - **Pay To:** \`${payTo}\`
 - **Asset Contract:** \`${acc.asset || '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'}\`
@@ -414,7 +496,7 @@ Pay To: <code style="word-break:break-all;">${payTo}</code>`, "warning");
 Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
 
       document.getElementById('textOutput').textContent = 
-`HTTP 402 Payment Required\nPrice: ${price}\nNetwork: ${network}\nPay To: ${payTo}`;
+`HTTP 402 Payment Required\nOperation: ${mode}\nPrice: ${price}\nNetwork: ${network}\nPay To: ${payTo}`;
 
       document.getElementById('previewIframe').srcdoc = "<p style='padding:20px;font-family:sans-serif;color:#d97706;'>HTTP 402 Payment Required. Sign in MetaMask to render webpage.</p>";
       switchOutputTab('meta');
@@ -424,7 +506,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     }
   }
 
-  // Web3 Wallet Connect & Paid Fetch
+  // Web3 Wallet Connect & Paid Fetch / Screenshot
   async function connectAndFetchPaid() {
     if (!window.ethereum) {
       alert("No Web3 wallet (MetaMask / Coinbase Wallet) detected in this browser.");
@@ -433,6 +515,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
 
     const gateway = gatewayUrlInput.value.trim().replace(/\/+$/, '');
     const target = targetUrlInput.value.trim();
+    const mode = getOperationMode();
 
     if (isSSRF(target)) {
       showStatus("&#10060; <strong>SSRF Blocked:</strong> Internal / private address (localhost, 127.0.0.1, 169.254.169.254) forbidden client-side.", "danger");
@@ -463,9 +546,13 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
         }
       }
 
-      // 1. Fetch challenge if not cached
+      // 1. Fetch challenge
+      const endpoint = mode === 'screenshot' ? `${gateway}/screenshot` : `${gateway}/fetch`;
+      const expectedAmount = mode === 'screenshot' ? '10000' : '5000';
+      const priceLabel = mode === 'screenshot' ? '$0.01' : '$0.005';
+
       showStatus("Obtaining live 402 payment requirements from gateway...", "info");
-      const initialResp = await fetch(`${gateway}/fetch`, {
+      const initialResp = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: target })
@@ -482,7 +569,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
         scheme: "exact",
         network: "eip155:8453",
         asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        amount: "5000",
+        amount: expectedAmount,
         payTo: "0xE29Fcb6ef1534d5F138E48a8A71370BE7770A786",
         maxTimeoutSeconds: 300,
         extra: { name: "USD Coin", version: "2" }
@@ -528,7 +615,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
         }
       };
 
-      showStatus("<strong>Waiting for MetaMask approval...</strong><br>Sign the EIP-712 transfer authorization for $0.005 USDC.", "info");
+      showStatus(`<strong>Waiting for MetaMask approval...</strong><br>Sign the EIP-712 transfer authorization for ${priceLabel} USDC.`, "info");
 
       const signature = await window.ethereum.request({
         method: 'eth_signTypedData_v4',
@@ -551,8 +638,8 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
         },
         accepted: accepted,
         resource: (challenge && challenge.resource) || {
-          url: `${gateway}/fetch`,
-          description: "SmartFetch Web Reader",
+          url: endpoint,
+          description: mode === 'screenshot' ? "SmartFetch Screenshot" : "SmartFetch Web Reader",
           mimeType: "application/json",
           serviceName: "SmartFetch"
         }
@@ -562,18 +649,29 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
 
       showStatus("<strong>Signature approved!</strong> Dispatching paid request to SmartFetch gateway &amp; isolated VPS worker...", "info");
 
-      const reqBody = {
-        url: target,
-        max_chars: parseInt(maxCharsSlider.value, 10),
-        render_mode: renderModeSelect.value,
-        no_cache: noCacheCheckbox.checked,
-        include_html: includeHtmlCheckbox.checked
-      };
-      if (renderModeSelect.value === 'browser') {
-        reqBody.force_browser = true;
+      let reqBody;
+      if (mode === 'screenshot') {
+        reqBody = {
+          url: target,
+          viewport: document.getElementById('screenshotViewport').value,
+          full_page: document.getElementById('screenshotFullPage').checked,
+          image_format: document.getElementById('screenshotFormat').value,
+          no_cache: noCacheCheckbox.checked
+        };
+      } else {
+        reqBody = {
+          url: target,
+          max_chars: parseInt(maxCharsSlider.value, 10),
+          render_mode: renderModeSelect.value,
+          no_cache: noCacheCheckbox.checked,
+          include_html: includeHtmlCheckbox.checked
+        };
+        if (renderModeSelect.value === 'browser') {
+          reqBody.force_browser = true;
+        }
       }
 
-      const paidResp = await fetch(`${gateway}/fetch`, {
+      const paidResp = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -599,17 +697,31 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
         if (txHash && txHash.startsWith("0x")) {
           txHtml = `<br>Tx Hash: <a class="tx-link" href="https://basescan.org/tx/${txHash}" target="_blank">${txHash}</a>`;
         }
-        showStatus(`&#10004; <strong>Success!</strong> Payment verified &amp; settled on Base Mainnet. Rendered via: <code>${respData.render_method || 'http'}</code> in ${respData.elapsed_ms || 0}ms.${txHtml}`, "success");
+        showStatus(`&#10004; <strong>Success!</strong> Payment verified &amp; settled on Base Mainnet. Rendered via: <code>${respData.render_method || 'browser'}</code> in ${respData.elapsed_ms || 0}ms.${txHtml}`, "success");
 
-        // Populate Tabs
-        document.getElementById('markdownOutput').textContent = respData.markdown || respData.content || "No Markdown returned.";
-        document.getElementById('textOutput').textContent = respData.content || "";
-        document.getElementById('textMetrics').textContent = `Words: ${respData.word_count || 0} | Chars: ${respData.returned_content_chars || (respData.content ? respData.content.length : 0)} ${respData.page_count ? '| PDF Pages: ' + respData.page_count : ''}`;
-
-        if (respData.html) {
-          document.getElementById('previewIframe').srcdoc = respData.html;
+        if (mode === 'screenshot') {
+          currentScreenshotBase64 = respData.image_base64;
+          currentScreenshotMime = respData.mime_type || 'image/jpeg';
+          const img = document.getElementById('screenshotImg');
+          img.src = `data:${currentScreenshotMime};base64,${currentScreenshotBase64}`;
+          img.style.display = 'inline-block';
+          document.getElementById('screenshotPlaceholder').style.display = 'none';
+          document.getElementById('downloadScreenshotBtn').style.display = 'inline-flex';
+          document.getElementById('screenshotMetrics').textContent = 
+            `Dimensions: ${respData.width}x${respData.height} | Format: ${respData.image_format} | Size: ${(respData.byte_size / 1024).toFixed(1)} KB | Viewport: ${respData.viewport} (Full Page: ${respData.full_page})`;
+          switchOutputTab('screenshot');
         } else {
-          document.getElementById('previewIframe').srcdoc = `<pre style="font-family:sans-serif;padding:20px;">${escapeHtml(respData.content || '')}</pre>`;
+          // Populate Tabs
+          document.getElementById('markdownOutput').textContent = respData.markdown || respData.content || "No Markdown returned.";
+          document.getElementById('textOutput').textContent = respData.content || "";
+          document.getElementById('textMetrics').textContent = `Words: ${respData.word_count || 0} | Chars: ${respData.returned_content_chars || (respData.content ? respData.content.length : 0)} ${respData.page_count ? '| PDF Pages: ' + respData.page_count : ''}`;
+
+          if (respData.html) {
+            document.getElementById('previewIframe').srcdoc = respData.html;
+          } else {
+            document.getElementById('previewIframe').srcdoc = `<pre style="font-family:sans-serif;padding:20px;">${escapeHtml(respData.content || '')}</pre>`;
+          }
+          switchOutputTab('markdown');
         }
 
         document.getElementById('metaOutput').textContent = JSON.stringify({
@@ -617,10 +729,8 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
           settlement: settlement,
           result: respData
         }, null, 2);
-
-        switchOutputTab('markdown');
       } else {
-        showStatus(`&#10060; Retrieval failed (HTTP ${paidResp.status}): ${JSON.stringify(respData)}`, "danger");
+        showStatus(`&#10060; Operation failed (HTTP ${paidResp.status}): ${JSON.stringify(respData)}`, "danger");
         document.getElementById('metaOutput').textContent = JSON.stringify({ status: paidResp.status, body: respData }, null, 2);
         switchOutputTab('meta');
       }
@@ -632,16 +742,29 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     }
   }
 
+  function downloadScreenshot() {
+    if (!currentScreenshotBase64) return;
+    const a = document.createElement('a');
+    a.href = `data:${currentScreenshotMime};base64,${currentScreenshotBase64}`;
+    const ext = currentScreenshotMime.includes('png') ? 'png' : 'jpg';
+    a.download = `screenshot_${Date.now()}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
   function escapeHtml(str) {
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
   // Tab Switching
   function switchOutputTab(name) {
-    const tabs = ['markdown', 'text', 'html', 'meta'];
+    const tabs = ['markdown', 'text', 'html', 'screenshot', 'meta'];
     tabs.forEach(t => {
-      document.querySelector(`#outputTabs button[onclick*="${t}"]`).classList.toggle('active', t === name);
-      document.getElementById(`tab${t.charAt(0).toUpperCase() + t.slice(1)}`).classList.toggle('active', t === name);
+      const btn = document.querySelector(`#outputTabs button[onclick*="${t}"]`);
+      if (btn) btn.classList.toggle('active', t === name);
+      const pane = document.getElementById(`tab${t.charAt(0).toUpperCase() + t.slice(1)}`);
+      if (pane) pane.classList.toggle('active', t === name);
     });
   }
 
@@ -657,13 +780,62 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
   function updateSnippets() {
     const gateway = gatewayUrlInput.value.trim().replace(/\/+$/, '');
     const target = targetUrlInput.value.trim();
-    const maxChars = parseInt(maxCharsSlider.value, 10);
-    const renderMode = renderModeSelect.value;
+    const mode = getOperationMode();
     const noCache = noCacheCheckbox.checked;
-    const includeHtml = includeHtmlCheckbox.checked;
 
-    // cURL
-    document.getElementById('snippetCurl').textContent = 
+    if (mode === 'screenshot') {
+      const viewport = document.getElementById('screenshotViewport').value;
+      const fullPage = document.getElementById('screenshotFullPage').checked;
+      const format = document.getElementById('screenshotFormat').value;
+
+      // cURL
+      document.getElementById('snippetCurl').textContent = 
+`curl -X POST "${gateway}/screenshot" \\
+  -H "Content-Type: application/json" \\
+  -H "PAYMENT-SIGNATURE: <BASE64_X402_ENVELOPE>" \\
+  -d '{
+    "url": "${target}",
+    "viewport": "${viewport}",
+    "full_page": ${fullPage},
+    "image_format": "${format}",
+    "no_cache": ${noCache}
+  }'`;
+
+      // Python (x402)
+      document.getElementById('snippetPython').textContent = 
+`import httpx
+from x402.client import x402Client
+
+client = x402Client()
+response = client.post(
+    "${gateway}/screenshot",
+    json={
+        "url": "${target}",
+        "viewport": "${viewport}",
+        "full_page": ${fullPage},
+        "image_format": "${format}",
+        "no_cache": ${noCache}
+    }
+)
+data = response.json()
+print("Captured:", data.get("width"), "x", data.get("height"), "size:", data.get("byte_size"))`;
+
+      // TypeScript (viem)
+      document.getElementById('snippetTypescript').textContent = 
+`import { createWalletClient, custom } from 'viem';
+import { base } from 'viem/chains';
+
+const client = createWalletClient({ chain: base, transport: custom(window.ethereum) });
+// 1. Fetch challenge from ${gateway}/screenshot ($0.01 USDC)
+// 2. Sign EIP-712 TransferWithAuthorization (amount: 10000 atomic units)
+// 3. Retry with PAYMENT-SIGNATURE: <base64_payload>`;
+    } else {
+      const maxChars = parseInt(maxCharsSlider.value, 10);
+      const renderMode = renderModeSelect.value;
+      const includeHtml = includeHtmlCheckbox.checked;
+
+      // cURL
+      document.getElementById('snippetCurl').textContent = 
 `curl -X POST "${gateway}/fetch" \\
   -H "Content-Type: application/json" \\
   -H "PAYMENT-SIGNATURE: <BASE64_X402_ENVELOPE>" \\
@@ -675,8 +847,8 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     "include_html": ${includeHtml}
   }'`;
 
-    // Python (x402)
-    document.getElementById('snippetPython').textContent = 
+      // Python (x402)
+      document.getElementById('snippetPython').textContent = 
 `import httpx
 from x402.client import x402Client
 
@@ -694,15 +866,16 @@ response = client.post(
 print("Title:", response.json().get("title"))
 print("Content:", response.json().get("content")[:500])`;
 
-    // TypeScript (viem)
-    document.getElementById('snippetTypescript').textContent = 
+      // TypeScript (viem)
+      document.getElementById('snippetTypescript').textContent = 
 `import { createWalletClient, custom } from 'viem';
 import { base } from 'viem/chains';
 
 const client = createWalletClient({ chain: base, transport: custom(window.ethereum) });
-// 1. Fetch challenge from ${gateway}/fetch
-// 2. Sign EIP-712 TransferWithAuthorization
+// 1. Fetch challenge from ${gateway}/fetch ($0.005 USDC)
+// 2. Sign EIP-712 TransferWithAuthorization (amount: 5000 atomic units)
 // 3. Retry with PAYMENT-SIGNATURE: <base64_payload>`;
+    }
 
     // MCP Config
     document.getElementById('snippetMcp').textContent = 

@@ -79,6 +79,7 @@ class TestMCPToolMigration(unittest.IsolatedAsyncioTestCase):
         self.assertIn("webpage_to_markdown", tools)
         self.assertIn("extract_webpage_text", tools)
         self.assertIn("render_webpage", tools)
+        self.assertIn("screenshot_webpage", tools)
 
 
 if __name__ == "__main__":

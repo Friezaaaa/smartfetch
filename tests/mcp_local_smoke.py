@@ -51,10 +51,10 @@ with (
         name: rpc(client, index, 'tools/call', {
             'name': name, 'arguments': {'url': 'https://example.com/'},
         }) for index, name in enumerate((
-            'fetch_webpage', 'webpage_to_markdown', 'extract_webpage_text', 'render_webpage',
+            'fetch_webpage', 'webpage_to_markdown', 'extract_webpage_text', 'render_webpage', 'screenshot_webpage',
         ), start=3)
     }
-    absent = rpc(client, 7, 'tools/call', {
+    absent = rpc(client, 8, 'tools/call', {
         'name': 'search_and_extract', 'arguments': {'query': 'private-canary'},
     })
 
@@ -64,10 +64,11 @@ assert [tool['name'] for tool in listed['result']['tools']] == [
     'webpage_to_markdown',
     'extract_webpage_text',
     'render_webpage',
+    'screenshot_webpage',
 ]
 for name, result in unavailable.items():
     assert result['result']['isError'] is True
-    expected = 'browser_unavailable' if name == 'render_webpage' else 'retrieval_unavailable'
+    expected = 'browser_unavailable' if name in ('render_webpage', 'screenshot_webpage') else 'retrieval_unavailable'
     assert result['result']['structuredContent']['error_code'] == expected
     assert 'accepts' not in str(result)
 assert absent['error']['message'] == 'Unknown tool'
@@ -75,6 +76,6 @@ wrapper.assert_not_called()
 dns.assert_not_called()
 
 print('PASS MCP initialize (free)')
-print('PASS MCP tools/list: four SmartFetch tools (free)')
-print('PASS MCP four unavailable calls before payment or retrieval')
+print('PASS MCP tools/list: five SmartFetch tools (free)')
+print('PASS MCP five unavailable calls before payment or retrieval')
 print('PASS MCP V1.11 tool absent')

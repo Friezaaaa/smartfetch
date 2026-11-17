@@ -27,11 +27,18 @@ from .bazaar import (
     RENDER_INPUT_SCHEMA,
     RENDER_OUTPUT_EXAMPLE,
     RENDER_OUTPUT_SCHEMA,
+    SCREENSHOT_DESCRIPTION,
+    SCREENSHOT_INPUT_EXAMPLE,
+    SCREENSHOT_INPUT_SCHEMA,
+    SCREENSHOT_OUTPUT_EXAMPLE,
+    SCREENSHOT_OUTPUT_SCHEMA,
     TEXT_DESCRIPTION,
     TEXT_OUTPUT_EXAMPLE,
     TEXT_OUTPUT_SCHEMA,
     mcp_discovery_extension,
+    screenshot_mcp_discovery_extension,
 )
+from .browser_fetch import browser_screenshot
 from .config import HOST, MAX_REQUEST_BODY_BYTES, SERVICE_NAME, SERVICE_VERSION
 from .mcp_logging import configure_mcp_sdk_logging
 from .payments import X402Settings, create_x402_resource_server
@@ -45,6 +52,7 @@ MCP_TOOLS = (
     "webpage_to_markdown",
     "extract_webpage_text",
     "render_webpage",
+    "screenshot_webpage",
 )
 V111_MCP_TOOLS = ("search_and_extract", "extract_structured_data")
 MCP_TRANSPORT = "streamable-http"
@@ -53,6 +61,7 @@ MCP_MIN_CHARS = 1000
 MCP_MAX_CHARS = 50000
 
 FetchHandler = Callable[..., Awaitable[dict[str, Any]]]
+ScreenshotHandler = Callable[..., Awaitable[dict[str, Any]]]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -74,6 +83,7 @@ def _initialize_payment(settings: X402Settings):
     initialization_failed = False
     resource_server = None
     accepts = []
+    screenshot_accepts = []
     try:
         from x402.server import ResourceConfig
 
@@ -88,19 +98,26 @@ def _initialize_payment(settings: X402Settings):
             price=settings.price,
             network=settings.network,
         ))
+        screenshot_accepts = resource_server.build_payment_requirements(ResourceConfig(
+            scheme="exact",
+            payTo=settings.pay_to,
+            price="$0.01",
+            network=settings.network,
+        ))
     except Exception as exc:
         _LOGGER.error("Failed to initialize x402 MCP payment server: %s", exc)
         initialization_failed = True
 
     if initialization_failed:
         raise RuntimeError("x402 MCP initialization failed")
-    return resource_server, accepts
+    return resource_server, accepts, screenshot_accepts
 
 
 def create_smartfetch_mcp(
     settings: X402Settings,
     fetch_handler: FetchHandler,
     *,
+    screenshot_handler: ScreenshotHandler | None = None,
     v111_service=None,
 ) -> SmartFetchMCP:
     """Build the production MCP server with optional x402 payment protection."""
@@ -117,8 +134,9 @@ def create_smartfetch_mcp(
 
     resource_server = None
     accepts = []
+    screenshot_accepts = []
     if settings.enabled:
-        resource_server, accepts = _initialize_payment(settings)
+        resource_server, accepts, screenshot_accepts = _initialize_payment(settings)
 
     # Handlers for each of the 4 tools: fetch_webpage is the flagship tool,
     # and the remaining three tools delegate internally to fetch_handler.
@@ -228,7 +246,37 @@ def create_smartfetch_mcp(
                 payload[opt_key] = result[opt_key]
         return payload
 
-    def protect(name: str, description: str, handler: Callable, extension: dict[str, Any] | None = None) -> Callable:
+    async def screenshot_webpage(
+        url: Annotated[str, Field(description="Public HTTP or HTTPS URL of a webpage to capture as a screenshot.")],
+        viewport: Annotated[str, Field(description="Device viewport preset ('desktop' for 1280x800, 'mobile' for 390x844).")] = "desktop",
+        full_page: Annotated[bool, Field(description="Capture the full scrollable page height up to 4000px.")] = False,
+        image_format: Annotated[str, Field(description="Output image format ('jpeg' or 'png').")] = "jpeg",
+    ) -> dict[str, Any]:
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("url must be a non-empty string")
+        if viewport not in ("desktop", "mobile"):
+            raise ValueError("viewport must be 'desktop' or 'mobile'")
+        if image_format not in ("jpeg", "png"):
+            raise ValueError("image_format must be 'jpeg' or 'png'")
+        if screenshot_handler is not None:
+            return await screenshot_handler(url.strip(), viewport, full_page, image_format)
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: browser_screenshot(url.strip(), viewport=viewport, full_page=full_page, image_format=image_format),
+        )
+
+    def protect(
+        name: str,
+        description: str,
+        handler: Callable,
+        extension: dict[str, Any] | None = None,
+        tool_accepts: list[Any] | None = None,
+        tool_price: str | None = None,
+    ) -> Callable:
+        price_str = tool_price or settings.price
+        chosen_accepts = tool_accepts if tool_accepts is not None else accepts
         if not settings.enabled:
             @wraps(handler)
             async def free_wrapper(**kwargs):
@@ -263,7 +311,7 @@ def create_smartfetch_mcp(
                 payment_stage="verification",
                 payment_network=settings.network,
                 payment_asset="USDC",
-                payment_amount=settings.price,
+                payment_amount=price_str,
             )
             return True
 
@@ -278,12 +326,12 @@ def create_smartfetch_mcp(
                 payment_stage="settlement",
                 payment_network=settings.network,
                 payment_asset="USDC",
-                payment_amount=settings.price,
+                payment_amount=price_str,
             )
 
         payment_wrapper = create_payment_wrapper(
             resource_server,
-            accepts=accepts,
+            accepts=chosen_accepts,
             resource=ResourceInfo(
                 url=f"mcp://tool/{name}",
                 description=description,
@@ -335,20 +383,32 @@ def create_smartfetch_mcp(
             RENDER_OUTPUT_SCHEMA,
             RENDER_OUTPUT_EXAMPLE,
         ),
+        (
+            "screenshot_webpage",
+            SCREENSHOT_DESCRIPTION,
+            screenshot_webpage,
+            SCREENSHOT_INPUT_SCHEMA,
+            SCREENSHOT_INPUT_EXAMPLE,
+            SCREENSHOT_OUTPUT_SCHEMA,
+            SCREENSHOT_OUTPUT_EXAMPLE,
+            screenshot_accepts,
+            "$0.01",
+        ),
     )
 
     remote_cfg = RemoteBrowserConfig.from_env()
     is_available = remote_cfg.is_configured
 
-    for (
-        name,
-        description,
-        handler,
-        input_schema,
-        input_example,
-        output_schema,
-        output_example,
-    ) in tools:
+    for item in tools:
+        name = item[0]
+        description = item[1]
+        handler = item[2]
+        input_schema = item[3]
+        input_example = item[4]
+        output_schema = item[5]
+        output_example = item[6]
+        tool_accepts = item[7] if len(item) > 7 else accepts
+        tool_price = item[8] if len(item) > 8 else settings.price
         extension = mcp_discovery_extension(
             tool_name=name,
             description=description,
@@ -358,7 +418,7 @@ def create_smartfetch_mcp(
             output_example=output_example,
             transport=MCP_TRANSPORT,
         )
-        tool_handler = protect(name, description, handler, extension)
+        tool_handler = protect(name, description, handler, extension, tool_accepts=tool_accepts, tool_price=tool_price)
         mcp.tool(
             name=name,
             description=description,
@@ -403,4 +463,11 @@ def create_emergency_mcp() -> SmartFetchMCP:
             "error": "Retrieval is temporarily unavailable",
         }
 
-    return create_smartfetch_mcp(settings, _dummy_fetch)
+    async def _dummy_screenshot(url: str, viewport: str, full_page: bool, image_format: str) -> dict[str, Any]:
+        return {
+            "success": False,
+            "error_code": "browser_unavailable",
+            "error": "Browser is temporarily unavailable",
+        }
+
+    return create_smartfetch_mcp(settings, _dummy_fetch, screenshot_handler=_dummy_screenshot)

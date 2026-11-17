@@ -120,7 +120,7 @@ class V111MCPIntegrationTests(unittest.TestCase):
             initialize(client)
             listed = rpc(client, "tools/list", {}, 2)
         self.assertEqual([item["name"] for item in listed["result"]["tools"]],
-                         ["fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage"])
+                         ["fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage", "screenshot_webpage"])
 
     def test_enabled_lists_exactly_six_tools_and_eight_static_wrappers(self):
         with patch("x402.mcp.create_payment_wrapper", side_effect=AssertionError("paid wrapper entered")) as wrapper:
@@ -128,7 +128,7 @@ class V111MCPIntegrationTests(unittest.TestCase):
         with TestClient(app) as client:
             initialize(client)
             listed = rpc(client, "tools/list", {}, 2)
-        self.assertEqual(len(listed["result"]["tools"]), 4)
+        self.assertEqual(len(listed["result"]["tools"]), 5)
         self.assertEqual(app.app.app.state.smartfetch_mcp.accepts, [])
         wrapper.assert_not_called()
 

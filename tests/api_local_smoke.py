@@ -50,6 +50,7 @@ try:
         'webpage_to_markdown',
         'extract_webpage_text',
         'render_webpage',
+        'screenshot_webpage',
     ]
 
     for discovery_path in ('/','/docs','/openapi.json','/llms.txt','/robots.txt','/sitemap.xml','/.well-known/x402'):
