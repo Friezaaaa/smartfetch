@@ -55,7 +55,9 @@ limit, retries with `_meta["x402/payment"]`, and receives settlement details in
 `_meta["x402/payment-response"]`.
 
 For the HTTP flow, use the tested
-[Python HTTP buyer](../scripts/paid_fetch_mainnet_test.py) or follow the
+[Python Base mainnet HTTP buyer](../scripts/paid_fetch_mainnet_test.py), the
+[Python Solana mainnet HTTP buyer](../scripts/paid_fetch_solana_mainnet_test.py),
+or follow the
 [official x402 TypeScript/Python buyer guide](https://docs.x402.org/getting-started/quickstart-for-buyers).
 The client sends an unpaid request, validates `PAYMENT-REQUIRED`, signs within
 its cap, retries with `PAYMENT-SIGNATURE`, and reads `PAYMENT-RESPONSE` after a
