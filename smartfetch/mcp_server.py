@@ -19,6 +19,11 @@ from .bazaar import (
     FETCH_INPUT_SCHEMA,
     FETCH_OUTPUT_EXAMPLE,
     FETCH_OUTPUT_SCHEMA,
+    INSPECT_DESCRIPTION,
+    INSPECT_INPUT_EXAMPLE,
+    INSPECT_INPUT_SCHEMA,
+    INSPECT_OUTPUT_EXAMPLE,
+    INSPECT_OUTPUT_SCHEMA,
     MARKDOWN_DESCRIPTION,
     MARKDOWN_OUTPUT_EXAMPLE,
     MARKDOWN_OUTPUT_SCHEMA,
@@ -35,11 +40,13 @@ from .bazaar import (
     TEXT_DESCRIPTION,
     TEXT_OUTPUT_EXAMPLE,
     TEXT_OUTPUT_SCHEMA,
+    inspect_mcp_discovery_extension,
     mcp_discovery_extension,
     screenshot_mcp_discovery_extension,
 )
 from .browser_fetch import browser_screenshot
 from .config import HOST, MAX_REQUEST_BODY_BYTES, SERVICE_NAME, SERVICE_VERSION
+from .inspect import inspect_webpage_url
 from .mcp_logging import configure_mcp_sdk_logging
 from .payments import X402Settings, create_x402_resource_server
 from .remote_browser import RemoteBrowserConfig
@@ -53,6 +60,7 @@ MCP_TOOLS = (
     "extract_webpage_text",
     "render_webpage",
     "screenshot_webpage",
+    "inspect_webpage",
 )
 V111_MCP_TOOLS = ("search_and_extract", "extract_structured_data")
 MCP_TRANSPORT = "streamable-http"
@@ -62,6 +70,7 @@ MCP_MAX_CHARS = 50000
 
 FetchHandler = Callable[..., Awaitable[dict[str, Any]]]
 ScreenshotHandler = Callable[..., Awaitable[dict[str, Any]]]
+InspectHandler = Callable[..., Awaitable[dict[str, Any]]]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -118,6 +127,7 @@ def create_smartfetch_mcp(
     fetch_handler: FetchHandler,
     *,
     screenshot_handler: ScreenshotHandler | None = None,
+    inspect_handler: InspectHandler | None = None,
     v111_service=None,
 ) -> SmartFetchMCP:
     """Build the production MCP server with optional x402 payment protection."""
@@ -267,6 +277,24 @@ def create_smartfetch_mcp(
             lambda: browser_screenshot(url.strip(), viewport=viewport, full_page=full_page, image_format=image_format),
         )
 
+    async def inspect_webpage(
+        url: Annotated[str, Field(description="Public HTTP or HTTPS URL of a webpage to inspect.")],
+        render_mode: Annotated[str, Field(description="Rendering strategy: 'auto' (HTTP with browser escalation on SPA shell), 'http_only', or 'browser'.")] = "auto",
+        force_browser: Annotated[bool, Field(description="Force browser rendering bypassing HTTP tier.")] = False,
+    ) -> dict[str, Any]:
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("url must be a non-empty string")
+        if render_mode not in ("auto", "http_only", "browser"):
+            raise ValueError("render_mode must be 'auto', 'http_only', or 'browser'")
+        if inspect_handler is not None:
+            return await inspect_handler(url.strip(), force_browser=force_browser, render_mode=render_mode)
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: inspect_webpage_url(url.strip(), force_browser=force_browser, render_mode=render_mode),
+        )
+
     def protect(
         name: str,
         description: str,
@@ -394,6 +422,17 @@ def create_smartfetch_mcp(
             screenshot_accepts,
             "$0.01",
         ),
+        (
+            "inspect_webpage",
+            INSPECT_DESCRIPTION,
+            inspect_webpage,
+            INSPECT_INPUT_SCHEMA,
+            INSPECT_INPUT_EXAMPLE,
+            INSPECT_OUTPUT_SCHEMA,
+            INSPECT_OUTPUT_EXAMPLE,
+            accepts,
+            settings.price,
+        ),
     )
 
     remote_cfg = RemoteBrowserConfig.from_env()
@@ -470,4 +509,16 @@ def create_emergency_mcp() -> SmartFetchMCP:
             "error": "Browser is temporarily unavailable",
         }
 
-    return create_smartfetch_mcp(settings, _dummy_fetch, screenshot_handler=_dummy_screenshot)
+    async def _dummy_inspect(url: str, render_mode: str = "auto", force_browser: bool = False) -> dict[str, Any]:
+        return {
+            "success": False,
+            "error_code": "retrieval_unavailable",
+            "error": "Retrieval is temporarily unavailable",
+        }
+
+    return create_smartfetch_mcp(
+        settings,
+        _dummy_fetch,
+        screenshot_handler=_dummy_screenshot,
+        inspect_handler=_dummy_inspect,
+    )

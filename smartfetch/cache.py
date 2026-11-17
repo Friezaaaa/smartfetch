@@ -74,6 +74,17 @@ def build_screenshot_cache_key(
     return f"sf:screenshot:{url_digest}:{vp}:{fp}:{fmt}"
 
 
+def build_inspect_cache_key(
+    url: str,
+    render_mode: str = "auto",
+) -> str:
+    """Builds a normalized SHA-256 cache key scoped by URL and render mode for inspect."""
+    canonical_url = normalize_cache_url(url)
+    url_digest = hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()[:24]
+    mode = (render_mode or "auto").lower()
+    return f"sf:inspect:{url_digest}:{mode}"
+
+
 class ResultCacheProvider(ABC):
     """Abstract protocol for retrieval result cache backends (In-memory, Redis, Valkey, etc.)."""
 
@@ -157,6 +168,9 @@ _ACTIVE_CACHE_PROVIDER: ResultCacheProvider = InMemoryTTLCacheProvider()
 
 def get_cache_provider() -> ResultCacheProvider:
     return _ACTIVE_CACHE_PROVIDER
+
+
+get_result_cache = get_cache_provider
 
 
 def set_cache_provider(provider: ResultCacheProvider) -> None:

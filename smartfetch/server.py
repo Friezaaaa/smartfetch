@@ -11,16 +11,20 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Res
 from .access_logging import uvicorn_log_config
 from .bazaar import (
     FETCH_DESCRIPTION,
+    INSPECT_DESCRIPTION,
+    INSPECT_TAGS,
     MARKDOWN_DESCRIPTION,
     RENDER_DESCRIPTION,
     SCREENSHOT_DESCRIPTION,
     SCREENSHOT_TAGS,
     TEXT_DESCRIPTION,
+    inspect_discovery_extension,
     screenshot_discovery_extension,
 )
 from .browser_fetch import browser_screenshot
 from .config import HOST, PORT, SERVICE_NAME, SERVICE_VERSION
 from .core import smart_fetch
+from .inspect import inspect_webpage_url
 from .discovery import (
     agent_card_document,
     docs_html,
@@ -145,9 +149,35 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         result["service_version"] = SERVICE_VERSION
         return result
 
+    async def _run_inspect(
+        url: str,
+        *,
+        force_browser: bool = False,
+        render_mode: str = "auto",
+        no_cache: bool = False,
+    ) -> dict:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: inspect_webpage_url(
+                url,
+                force_browser=force_browser,
+                render_mode=render_mode,
+                no_cache=no_cache,
+            ),
+        )
+        result["request_id"] = secrets.token_hex(8)
+        result["service_version"] = SERVICE_VERSION
+        return result
+
     remote_cfg = RemoteBrowserConfig.from_env()
     if remote_cfg.is_configured:
-        mcp = create_smartfetch_mcp(settings, _run_mcp_fetch, screenshot_handler=_run_screenshot)
+        mcp = create_smartfetch_mcp(
+            settings,
+            _run_mcp_fetch,
+            screenshot_handler=_run_screenshot,
+            inspect_handler=_run_inspect,
+        )
     else:
         mcp = create_emergency_mcp()
     application = FastAPI(
@@ -267,6 +297,40 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         except Exception as exc:
             return JSONResponse(status_code=502, content={"success": False, "error_code": "screenshot_failed", "error": str(exc)})
 
+    @application.post("/inspect")
+    async def inspect_endpoint(request: Request):
+        remote_cfg = RemoteBrowserConfig.from_env()
+        if not remote_cfg.is_configured:
+            return JSONResponse(
+                status_code=503,
+                content={"success": False, "error_code": "retrieval_unavailable", "error": "Retrieval is temporarily unavailable"},
+                headers={"Retry-After": "3600", "Cache-Control": "no-store"},
+            )
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
+        if not isinstance(body, dict):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_request", "error": "Invalid request"})
+        url = body.get("url")
+        if not isinstance(url, str) or not url.strip():
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_url", "error": "URL must be a non-empty string"})
+        render_mode = str(body.get("render_mode", "auto"))
+        if render_mode not in ("auto", "http_only", "browser"):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_render_mode", "error": "render_mode must be 'auto', 'http_only', or 'browser'"})
+        force_browser = bool(body.get("force_browser", False))
+        no_cache = bool(body.get("no_cache", False)) or request.headers.get("cache-control") == "no-cache"
+        try:
+            result = await _run_inspect(
+                url.strip(),
+                force_browser=force_browser,
+                render_mode=render_mode,
+                no_cache=no_cache,
+            )
+            return JSONResponse(status_code=200, content=result)
+        except Exception as exc:
+            return JSONResponse(status_code=502, content={"success": False, "error_code": "inspect_failed", "error": str(exc)})
+
     @application.get("/", response_class=HTMLResponse)
     async def root(request: Request):
         remote_cfg = RemoteBrowserConfig.from_env()
@@ -296,6 +360,12 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                     "availability": "available",
                     "payment_challenge_enabled": settings.enabled,
                     "price": "$0.01",
+                },
+                "inspect": {
+                    "url": urls["inspect"],
+                    "availability": "available",
+                    "payment_challenge_enabled": settings.enabled,
+                    "price": "$0.005",
                 },
                 "mcp": {
                     "url": urls["mcp"],
@@ -346,6 +416,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 {"name": "extract_webpage_text", "description": TEXT_DESCRIPTION},
                 {"name": "render_webpage", "description": RENDER_DESCRIPTION},
                 {"name": "screenshot_webpage", "description": SCREENSHOT_DESCRIPTION},
+                {"name": "inspect_webpage", "description": INSPECT_DESCRIPTION},
             ],
         }
 
@@ -423,7 +494,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         from x402.http import PaymentOption
         from x402.http.types import RouteConfig
 
-        screenshot_route = {
+        extra_routes = {
             "POST /screenshot": RouteConfig(
                 accepts=PaymentOption(
                     scheme="exact",
@@ -436,9 +507,22 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 service_name="SmartFetch",
                 tags=SCREENSHOT_TAGS,
                 extensions=screenshot_discovery_extension(),
-            )
+            ),
+            "POST /inspect": RouteConfig(
+                accepts=PaymentOption(
+                    scheme="exact",
+                    pay_to=settings.pay_to,
+                    price="$0.005",
+                    network=settings.network,
+                ),
+                description=INSPECT_DESCRIPTION,
+                mime_type="application/json",
+                service_name="SmartFetch",
+                tags=INSPECT_TAGS,
+                extensions=inspect_discovery_extension(),
+            ),
         }
-        install_x402(application, settings, additional_routes=screenshot_route)
+        install_x402(application, settings, additional_routes=extra_routes)
 
     cors_wrapped = SmartFetchCORSMiddleware(
         EmergencyDispatch(MCPAcceptNormalization(application)),

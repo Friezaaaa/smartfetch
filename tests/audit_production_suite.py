@@ -113,15 +113,15 @@ def test_audit():
         print(f"  - {t['name']}: {t['description'][:60]}... | meta={meta_info}")
         assert meta_info.get("payment_challenge_enabled") is True
         assert meta_info.get("availability") == "available"
-    assert len(tools) == 5
+    assert len(tools) == 6
     tool_names = [t["name"] for t in tools]
-    for required in ("fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage", "screenshot_webpage"):
+    for required in ("fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage", "screenshot_webpage", "inspect_webpage"):
         assert required in tool_names
-    print("VERIFIED: MCP tools/list returned all 5 production tools with payment challenges enabled.")
+    print("VERIFIED: MCP tools/list returned all 6 production tools with payment challenges enabled.")
 
-    # 5. MCP tools/call - Verify Payment Enforcement across ALL 5 Tools
+    # 5. MCP tools/call - Verify Payment Enforcement across ALL 6 Tools
     print("\n--- 5. Testing MCP tools/call Unpaid Payment Challenges ---")
-    for tool_name in ("fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage", "screenshot_webpage"):
+    for tool_name in ("fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage", "screenshot_webpage", "inspect_webpage"):
         call_payload = {
             "jsonrpc": "2.0",
             "id": f"call-{tool_name}",

@@ -23,6 +23,7 @@ LEGACY_TOOLS = [
     "extract_webpage_text",
     "render_webpage",
     "screenshot_webpage",
+    "inspect_webpage",
 ]
 V111_TOOLS = ["search_and_extract", "extract_structured_data"]
 
@@ -48,7 +49,7 @@ class Stage5ConditionalDiscoveryTests(unittest.TestCase):
             openapi = client.get("/openapi.json").json()
             meta = client.get("/meta").json()
             manifest = client.get("/.well-known/x402").json()
-            self.assertEqual(set(openapi["paths"]), {"/fetch", "/screenshot"})
+            self.assertEqual(set(openapi["paths"]), {"/fetch", "/screenshot", "/inspect"})
             self.assertEqual([tool["name"] for tool in meta["tools"]], LEGACY_TOOLS)
             self.assertTrue(all(tool["availability"] == "unavailable" for tool in meta["tools"]))
             self.assertNotIn("capabilities", meta)
@@ -65,6 +66,7 @@ class Stage5ConditionalDiscoveryTests(unittest.TestCase):
             self.assertEqual(set(client.get("/openapi.json").json()["paths"]), {
                 "/fetch",
                 "/screenshot",
+                "/inspect",
             })
 
     def test_requested_enabled_discovery_still_exposes_no_v111_execution(self):
@@ -73,7 +75,7 @@ class Stage5ConditionalDiscoveryTests(unittest.TestCase):
             openapi = client.get("/openapi.json").json()
             meta = client.get("/meta").json()
             manifest = client.get("/.well-known/x402").json()
-        self.assertEqual(set(openapi["paths"]), {"/fetch", "/screenshot"})
+        self.assertEqual(set(openapi["paths"]), {"/fetch", "/screenshot", "/inspect"})
         self.assertEqual([tool["name"] for tool in meta["tools"]], LEGACY_TOOLS)
         self.assertEqual(manifest["resources"], [])
         self.assertNotIn("capabilities", meta)
@@ -86,7 +88,7 @@ class Stage5ConditionalDiscoveryTests(unittest.TestCase):
         app = self.app()
         with TestClient(app) as client:
             document = client.get("/openapi.json").json()
-        self.assertEqual(set(document["paths"]), {"/fetch", "/screenshot"})
+        self.assertEqual(set(document["paths"]), {"/fetch", "/screenshot", "/inspect"})
         operation = document["paths"]["/fetch"]["post"]
         self.assertEqual(operation["x-smartfetch-availability"], "unavailable")
         self.assertFalse(operation["payment_challenge_enabled"])
@@ -98,7 +100,7 @@ class Stage5ConditionalDiscoveryTests(unittest.TestCase):
         app = self.app()
         with TestClient(app) as client:
             paths = client.get("/openapi.json").json()["paths"]
-        self.assertEqual(set(paths), {"/fetch", "/screenshot"})
+        self.assertEqual(set(paths), {"/fetch", "/screenshot", "/inspect"})
         schema = paths["/fetch"]["post"]["requestBody"]["content"]["application/json"]["schema"]
         self.assertEqual(set(schema["properties"]), {"url", "max_chars", "force_browser"})
         for name in ("mode", "source_type", "max_sources", "json_schema", "render_mode"):

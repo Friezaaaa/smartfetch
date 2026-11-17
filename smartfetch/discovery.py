@@ -16,6 +16,12 @@ from .bazaar import (
     FETCH_OUTPUT_EXAMPLE,
     FETCH_OUTPUT_SCHEMA,
     FETCH_TAGS,
+    INSPECT_DESCRIPTION,
+    INSPECT_INPUT_EXAMPLE,
+    INSPECT_INPUT_SCHEMA,
+    INSPECT_OUTPUT_EXAMPLE,
+    INSPECT_OUTPUT_SCHEMA,
+    INSPECT_TAGS,
     MARKDOWN_DESCRIPTION,
     RENDER_DESCRIPTION,
     SCREENSHOT_DESCRIPTION,
@@ -26,6 +32,7 @@ from .bazaar import (
     SCREENSHOT_TAGS,
     TEXT_DESCRIPTION,
     fetch_discovery_extension,
+    inspect_discovery_extension,
     screenshot_discovery_extension,
 )
 from .config import SERVICE_NAME, SERVICE_VERSION
@@ -63,6 +70,7 @@ TOOL_NAMES = (
     "extract_webpage_text",
     "render_webpage",
     "screenshot_webpage",
+    "inspect_webpage",
 )
 V111_TOOL_NAMES = (
     "search_and_extract",
@@ -97,6 +105,7 @@ def public_urls(request):
         "meta": f"{base}/meta",
         "fetch": f"{base}/fetch",
         "screenshot": f"{base}/screenshot",
+        "inspect": f"{base}/inspect",
         "mcp": f"{base}/mcp",
     }
 
@@ -130,7 +139,11 @@ def x402_manifest(urls, settings, v111_accepts=None):
         ),
         "homepage": urls["base"],
         "repository": GITHUB_URL,
-        "resources": [urls["fetch"]] + ([urls["screenshot"]] if "screenshot" in urls else []),
+        "resources": (
+            [urls["fetch"]]
+            + ([urls["screenshot"]] if "screenshot" in urls else [])
+            + ([urls["inspect"]] if "inspect" in urls else [])
+        ),
         "payment": {
             "protocol": "x402",
             "x402Version": 2,
@@ -200,7 +213,8 @@ def agent_card_document(urls, settings=None):
             },
             "rest": {
                 "url": urls["fetch"],
-                "screenshot": urls["screenshot"],
+                "screenshot": urls.get("screenshot", f"{urls['base']}/screenshot"),
+                "inspect": urls.get("inspect", f"{urls['base']}/inspect"),
                 "openapi": urls["openapi"],
             },
             "x402": {
@@ -232,6 +246,10 @@ def agent_card_document(urls, settings=None):
             {
                 "name": "screenshot_webpage",
                 "description": SCREENSHOT_DESCRIPTION,
+            },
+            {
+                "name": "inspect_webpage",
+                "description": INSPECT_DESCRIPTION,
             },
         ],
         "contact": {
@@ -608,6 +626,86 @@ def openapi_document(
                     },
                 },
             },
+            "/inspect": {
+                "post": {
+                    "operationId": "inspectWebpage",
+                    "summary": "Inspect structured site intelligence",
+                    "description": (
+                        "Paid x402 exact site intelligence and SEO inspection of one public "
+                        "HTTP or HTTPS webpage. Extracts metadata, OpenGraph, Twitter cards, "
+                        "JSON-LD schemas, contacts, tech stack detection, and security headers. "
+                        f"The configured price is $0.005 per execution using USDC on {network_name}."
+                    ),
+                    "x-x402": {
+                        "x402Version": 2,
+                        "scheme": scheme,
+                        "network": network,
+                        "assetSymbol": "USDC",
+                        "price": "$0.005",
+                        "amount": _atomic_usdc_amount("$0.005"),
+                        **({"asset": asset} if asset is not None else {}),
+                    },
+                    "x-payment-info": {
+                        "price": {
+                            "mode": "fixed",
+                            "currency": "USD",
+                            "amount": _agentcash_usd_amount("$0.005"),
+                        },
+                        "protocols": [{"x402": {}}],
+                    },
+                    "security": [],
+                    "parameters": [
+                        {
+                            "name": "PAYMENT-SIGNATURE",
+                            "in": "header",
+                            "required": False,
+                            "description": (
+                                "Base64-encoded x402 v2 PaymentPayload on the paid retry request."
+                            ),
+                            "schema": {"type": "string"},
+                        },
+                    ],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": INSPECT_INPUT_SCHEMA,
+                                "example": INSPECT_INPUT_EXAMPLE,
+                            },
+                        },
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Structured site intelligence extracted successfully.",
+                            "content": {
+                                "application/json": {
+                                    "schema": INSPECT_OUTPUT_SCHEMA,
+                                    "example": INSPECT_OUTPUT_EXAMPLE,
+                                },
+                            },
+                        },
+                        "400": _error_response("Invalid request payload or unsupported options"),
+                        "402": {
+                            "description": "Payment required. Sign the returned challenge.",
+                            "headers": {
+                                "PAYMENT-REQUIRED": payment_required_header,
+                            },
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "detail": {"type": "string"},
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                        "502": _error_response("Inspection retrieval failed in upstream HTTP or browser tier"),
+                        "503": _error_response("Inspection service unavailable"),
+                    },
+                },
+            },
         },
     }
     requirements = _v111_requirements(v111_accepts)
@@ -931,6 +1029,7 @@ def docs_html(
       <li><a href="{safe['mcp']}">POST /mcp</a> — MCP Streamable HTTP</li>
       <li><code>POST {safe['fetch']}</code> — paid webpage retrieval</li>
       <li><code>POST {safe['screenshot']}</code> — paid webpage screenshot ($0.01)</li>
+      <li><code>POST {safe.get('inspect', safe['base'] + '/inspect')}</code> — paid site intelligence ($0.005)</li>
     </ul>
     <h2>Live interactive playground</h2>
     <p>Test SmartFetch live in your browser with Base Mainnet EIP-712 payments, free 402 challenge inspection, and sandboxed HTML preview at the <a href="{playground}">SmartFetch Playground</a> (or the <a href="{playground_mirror}">GitHub Pages mirror</a>).</p>
@@ -941,6 +1040,7 @@ def docs_html(
       <dt><code>extract_webpage_text</code></dt><dd>Token-efficient extractor returning clean plain text and core metadata from a webpage or PDF.</dd>
       <dt><code>render_webpage</code></dt><dd>Forced headless Chromium browser renderer for JavaScript SPAs returning post-JS rendered HTML DOM and extracted content.</dd>
       <dt><code>screenshot_webpage</code></dt><dd>Isolated Chromium browser screenshot capture returning JPEG or PNG image bytes (base64) and dimensions ($0.01).</dd>
+      <dt><code>inspect_webpage</code></dt><dd>Structured site intelligence and SEO inspection tool extracting metadata, OpenGraph, JSON-LD, contacts, tech stack, and security headers ($0.005).</dd>
     </dl>
     <h2>Paying client examples</h2>
     <p>The examples list tools for free, enforce a $0.005 maximum payment, then perform the x402 challenge, payment, retry, and settlement flow. Running them can spend real Base-mainnet USDC.</p>
@@ -1032,7 +1132,8 @@ Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['pric
 - [Metadata]({urls['meta']})
 - [Remote MCP Streamable HTTP]({urls['mcp']})
 - [Paid HTTP retrieval]({urls['fetch']}): POST only ($0.005)
-- [Paid HTTP screenshot]({urls['screenshot']}): POST only ($0.01)
+- [Paid HTTP screenshot]({urls.get('screenshot', urls['base'] + '/screenshot')}): POST only ($0.01)
+- [Paid HTTP site intelligence]({urls.get('inspect', urls['base'] + '/inspect')}): POST only ($0.005)
 
 ## Agent Onboarding & Payment Guide
 - [Comprehensive Agent Payment Integration Guide]({GITHUB_URL}/blob/main/docs/agent-payment-guide.md)
@@ -1050,6 +1151,7 @@ Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['pric
 - extract_webpage_text: clean plain text and core metadata from a webpage or PDF
 - render_webpage: forced browser renderer returning rendered HTML DOM and extracted content
 - screenshot_webpage: isolated Chromium browser screenshot capture returning JPEG or PNG base64 ($0.01)
+- inspect_webpage: structured site intelligence extracting metadata, OpenGraph, JSON-LD, contacts, tech stack, and security headers ($0.005)
 
 ## Paying MCP client examples
 - [Python MCP example]({PYTHON_EXAMPLE_URL})
@@ -1131,6 +1233,12 @@ def emergency_meta(urls: dict) -> dict:
             "payment_challenge_enabled": False,
             "price": "$0.01",
         },
+        "inspect": {
+            "url": urls.get("inspect", f"{urls.get('base', '')}/inspect"),
+            "availability": "available" if is_available else "unavailable",
+            "payment_challenge_enabled": False,
+            "price": "$0.005",
+        },
         "mcp": {"url": urls["mcp"]},
         "discovery": {
             "x402": urls["x402"],
@@ -1171,6 +1279,12 @@ def emergency_x402_manifest(urls: dict) -> dict:
             "availability": "unavailable",
             "payment_challenge_enabled": False,
             "price": "$0.01",
+        },
+        "inspect": {
+            "url": urls.get("inspect", f"{urls.get('base', '')}/inspect"),
+            "availability": "unavailable",
+            "payment_challenge_enabled": False,
+            "price": "$0.005",
         },
         "tools": _emergency_identities(),
     }
@@ -1229,6 +1343,22 @@ def emergency_openapi_document(urls: dict) -> dict:
                         "503": unavailable,
                         "400": {"description": "Invalid request"},
                         "422": {"description": "Invalid screenshot arguments"},
+                    },
+                }
+            },
+            "/inspect": {
+                "post": {
+                    "summary": "Unavailable inspection identity",
+                    "x-smartfetch-availability": "unavailable",
+                    "payment_challenge_enabled": False,
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": INSPECT_INPUT_SCHEMA}},
+                    },
+                    "responses": {
+                        "503": unavailable,
+                        "400": {"description": "Invalid request"},
+                        "422": {"description": "Invalid inspection arguments"},
                     },
                 }
             },

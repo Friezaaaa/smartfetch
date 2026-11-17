@@ -27,6 +27,7 @@ TOOL_NAMES = [
     'extract_webpage_text',
     'render_webpage',
     'screenshot_webpage',
+    'inspect_webpage',
 ]
 TOOL_DESCRIPTIONS = {
     'fetch_webpage': bazaar.FETCH_DESCRIPTION,
@@ -43,6 +44,7 @@ TOOL_DESCRIPTIONS = {
         'clean text, Markdown, links, and metadata.'
     ),
     'screenshot_webpage': bazaar.SCREENSHOT_DESCRIPTION,
+    'inspect_webpage': bazaar.INSPECT_DESCRIPTION,
 }
 SUPPORTED = SupportedResponse(kinds=[SupportedKind(
     x402Version=2,
@@ -113,7 +115,7 @@ def list_tools(client):
 
 def call_tool(client, name, arguments=None, request_id=3):
     if arguments is None:
-        if name == 'screenshot_webpage':
+        if name in ('screenshot_webpage', 'inspect_webpage'):
             arguments = {'url': 'https://example.com/'}
         else:
             arguments = {
@@ -152,6 +154,10 @@ class V19MCPToolContractTests(unittest.TestCase):
                 self.assertIn('viewport', schema['properties'])
                 self.assertIn('full_page', schema['properties'])
                 self.assertIn('image_format', schema['properties'])
+                continue
+            if name == 'inspect_webpage':
+                self.assertIn('render_mode', schema['properties'])
+                self.assertIn('force_browser', schema['properties'])
                 continue
             max_chars = schema['properties']['max_chars']
             self.assertEqual(max_chars['default'], 20000)
@@ -338,6 +344,7 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
             'meta': 'https://agent.example:9443/meta',
             'fetch': 'https://agent.example:9443/fetch',
             'screenshot': 'https://agent.example:9443/screenshot',
+            'inspect': 'https://agent.example:9443/inspect',
             'mcp': 'https://agent.example:9443/mcp',
         })
 
@@ -350,7 +357,7 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
         self.assertEqual(document['servers'], [{
             'url': 'https://agent.example:9443',
         }])
-        self.assertEqual(list(document['paths']), ['/fetch', '/screenshot'])
+        self.assertEqual(list(document['paths']), ['/fetch', '/screenshot', '/inspect'])
         operation = document['paths']['/fetch']['post']
         self.assertEqual(
             operation['requestBody']['content']['application/json']['schema'],
@@ -473,7 +480,7 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
             ),
             'homepage': 'https://agent.example:9443',
             'repository': 'https://github.com/Friezaaaa/smartfetch',
-            'resources': ['https://agent.example:9443/fetch', 'https://agent.example:9443/screenshot'],
+            'resources': ['https://agent.example:9443/fetch', 'https://agent.example:9443/screenshot', 'https://agent.example:9443/inspect'],
             'payment': {
                 'protocol': 'x402',
                 'x402Version': 2,

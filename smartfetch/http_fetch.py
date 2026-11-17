@@ -257,6 +257,10 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
             response.close()
 
         raw = b''.join(chunks)
+        safe_headers = {
+            k.lower(): v for k, v in response.headers.items()
+            if k.lower() != 'set-cookie'
+        }
 
         if is_pdf_candidate:
             if not raw.startswith(b'%PDF-'):
@@ -277,6 +281,7 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
                 'status_code': response.status_code,
                 'content_type': 'application/pdf',
                 'is_pdf': True,
+                'headers': safe_headers,
             }
 
         encoding = response.encoding or 'utf-8'
@@ -292,6 +297,7 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
             'final_url': current,
             'status_code': response.status_code,
             'content_type': content_type,
+            'headers': safe_headers,
         }
 
     error = RuntimeError(f'Too many redirects (>{MAX_REDIRECTS})')

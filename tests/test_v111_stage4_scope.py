@@ -71,7 +71,7 @@ class V111Stage4ScopeTests(unittest.TestCase):
             openapi = client.get("/openapi.json").json()
             manifest = client.get("/.well-known/x402").json()
             response = client.post("/fetch", json={"url": "https://example.com/"})
-        self.assertEqual(set(openapi["paths"]), {"/fetch", "/screenshot"})
+        self.assertEqual(set(openapi["paths"]), {"/fetch", "/screenshot", "/inspect"})
         serialized = str(manifest)
         self.assertFalse(any(
             definition.rest_path in serialized for definition in V111_VARIANTS

@@ -198,7 +198,7 @@ class MCPActivityIntegrationTests(unittest.TestCase):
             TestClient(server.create_app(FREE_SETTINGS)) as client,
         ):
             self.assertIn('result', initialize(client))
-            self.assertEqual(len(rpc(client, 'tools/list', {}, request_id=2)['result']['tools']), 5)
+            self.assertEqual(len(rpc(client, 'tools/list', {}, request_id=2)['result']['tools']), 6)
             result = call_tool(client)
 
         self.assertTrue(result['result']['isError'])

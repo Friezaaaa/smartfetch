@@ -58,7 +58,7 @@ class TestMCPSchemaAndCompat(unittest.IsolatedAsyncioTestCase):
     async def test_tools_list_parameter_descriptions(self):
         """All MCP tools expose parameter descriptions in tools/list."""
         tools = await self.mcp.fastmcp.list_tools()
-        self.assertEqual(len(tools), 5)
+        self.assertEqual(len(tools), 6)
         for tool in tools:
             schema = tool.inputSchema
             self.assertIn("properties", schema, f"Tool {tool.name} missing properties")
@@ -71,6 +71,11 @@ class TestMCPSchemaAndCompat(unittest.IsolatedAsyncioTestCase):
 
             if tool.name == "screenshot_webpage":
                 self.assertIn("viewport", props)
+                continue
+
+            if tool.name == "inspect_webpage":
+                self.assertIn("render_mode", props)
+                self.assertIn("force_browser", props)
                 continue
 
             # max_chars check
@@ -156,7 +161,7 @@ class TestMCPAcceptHeaderNormalization(unittest.TestCase):
             r1_tools = client.post("/mcp", json=tools_payload, headers={"Accept": "application/json"})
             self.assertEqual(r1_tools.status_code, 200)
             tools = r1_tools.json().get("result", {}).get("tools", [])
-            self.assertEqual(len(tools), 5)
+            self.assertEqual(len(tools), 6)
 
             # 2. Accept: */*
             r2 = client.post("/mcp", json=init_payload, headers={"Accept": "*/*"})

@@ -27,6 +27,7 @@ LEGACY_TOOLS = (
     "extract_webpage_text",
     "render_webpage",
     "screenshot_webpage",
+    "inspect_webpage",
 )
 FREE_MCP_METHODS = (
     "initialize",
@@ -51,6 +52,18 @@ SCREENSHOT_INPUT_SCHEMA = {
     "required": ["url"],
 }
 _SCREENSHOT_VALIDATOR = Draft202012Validator(SCREENSHOT_INPUT_SCHEMA, format_checker=FormatChecker())
+
+INSPECT_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "url": {"type": "string", "format": "uri", "pattern": "^https?://"},
+        "render_mode": {"type": "string", "enum": ["auto", "http_only", "browser"]},
+        "force_browser": {"type": "boolean"},
+        "no_cache": {"type": "boolean"},
+    },
+    "required": ["url"],
+}
+_INSPECT_VALIDATOR = Draft202012Validator(INSPECT_INPUT_SCHEMA, format_checker=FormatChecker())
 
 MCP_FETCH_ARGUMENT_SCHEMA = {
     "type": "object",
@@ -79,9 +92,20 @@ MCP_SCREENSHOT_ARGUMENT_SCHEMA = {
     },
     "required": ["url"],
 }
+MCP_INSPECT_ARGUMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "url": {"type": "string"},
+        "render_mode": {"type": "string", "enum": ["auto", "http_only", "browser"]},
+        "force_browser": {"type": "boolean"},
+        "no_cache": {"type": "boolean"},
+    },
+    "required": ["url"],
+}
 _MCP_FETCH_VALIDATOR = Draft202012Validator(MCP_FETCH_ARGUMENT_SCHEMA)
 _MCP_RENDER_VALIDATOR = Draft202012Validator(MCP_RENDER_ARGUMENT_SCHEMA)
 _MCP_SCREENSHOT_VALIDATOR = Draft202012Validator(MCP_SCREENSHOT_ARGUMENT_SCHEMA)
+_MCP_INSPECT_VALIDATOR = Draft202012Validator(MCP_INSPECT_ARGUMENT_SCHEMA)
 _FREE_MCP_MODELS = {
     "initialize": InitializeRequest,
     "notifications/initialized": InitializedNotification,
@@ -213,6 +237,31 @@ def classify_screenshot(
     )
 
 
+def classify_inspect(
+    body: bytes,
+    headers: tuple[tuple[bytes, bytes], ...],
+    *,
+    allow_unpaid_probe: bool = False,
+) -> ValidatedCall | None:
+    if allow_unpaid_probe:
+        try:
+            payload = _parse_json(body, headers)
+            if not payload or not payload.get("url"):
+                return None
+        except EmergencyRequestError:
+            return None
+    else:
+        payload = _parse_json(body, headers)
+    if not _INSPECT_VALIDATOR.is_valid(payload):
+        raise EmergencyRequestError(422, "invalid_request")
+    return ValidatedCall(
+        transport="http",
+        tool="inspect_webpage",
+        browser=payload.get("force_browser") is True or payload.get("render_mode") == "browser",
+        jsonrpc_id=None,
+    )
+
+
 def classify_mcp(
     body: bytes,
     headers: tuple[tuple[bytes, bytes], ...],
@@ -261,6 +310,15 @@ def classify_mcp(
             transport="mcp",
             tool=tool,
             browser=True,
+            jsonrpc_id=request_id,
+        )
+    if tool == "inspect_webpage":
+        if not _MCP_INSPECT_VALIDATOR.is_valid(arguments):
+            raise EmergencyRequestError(422, "invalid_request", request_id)
+        return ValidatedCall(
+            transport="mcp",
+            tool=tool,
+            browser=arguments.get("force_browser") is True or arguments.get("render_mode") == "browser",
             jsonrpc_id=request_id,
         )
     _validate_arguments(arguments, render=tool == "render_webpage", mcp=True)

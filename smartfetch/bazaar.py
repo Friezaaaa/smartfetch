@@ -462,3 +462,249 @@ def screenshot_mcp_discovery_extension():
         output_schema=SCREENSHOT_OUTPUT_SCHEMA,
         output_example=SCREENSHOT_OUTPUT_EXAMPLE,
     )
+
+
+INSPECT_DESCRIPTION = (
+    "Structured webpage and site intelligence and SEO inspection tool for any public URL. "
+    "Extracts comprehensive metadata, OpenGraph, Twitter cards, JSON-LD schemas, contact details "
+    "(emails, phones, social links), tech stack detection, security headers, and document outline."
+)
+INSPECT_TAGS = [
+    "inspection",
+    "metadata",
+    "seo",
+    "open-graph",
+    "json-ld",
+    "tech-stack",
+    "security",
+    "contacts",
+]
+INSPECT_INPUT_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "description": "Public HTTP or HTTPS webpage URL to inspect.",
+        },
+        "render_mode": {
+            "type": "string",
+            "enum": ["auto", "http_only", "browser"],
+            "default": "auto",
+            "description": "Rendering strategy: 'auto' (HTTP with browser escalation on SPA shell), 'http_only', or 'browser'.",
+        },
+        "force_browser": {
+            "type": "boolean",
+            "default": False,
+            "description": "Force browser rendering bypassing HTTP tier.",
+        },
+        "no_cache": {
+            "type": "boolean",
+            "default": False,
+            "description": "Bypass in-memory result cache.",
+        },
+    },
+    "required": ["url"],
+}
+INSPECT_INPUT_EXAMPLE = {
+    "url": "https://example.com",
+    "render_mode": "auto",
+    "force_browser": False,
+    "no_cache": False,
+}
+INSPECT_OUTPUT_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "success": {"type": "boolean"},
+        "requested_url": {"type": "string", "format": "uri"},
+        "final_url": {"type": "string", "format": "uri"},
+        "status_code": {"type": "integer"},
+        "render_method": {"type": "string", "enum": ["http", "browser"]},
+        "retrieval_tier": {"type": "string", "enum": ["http", "browser", "cache"]},
+        "cache_hit": {"type": "boolean"},
+        "elapsed_ms": {"type": "integer", "minimum": 0},
+        "request_id": {"type": "string"},
+        "service_version": {"type": "string"},
+        "metadata": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "description": {"type": "string"},
+                "canonical_url": {"type": "string"},
+                "language": {"type": "string"},
+                "charset": {"type": "string"},
+                "favicon_url": {"type": "string"},
+                "robots_meta": {"type": "string"},
+                "open_graph": {"type": "object"},
+                "twitter_card": {"type": "object"},
+            },
+            "required": ["title", "description", "canonical_url", "language", "charset", "favicon_url", "robots_meta", "open_graph", "twitter_card"],
+        },
+        "json_ld": {
+            "type": "array",
+            "items": {"type": "object"},
+        },
+        "contacts": {
+            "type": "object",
+            "properties": {
+                "emails": {"type": "array", "items": {"type": "string"}},
+                "phones": {"type": "array", "items": {"type": "string"}},
+                "social_links": {"type": "object"},
+            },
+            "required": ["emails", "phones", "social_links"],
+        },
+        "tech_stack": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "security_headers": {
+            "type": "object",
+            "properties": {
+                "https": {"type": "boolean"},
+                "strict_transport_security": {"type": ["string", "null"]},
+                "content_security_policy": {"type": ["string", "null"]},
+                "x_frame_options": {"type": ["string", "null"]},
+                "x_content_type_options": {"type": ["string", "null"]},
+                "referrer_policy": {"type": ["string", "null"]},
+                "permissions_policy": {"type": ["string", "null"]},
+                "server": {"type": ["string", "null"]},
+            },
+            "required": ["https"],
+        },
+        "structure": {
+            "type": "object",
+            "properties": {
+                "h1": {"type": "array", "items": {"type": "string"}},
+                "h2": {"type": "array", "items": {"type": "string"}},
+                "total_links": {"type": "integer"},
+                "internal_links": {"type": "integer"},
+                "external_links": {"type": "integer"},
+                "pdf_links": {"type": "integer"},
+                "sitemap_links": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["h1", "h2", "total_links", "internal_links", "external_links", "pdf_links", "sitemap_links"],
+        },
+    },
+    "required": [
+        "success",
+        "requested_url",
+        "final_url",
+        "status_code",
+        "render_method",
+        "retrieval_tier",
+        "cache_hit",
+        "elapsed_ms",
+        "request_id",
+        "service_version",
+        "metadata",
+        "json_ld",
+        "contacts",
+        "tech_stack",
+        "security_headers",
+        "structure",
+    ],
+}
+INSPECT_OUTPUT_EXAMPLE = {
+    "success": True,
+    "requested_url": "https://example.com",
+    "final_url": "https://example.com",
+    "status_code": 200,
+    "render_method": "http",
+    "retrieval_tier": "http",
+    "cache_hit": False,
+    "elapsed_ms": 115,
+    "request_id": "a1b2c3d4e5f60708",
+    "service_version": SERVICE_VERSION,
+    "metadata": {
+        "title": "Example Domain",
+        "description": "Example Domain for illustrative examples in documents.",
+        "canonical_url": "https://example.com",
+        "language": "en",
+        "charset": "utf-8",
+        "favicon_url": "https://example.com/favicon.ico",
+        "robots_meta": "index, follow",
+        "open_graph": {
+            "title": "Example Domain",
+            "description": "Illustrative example domain",
+            "type": "website",
+        },
+        "twitter_card": {
+            "card": "summary",
+            "title": "Example Domain",
+        },
+    },
+    "json_ld": [
+        {
+            "@context": "https://schema.org",
+            "@type": "WebSite",
+            "name": "Example",
+            "url": "https://example.com",
+        }
+    ],
+    "contacts": {
+        "emails": ["info@example.com"],
+        "phones": ["+1-800-555-0199"],
+        "social_links": {
+            "github": "https://github.com/example",
+            "x_twitter": "https://x.com/example",
+            "linkedin": None,
+            "youtube": None,
+            "discord": None,
+            "telegram": None,
+            "instagram": None,
+            "facebook": None,
+        },
+    },
+    "tech_stack": ["Cloudflare", "Tailwind CSS"],
+    "security_headers": {
+        "https": True,
+        "strict_transport_security": "max-age=31536000; includeSubDomains",
+        "content_security_policy": "default-src 'self'",
+        "x_frame_options": "DENY",
+        "x_content_type_options": "nosniff",
+        "referrer_policy": "strict-origin-when-cross-origin",
+        "permissions_policy": "camera=(), microphone=()",
+        "server": "cloudflare",
+    },
+    "structure": {
+        "h1": ["Example Domain"],
+        "h2": ["More Information"],
+        "total_links": 1,
+        "internal_links": 1,
+        "external_links": 0,
+        "pdf_links": 0,
+        "sitemap_links": ["https://example.com/sitemap.xml"],
+    },
+}
+
+
+def inspect_discovery_extension():
+    """Build the official x402 v2 Bazaar declaration for POST /inspect."""
+    from x402.extensions.bazaar import OutputConfig, declare_discovery_extension
+
+    extension = declare_discovery_extension(
+        input=INSPECT_INPUT_EXAMPLE,
+        input_schema=INSPECT_INPUT_SCHEMA,
+        body_type="json",
+        output=OutputConfig(
+            example=INSPECT_OUTPUT_EXAMPLE,
+            schema=INSPECT_OUTPUT_SCHEMA,
+        ),
+    )
+    extension["bazaar"]["info"]["input"]["method"] = "POST"
+    return extension
+
+
+def inspect_mcp_discovery_extension():
+    """Build the official x402 v2 Bazaar declaration for inspect_webpage."""
+    return mcp_discovery_extension(
+        tool_name="inspect_webpage",
+        description=INSPECT_DESCRIPTION,
+        input_schema=INSPECT_INPUT_SCHEMA,
+        input_example=INSPECT_INPUT_EXAMPLE,
+        output_schema=INSPECT_OUTPUT_SCHEMA,
+        output_example=INSPECT_OUTPUT_EXAMPLE,
+    )

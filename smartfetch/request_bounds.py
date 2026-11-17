@@ -108,7 +108,7 @@ async def _send_rejection(send, code: str) -> None:
 
 
 class BoundedRequestMiddleware:
-    def __init__(self, app, paths=("/fetch", "/mcp", "/screenshot")):
+    def __init__(self, app, paths=("/fetch", "/mcp", "/screenshot", "/inspect")):
         self.app = app
         self.paths = frozenset(paths)
 

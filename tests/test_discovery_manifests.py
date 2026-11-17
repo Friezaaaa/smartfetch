@@ -64,6 +64,7 @@ def test_agent_card_manifest_endpoint(client):
     assert "extract_webpage_text" in cap_names
     assert "render_webpage" in cap_names
     assert "screenshot_webpage" in cap_names
+    assert "inspect_webpage" in cap_names
 
     # Verify no secrets or internal infrastructure IPs are leaked
     body_str = response.text
