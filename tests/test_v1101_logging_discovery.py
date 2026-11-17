@@ -278,7 +278,7 @@ class DiscoveryCompatibilityTests(unittest.TestCase):
     def test_openapi_preserves_fetch_input_schema_without_active_x402(self):
         document = discovery.emergency_openapi_document(self.urls)
 
-        self.assertEqual(document['info']['version'], '1.13.1')
+        self.assertEqual(document['info']['version'], '1.14.0')
         self.assertEqual(list(document['paths']), ['/fetch', '/screenshot', '/inspect', '/batch-fetch'])
         operation = document['paths']['/fetch']['post']
         self.assertEqual(operation['x-smartfetch-availability'], 'unavailable')
@@ -319,7 +319,7 @@ class DiscoveryCompatibilityTests(unittest.TestCase):
         facilitator.get_supported.assert_not_called()
 
     def test_service_version_is_emergency_v1111(self):
-        self.assertEqual(SERVICE_VERSION, '1.13.1')
+        self.assertEqual(SERVICE_VERSION, '1.14.0')
 
 
 if __name__ == '__main__':

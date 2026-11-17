@@ -363,7 +363,7 @@ class V19DiscoveryDocumentTests(unittest.TestCase):
 
         OpenAPI.model_validate(document)
         self.assertEqual(document['openapi'], '3.1.0')
-        self.assertEqual(document['info']['version'], '1.13.1')
+        self.assertEqual(document['info']['version'], '1.14.0')
         self.assertEqual(document['servers'], [{
             'url': 'https://agent.example:9443',
         }])
@@ -648,7 +648,7 @@ class V19RegistryManifestTests(unittest.TestCase):
             'description': (
                 'Public web retrieval with zero-trust browser isolation and x402 payment enforcement on Base Mainnet.'
             ),
-            'version': '1.13.1',
+            'version': '1.14.0',
             'repository': {
                 'url': 'https://github.com/Friezaaaa/smartfetch',
                 'source': 'github',

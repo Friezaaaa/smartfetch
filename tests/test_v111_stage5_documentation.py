@@ -45,9 +45,9 @@ class Stage5DocumentationTests(unittest.TestCase):
     def test_release_metadata_is_consistently_v1120(self):
         manifest = json.loads((ROOT / "server.json").read_text("utf-8"))
         readme = (ROOT / "README.md").read_text("utf-8")
-        self.assertEqual(SERVICE_VERSION, "1.13.1")
-        self.assertEqual(manifest["version"], "1.13.1")
-        self.assertIn("SmartFetch V1.13.1", readme)
+        self.assertEqual(SERVICE_VERSION, "1.14.0")
+        self.assertEqual(manifest["version"], "1.14.0")
+        self.assertIn("SmartFetch V1.14.0", readme)
         self.assertIn("Production Isolated Browser & x402 Payments", readme)
         self.assertIn("Base Mainnet (`eip155:8453`)", readme)
 

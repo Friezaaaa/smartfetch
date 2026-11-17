@@ -3,7 +3,7 @@
   "name": "io.github.Friezaaaa/smartfetch",
   "title": "SmartFetch",
   "description": "Public web retrieval with zero-trust browser isolation and x402 payment enforcement on Base Mainnet.",
-  "version": "1.13.1",
+  "version": "1.14.0",
   "repository": {
     "url": "https://github.com/Friezaaaa/smartfetch",
     "source": "github"

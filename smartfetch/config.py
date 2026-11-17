@@ -1,7 +1,7 @@
 import os
 
 SERVICE_NAME = os.getenv('SERVICE_NAME', 'SmartFetch')
-SERVICE_VERSION = '1.13.1'
+SERVICE_VERSION = '1.14.0'
 HOST = os.getenv('HOST', '0.0.0.0')
 PORT = int(os.getenv('PORT', '8787'))
 

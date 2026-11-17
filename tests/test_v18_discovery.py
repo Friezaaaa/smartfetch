@@ -124,7 +124,7 @@ class V18MCPBazaarMetadataTests(unittest.TestCase):
         output = declaration['info']['output']
         self.assertEqual(output['type'], 'json')
         self.assertTrue(output['example']['success'])
-        self.assertEqual(output['example']['service_version'], '1.13.1')
+        self.assertEqual(output['example']['service_version'], '1.14.0')
         output_schema = declaration['schema']['properties']['output'][
             'properties'
         ]['example']
@@ -221,7 +221,7 @@ class V18RegistryManifestTests(unittest.TestCase):
             'description': (
                 'Public web retrieval with zero-trust browser isolation and x402 payment enforcement on Base Mainnet.'
             ),
-            'version': '1.13.1',
+            'version': '1.14.0',
             'repository': {
                 'url': 'https://github.com/Friezaaaa/smartfetch',
                 'source': 'github',

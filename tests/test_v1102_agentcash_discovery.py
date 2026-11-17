@@ -180,8 +180,8 @@ class CurrentVersionAndRegistryTests(unittest.TestCase):
             (REPO_ROOT / 'server.json').read_text(encoding='utf-8')
         )
 
-        self.assertEqual(SERVICE_VERSION, '1.13.1')
-        self.assertEqual(manifest['version'], '1.13.1')
+        self.assertEqual(SERVICE_VERSION, '1.14.0')
+        self.assertEqual(manifest['version'], '1.14.0')
         self.assertEqual(
             manifest['description'],
             'Public web retrieval with zero-trust browser isolation and x402 payment enforcement on Base Mainnet.',
