@@ -527,11 +527,11 @@ https://quotes.toscrape.com/js/</textarea>
         options.push({ value: 'backpack', label: 'Backpack (Injected)' });
       }
     }
-    if (window.ethereum) {
-      options.push({ value: 'metamask_snap', label: 'MetaMask (Solana Snap via Solflare)' });
-    }
     if (window.solana && !window.phantom) {
       options.push({ value: 'solana_injected', label: 'Generic window.solana' });
+    }
+    if (window.ethereum && !window.solana && !window.phantom && registeredWallets.size === 0) {
+      options.push({ value: 'metamask_notice', label: 'MetaMask (Switch to Base Mainnet recommended)' });
     }
 
     sel.innerHTML = '';
@@ -1008,51 +1008,9 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
       };
     }
 
-    // 2. MetaMask Solana Snap
-    if (selectedMode === 'metamask_snap') {
-      if (!window.ethereum) throw new Error("MetaMask is not detected in this browser.");
-      const snapId = 'npm:@solflare-wallet/metamask-snap';
-      await window.ethereum.request({
-        method: 'wallet_requestSnaps',
-        params: { [snapId]: {} }
-      });
-      const snapAccount = await window.ethereum.request({
-        method: 'wallet_invokeSnap',
-        params: {
-          snapId: snapId,
-          request: { method: 'getAccount' }
-        }
-      });
-      if (!snapAccount || (!snapAccount.publicKey && !snapAccount.address)) {
-        throw new Error("Could not retrieve Solana public key from MetaMask Snap.");
-      }
-      const pubkey = new solanaWeb3.PublicKey(snapAccount.publicKey || snapAccount.address);
-      return {
-        type: 'snap',
-        name: 'MetaMask Solana Snap',
-        pubkey: pubkey,
-        signTransaction: async (tx) => {
-          const raw = tx.serialize();
-          let binary = '';
-          for (let i = 0; i < raw.length; i++) binary += String.fromCharCode(raw[i]);
-          const txBase64 = btoa(binary);
-          const snapRes = await window.ethereum.request({
-            method: 'wallet_invokeSnap',
-            params: {
-              snapId: snapId,
-              request: {
-                method: 'signTransaction',
-                params: { transaction: txBase64 }
-              }
-            }
-          });
-          const signedB64 = snapRes.transaction || snapRes;
-          const binStr = atob(signedB64);
-          const out = new Uint8Array(binStr.length);
-          for (let i = 0; i < binStr.length; i++) out[i] = binStr.charCodeAt(i);
-          return out;
-        }
-      };
+    // 2. MetaMask notice
+    if (selectedMode === 'metamask_notice') {
+      throw new Error("MetaMask is an EVM wallet. To test with MetaMask, switch Payment Network above to 'Base Mainnet (EVM USDC)' which works instantly! For Solana Mainnet, please use Phantom or Solflare.");
     }
 
     // 3. Phantom explicit or auto
@@ -1142,52 +1100,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
       };
     }
 
-    // 8. If only window.ethereum is available, try MetaMask Solana Snap automatically
-    if (window.ethereum) {
-      const snapId = 'npm:@solflare-wallet/metamask-snap';
-      await window.ethereum.request({
-        method: 'wallet_requestSnaps',
-        params: { [snapId]: {} }
-      });
-      const snapAccount = await window.ethereum.request({
-        method: 'wallet_invokeSnap',
-        params: {
-          snapId: snapId,
-          request: { method: 'getAccount' }
-        }
-      });
-      if (snapAccount && (snapAccount.publicKey || snapAccount.address)) {
-        const pubkey = new solanaWeb3.PublicKey(snapAccount.publicKey || snapAccount.address);
-        return {
-          type: 'snap',
-          name: 'MetaMask Solana Snap',
-          pubkey: pubkey,
-          signTransaction: async (tx) => {
-            const raw = tx.serialize();
-            let binary = '';
-            for (let i = 0; i < raw.length; i++) binary += String.fromCharCode(raw[i]);
-            const txBase64 = btoa(binary);
-            const snapRes = await window.ethereum.request({
-              method: 'wallet_invokeSnap',
-              params: {
-                snapId: snapId,
-                request: {
-                  method: 'signTransaction',
-                  params: { transaction: txBase64 }
-                }
-              }
-            });
-            const signedB64 = snapRes.transaction || snapRes;
-            const binStr = atob(signedB64);
-            const out = new Uint8Array(binStr.length);
-            for (let i = 0; i < binStr.length; i++) out[i] = binStr.charCodeAt(i);
-            return out;
-          }
-        };
-      }
-    }
-
-    throw new Error("No Solana wallet detected. Please install Phantom, Solflare, Backpack, or enable the MetaMask Solana Snap.");
+    throw new Error("No Solana wallet (Phantom, Solflare, or Backpack) detected. If you only have MetaMask, select 'Base Mainnet (EVM USDC)' above to test instantly without any setup!");
   }
 
   // Common response result renderer

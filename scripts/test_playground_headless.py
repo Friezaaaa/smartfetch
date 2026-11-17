@@ -97,18 +97,22 @@ async def run_cdp_tests():
             print(f"[4] Page title: '{title}'")
 
             # Test 1: Click "Inspect Live 402 & Health"
-            print("[5] Clicking 'Inspect Live 402 & Health' button...")
-            await eval_js("document.getElementById('inspectBtn').click()")
+            print("[5] Invoking inspectHealthAnd402()...")
+            await eval_js("inspectHealthAnd402()")
 
             # Wait for execution status to update from Railway live response
             live_status = None
-            for _ in range(30):
+            for i in range(30):
                 await asyncio.sleep(0.5)
                 live_status = await eval_js("document.getElementById('executionStatus').innerHTML")
+                print(f"  [poll {i}] executionStatus: {live_status}")
                 if live_status and ("Gateway Online" in live_status or "Request failed" in live_status):
                     break
 
             print(f"[6] Received live status:\n{live_status}")
+            if not live_status or "Gateway Online" not in live_status:
+                print(f"DEBUG: exceptions = {exceptions}")
+                print(f"DEBUG: console_errors = {console_errors}")
             assert "Gateway Online" in live_status, f"Expected Gateway Online in status, got: {live_status}"
             assert "$0.005 USDC" in live_status, f"Expected $0.005 USDC in status, got: {live_status}"
             assert "eip155:8453" in live_status, f"Expected eip155:8453 in status, got: {live_status}"
