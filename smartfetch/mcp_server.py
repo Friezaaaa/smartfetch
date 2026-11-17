@@ -110,24 +110,43 @@ def _initialize_payment(settings: X402Settings):
             register_bazaar=True,
         )
         resource_server.initialize()
-        accepts = resource_server.build_payment_requirements(ResourceConfig(
+        accepts = list(resource_server.build_payment_requirements(ResourceConfig(
             scheme="exact",
             payTo=settings.pay_to,
             price=settings.price,
             network=settings.network,
-        ))
-        screenshot_accepts = resource_server.build_payment_requirements(ResourceConfig(
+        )))
+        screenshot_accepts = list(resource_server.build_payment_requirements(ResourceConfig(
             scheme="exact",
             payTo=settings.pay_to,
             price="$0.01",
             network=settings.network,
-        ))
-        batch_fetch_accepts = resource_server.build_payment_requirements(ResourceConfig(
+        )))
+        batch_fetch_accepts = list(resource_server.build_payment_requirements(ResourceConfig(
             scheme="exact",
             payTo=settings.pay_to,
             price="$0.015",
             network=settings.network,
-        ))
+        )))
+        if settings.solana_pay_to and settings.solana_network:
+            accepts.extend(resource_server.build_payment_requirements(ResourceConfig(
+                scheme="exact",
+                payTo=settings.solana_pay_to,
+                price=settings.price,
+                network=settings.solana_network,
+            )))
+            screenshot_accepts.extend(resource_server.build_payment_requirements(ResourceConfig(
+                scheme="exact",
+                payTo=settings.solana_pay_to,
+                price="$0.01",
+                network=settings.solana_network,
+            )))
+            batch_fetch_accepts.extend(resource_server.build_payment_requirements(ResourceConfig(
+                scheme="exact",
+                payTo=settings.solana_pay_to,
+                price="$0.015",
+                network=settings.solana_network,
+            )))
     except Exception as exc:
         _LOGGER.error("Failed to initialize x402 MCP payment server: %s", exc)
         initialization_failed = True
@@ -365,6 +384,7 @@ def create_smartfetch_mcp(
         from x402.schemas import ResourceInfo
 
         def payment_verified(_context):
+            req_network = getattr(getattr(_context, "requirements", None), "network", None) or settings.network
             emit_activity(
                 "payment_verified",
                 transport="mcp",
@@ -373,13 +393,14 @@ def create_smartfetch_mcp(
                 outcome="verified",
                 payment_present=True,
                 payment_stage="verification",
-                payment_network=settings.network,
+                payment_network=req_network,
                 payment_asset="USDC",
                 payment_amount=price_str,
             )
             return True
 
         def payment_settled(_context):
+            req_network = getattr(getattr(_context, "requirements", None), "network", None) or settings.network
             emit_activity(
                 "payment_settled",
                 transport="mcp",
@@ -388,7 +409,7 @@ def create_smartfetch_mcp(
                 outcome="settled",
                 payment_present=True,
                 payment_stage="settlement",
-                payment_network=settings.network,
+                payment_network=req_network,
                 payment_asset="USDC",
                 payment_amount=price_str,
             )

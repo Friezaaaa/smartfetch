@@ -164,6 +164,15 @@ def x402_manifest(urls, settings, v111_accepts=None):
             "asset": "USDC",
             "payTo": settings.pay_to,
             "pay_to": settings.pay_to,
+            **({
+                "solana": {
+                    "network": settings.solana_network,
+                    "asset": "USDC",
+                    "payTo": settings.solana_pay_to,
+                    "pay_to": settings.solana_pay_to,
+                },
+                "networks": [settings.network, settings.solana_network],
+            } if settings.solana_pay_to and settings.solana_network else {}),
         },
         "endpoints": {
             "mcp": {
@@ -235,6 +244,14 @@ def agent_card_document(urls, settings=None):
                 "price": price,
                 "payTo": pay_to,
                 "enabled": enabled,
+                **({
+                    "solana": {
+                        "network": settings.solana_network,
+                        "asset": "USDC",
+                        "payTo": settings.solana_pay_to,
+                    },
+                    "networks": [network, settings.solana_network],
+                } if settings and settings.solana_pay_to and settings.solana_network else {}),
             },
         },
         "capabilities": [
@@ -418,6 +435,12 @@ def openapi_document(
     network_name = (
         "Base mainnet" if network == "eip155:8453" else "Base Sepolia"
     )
+    solana_active = bool(settings.solana_pay_to and settings.solana_network)
+    network_desc = (
+        f"{network_name} and Solana ({settings.solana_network})"
+        if solana_active
+        else network_name
+    )
     x402_contract = {
         "x402Version": 2,
         "scheme": scheme,
@@ -425,6 +448,14 @@ def openapi_document(
         "assetSymbol": "USDC",
         "price": settings.price,
         "amount": atomic_amount,
+        **({
+            "solana": {
+                "network": settings.solana_network,
+                "assetSymbol": "USDC",
+                "payTo": settings.solana_pay_to,
+            },
+            "networks": [network, settings.solana_network],
+        } if solana_active else {}),
     }
     if asset is not None:
         x402_contract["asset"] = asset
@@ -470,7 +501,7 @@ def openapi_document(
                     "description": (
                         "Paid x402 exact retrieval of one public HTTP or HTTPS "
                         f"URL. The configured price is {settings.price} per "
-                        f"execution using USDC on {network_name}."
+                        f"execution using USDC on {network_desc}."
                     ),
                     "x-x402": x402_contract,
                     "x-payment-info": {
@@ -480,6 +511,13 @@ def openapi_document(
                             "amount": _agentcash_usd_amount(settings.price),
                         },
                         "protocols": [{"x402": {}}],
+                        **({
+                            "networks": [network, settings.solana_network],
+                            "solana": {
+                                "network": settings.solana_network,
+                                "payTo": settings.solana_pay_to,
+                            },
+                        } if solana_active else {}),
                     },
                     "security": [],
                     "parameters": [
@@ -569,7 +607,7 @@ def openapi_document(
                     "description": (
                         "Paid x402 exact screenshot capture of one public HTTP or "
                         "HTTPS URL rendered in an isolated browser. The configured "
-                        f"price is $0.01 per execution using USDC on {network_name}."
+                        f"price is $0.01 per execution using USDC on {network_desc}."
                     ),
                     "x-x402": {
                         "x402Version": 2,
@@ -579,6 +617,14 @@ def openapi_document(
                         "price": "$0.01",
                         "amount": _atomic_usdc_amount("$0.01"),
                         **({"asset": asset} if asset is not None else {}),
+                        **({
+                            "solana": {
+                                "network": settings.solana_network,
+                                "assetSymbol": "USDC",
+                                "payTo": settings.solana_pay_to,
+                            },
+                            "networks": [network, settings.solana_network],
+                        } if solana_active else {}),
                     },
                     "x-payment-info": {
                         "price": {
@@ -587,6 +633,13 @@ def openapi_document(
                             "amount": _agentcash_usd_amount("$0.01"),
                         },
                         "protocols": [{"x402": {}}],
+                        **({
+                            "networks": [network, settings.solana_network],
+                            "solana": {
+                                "network": settings.solana_network,
+                                "payTo": settings.solana_pay_to,
+                            },
+                        } if solana_active else {}),
                     },
                     "security": [],
                     "parameters": [
@@ -649,7 +702,7 @@ def openapi_document(
                         "Paid x402 exact site intelligence and SEO inspection of one public "
                         "HTTP or HTTPS webpage. Extracts metadata, OpenGraph, Twitter cards, "
                         "JSON-LD schemas, contacts, tech stack detection, and security headers. "
-                        f"The configured price is $0.005 per execution using USDC on {network_name}."
+                        f"The configured price is $0.005 per execution using USDC on {network_desc}."
                     ),
                     "x-x402": {
                         "x402Version": 2,
@@ -659,6 +712,14 @@ def openapi_document(
                         "price": "$0.005",
                         "amount": _atomic_usdc_amount("$0.005"),
                         **({"asset": asset} if asset is not None else {}),
+                        **({
+                            "solana": {
+                                "network": settings.solana_network,
+                                "assetSymbol": "USDC",
+                                "payTo": settings.solana_pay_to,
+                            },
+                            "networks": [network, settings.solana_network],
+                        } if solana_active else {}),
                     },
                     "x-payment-info": {
                         "price": {
@@ -667,6 +728,13 @@ def openapi_document(
                             "amount": _agentcash_usd_amount("$0.005"),
                         },
                         "protocols": [{"x402": {}}],
+                        **({
+                            "networks": [network, settings.solana_network],
+                            "solana": {
+                                "network": settings.solana_network,
+                                "payTo": settings.solana_pay_to,
+                            },
+                        } if solana_active else {}),
                     },
                     "security": [],
                     "parameters": [
@@ -730,7 +798,7 @@ def openapi_document(
                         "HTTPS webpages or documents. Fetches concurrently with VPS browser "
                         "concurrency protection (capped at <= 2 browser renders per batch) and "
                         "returns 502 without settling payment if all URLs fail. "
-                        f"The configured price is $0.015 per execution using USDC on {network_name}."
+                        f"The configured price is $0.015 per execution using USDC on {network_desc}."
                     ),
                     "x-x402": {
                         "x402Version": 2,
@@ -740,6 +808,14 @@ def openapi_document(
                         "price": "$0.015",
                         "amount": _atomic_usdc_amount("$0.015"),
                         **({"asset": asset} if asset is not None else {}),
+                        **({
+                            "solana": {
+                                "network": settings.solana_network,
+                                "assetSymbol": "USDC",
+                                "payTo": settings.solana_pay_to,
+                            },
+                            "networks": [network, settings.solana_network],
+                        } if solana_active else {}),
                     },
                     "x-payment-info": {
                         "price": {
@@ -748,6 +824,13 @@ def openapi_document(
                             "amount": _agentcash_usd_amount("$0.015"),
                         },
                         "protocols": [{"x402": {}}],
+                        **({
+                            "networks": [network, settings.solana_network],
+                            "solana": {
+                                "network": settings.solana_network,
+                                "payTo": settings.solana_pay_to,
+                            },
+                        } if solana_active else {}),
                     },
                     "security": [],
                     "parameters": [
@@ -1095,6 +1178,11 @@ def docs_html(
             payment_requirement,
         ).items()
     }
+    solana_note = (
+        f" (also accepting Solana USDC on <code>{escape(settings.solana_network)}</code> to <code>{escape(settings.solana_pay_to)}</code>)"
+        if settings and settings.solana_pay_to and settings.solana_network
+        else ""
+    )
     v111_section = _v111_docs_html(
         urls,
         _v111_requirements(v111_accepts),
@@ -1116,7 +1204,7 @@ def docs_html(
   <main>
     <h1>SmartFetch</h1>
     <p>SmartFetch is a webpage reader and fetch service for AI agents. It can scrape a public URL, fetch and extract local PDFs, extract clean text, convert content to Markdown, preserve links and metadata, and use automatic browser rendering for JavaScript-heavy pages.</p>
-    <p>Legacy <code>POST /fetch</code> and the four existing MCP tools use x402 <code>{payment['scheme']}</code> payments at <strong>{payment['price']}</strong> on <code>{payment['network']}</code> with asset <code>{payment['asset']}</code>.{v111_price_note} Discovery, health, metadata, MCP initialize, and MCP tools/list remain free.</p>
+    <p>Legacy <code>POST /fetch</code> and the four existing MCP tools use x402 <code>{payment['scheme']}</code> payments at <strong>{payment['price']}</strong> on <code>{payment['network']}</code> with asset <code>{payment['asset']}</code>.{solana_note}{v111_price_note} Discovery, health, metadata, MCP initialize, and MCP tools/list remain free.</p>
     <h2>Public endpoints</h2>
     <ul>
       <li><a href="{safe['meta']}">GET /meta</a> — machine-readable metadata</li>
@@ -1210,6 +1298,11 @@ def llms_text(
 ):
     """Return a compact llms.txt service summary."""
     payment = _payment_details(settings, payment_requirement)
+    solana_note = (
+        f" (also accepts Solana USDC on {settings.solana_network} to {settings.solana_pay_to})"
+        if settings and settings.solana_pay_to and settings.solana_network
+        else ""
+    )
     v111_section = _v111_llms_text(_v111_requirements(v111_accepts))
     v111_price_note = (
         " V1.11 variants use their individually listed $0.05, $0.10, and "
@@ -1220,7 +1313,7 @@ def llms_text(
 
 SmartFetch reads, fetches, scrapes, and extracts public webpages and PDFs for AI agents. It returns clean text, Markdown, links, and metadata, with browser rendering for JavaScript-heavy websites.
 
-Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['price']} per execution with x402 {payment['scheme']} on {payment['network']} and asset {payment['asset']}.{v111_price_note}
+Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['price']} per execution with x402 {payment['scheme']} on {payment['network']} and asset {payment['asset']}.{solana_note}{v111_price_note}
 
 ## Endpoints
 - [Community x402 manifest]({urls['x402']})

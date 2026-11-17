@@ -9,6 +9,7 @@ jsonschema==4.26.0
 Pillow==12.3.0
 pypdf==6.19.0
 requests>=2.32,<3
+solana==0.36.6
 uvicorn==0.52.4
 websocket-client>=1.9,<2
-x402[extensions,fastapi,evm]==2.20.0
+x402[extensions,fastapi,evm,svm]==2.20.0

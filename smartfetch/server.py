@@ -461,9 +461,17 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                         "price": "$0.015" if name == "batch_fetch_webpages" else ("$0.01" if name == "screenshot_webpage" else ("$0.005" if name == "inspect_webpage" else settings.price)),
                         "network": settings.network,
                         "asset": "USDC",
+                        **({
+                            "solana_network": settings.solana_network,
+                            "networks": [settings.network, settings.solana_network],
+                        } if settings.solana_pay_to and settings.solana_network else {}),
                     }
                     for name in MCP_TOOLS
                 ],
+                **({
+                    "solana_network": settings.solana_network,
+                    "networks": [settings.network, settings.solana_network],
+                } if settings.solana_pay_to and settings.solana_network else {}),
             }
         return emergency_meta(urls)
 
@@ -565,17 +573,16 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         )
 
     if settings.enabled and remote_cfg.is_configured:
-        from x402.http import PaymentOption
         from x402.http.types import RouteConfig
+        from .payments import build_payment_options
+
+        screenshot_options = build_payment_options(settings, "$0.01")
+        inspect_options = build_payment_options(settings, "$0.005")
+        batch_fetch_options = build_payment_options(settings, "$0.015")
 
         extra_routes = {
             "POST /screenshot": RouteConfig(
-                accepts=PaymentOption(
-                    scheme="exact",
-                    pay_to=settings.pay_to,
-                    price="$0.01",
-                    network=settings.network,
-                ),
+                accepts=screenshot_options if len(screenshot_options) > 1 else screenshot_options[0],
                 description=SCREENSHOT_DESCRIPTION,
                 mime_type="application/json",
                 service_name="SmartFetch",
@@ -583,12 +590,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 extensions=screenshot_discovery_extension(),
             ),
             "POST /inspect": RouteConfig(
-                accepts=PaymentOption(
-                    scheme="exact",
-                    pay_to=settings.pay_to,
-                    price="$0.005",
-                    network=settings.network,
-                ),
+                accepts=inspect_options if len(inspect_options) > 1 else inspect_options[0],
                 description=INSPECT_DESCRIPTION,
                 mime_type="application/json",
                 service_name="SmartFetch",
@@ -596,12 +598,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 extensions=inspect_discovery_extension(),
             ),
             "POST /batch-fetch": RouteConfig(
-                accepts=PaymentOption(
-                    scheme="exact",
-                    pay_to=settings.pay_to,
-                    price="$0.015",
-                    network=settings.network,
-                ),
+                accepts=batch_fetch_options if len(batch_fetch_options) > 1 else batch_fetch_options[0],
                 description=BATCH_FETCH_DESCRIPTION,
                 mime_type="application/json",
                 service_name="SmartFetch",
