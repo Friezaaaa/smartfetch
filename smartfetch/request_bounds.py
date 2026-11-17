@@ -122,12 +122,17 @@ class BoundedRequestMiddleware:
                 if message["type"] == "http.response.start":
                     message = dict(message)
                     protected = {b"cache-control", b"x-content-type-options", b"x-request-id"}
+                    existing_cc = None
+                    for name, value in message.get("headers", []):
+                        if name.lower() == b"cache-control":
+                            existing_cc = value
+                            break
                     headers = [
                         (name, value) for name, value in message.get("headers", [])
                         if name.lower() not in protected
                     ]
                     headers.extend([
-                        (b"cache-control", b"no-store"),
+                        (b"cache-control", existing_cc if existing_cc is not None else b"no-store"),
                         (b"x-content-type-options", b"nosniff"),
                         (b"x-request-id", request_id.encode("ascii")),
                     ])

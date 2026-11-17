@@ -143,8 +143,18 @@ def _validate_free_mcp_params(payload: dict, method: str) -> None:
 def classify_fetch(
     body: bytes,
     headers: tuple[tuple[bytes, bytes], ...],
-) -> ValidatedCall:
-    payload = _parse_json(body, headers)
+    *,
+    allow_unpaid_probe: bool = False,
+) -> ValidatedCall | None:
+    if allow_unpaid_probe:
+        try:
+            payload = _parse_json(body, headers)
+            if not payload or not payload.get("url"):
+                return None
+        except EmergencyRequestError:
+            return None
+    else:
+        payload = _parse_json(body, headers)
     _validate_arguments(payload)
     return ValidatedCall(
         transport="http",

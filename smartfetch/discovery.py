@@ -404,6 +404,11 @@ def openapi_document(
                 "webpages into agent-ready text, Markdown, links, and metadata."
             ),
             "x-guidance": AGENTCASH_GUIDANCE,
+            "contact": {
+                "name": "SmartFetch",
+                "email": "smartfetch.contact@gmail.com",
+                "url": PLAYGROUND_URL,
+            },
         },
         "servers": [{"url": urls["base"]}],
         "externalDocs": {
@@ -1067,8 +1072,16 @@ def emergency_openapi_document(urls: dict) -> dict:
     unavailable = {"description": "Retrieval is temporarily unavailable"}
     return {
         "openapi": "3.1.0",
-        "info": {"title": SERVICE_NAME, "version": SERVICE_VERSION,
-                 "description": "Emergency fail-closed mode; retrieval and browser rendering are unavailable."},
+        "info": {
+            "title": SERVICE_NAME,
+            "version": SERVICE_VERSION,
+            "description": "Emergency fail-closed mode; retrieval and browser rendering are unavailable.",
+            "contact": {
+                "name": "SmartFetch",
+                "email": "smartfetch.contact@gmail.com",
+                "url": PLAYGROUND_URL,
+            },
+        },
         "servers": [{"url": urls["base"]}],
         "externalDocs": {
             "description": "SmartFetch discovery documentation",

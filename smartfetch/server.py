@@ -42,6 +42,12 @@ from starlette.middleware.cors import CORSMiddleware
 
 
 _UNHEALTHY_BODY = b'{"success":false,"error_code":"service_unhealthy","error":"Service temporarily unavailable"}'
+_FAVICON_SVG = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+    b'<circle cx="50" cy="50" r="48" fill="#090d16" stroke="#38bdf8" stroke-width="4"/>'
+    b'<path d="M30 45 L50 25 L70 45 M50 25 L50 75" stroke="#38bdf8" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>'
+    b'</svg>'
+)
 
 
 class SmartFetchCORSMiddleware(CORSMiddleware):
@@ -324,6 +330,22 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
     @application.get("/sitemap.xml")
     async def sitemap(request: Request):
         return Response(content=sitemap_xml(public_urls(request)), media_type="application/xml")
+
+    @application.get("/favicon.ico")
+    async def favicon_ico():
+        return Response(
+            content=_FAVICON_SVG,
+            media_type="image/x-icon",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    @application.get("/favicon.svg")
+    async def favicon_svg():
+        return Response(
+            content=_FAVICON_SVG,
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
 
     if settings.enabled and remote_cfg.is_configured:
         install_x402(application, settings)

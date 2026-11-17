@@ -154,20 +154,27 @@ class EmergencyDispatch:
             except Exception:
                 pass
             return
+        from .remote_browser import RemoteBrowserConfig
+        remote_cfg = RemoteBrowserConfig.from_env()
+        has_payment = any(
+            h[0].lower() in (b"payment-signature", b"x-payment")
+            for h in bounded.headers
+        )
+        allow_unpaid_probe = remote_cfg.is_configured and not has_payment
         try:
-            call = classify_fetch(bounded.body, bounded.headers)
+            call = classify_fetch(
+                bounded.body, bounded.headers, allow_unpaid_probe=allow_unpaid_probe
+            )
         except EmergencyRequestError as exc:
             await _send_json(send, exc.status, _ERRORS[exc.code])
             return
         if terminal_unhealthy:
             await _send_json(send, 503, _UNAVAILABLE["service_unhealthy"], unavailable=True)
             return
-        from .remote_browser import RemoteBrowserConfig
-        remote_cfg = RemoteBrowserConfig.from_env()
         if remote_cfg.is_configured:
             await self.app(scope, receive, send)
             return
-        code = "browser_unavailable" if call.browser else "retrieval_unavailable"
+        code = "browser_unavailable" if (call and call.browser) else "retrieval_unavailable"
         await _send_json(send, 503, _UNAVAILABLE[code], unavailable=True)
         try:
             emit_unavailable_attempt(

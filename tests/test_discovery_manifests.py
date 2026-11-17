@@ -131,3 +131,58 @@ def test_existing_manifests_regression(client):
     resp_health = client.get("/health")
     assert resp_health.status_code == 200
     assert resp_health.json()["ok"] is True
+
+
+def test_openapi_contact_info(client):
+    """Verify OpenAPI document contains contact info for AgentCash and directories."""
+    resp = client.get("/openapi.json")
+    assert resp.status_code == 200
+    info = resp.json()["info"]
+    assert "contact" in info
+    assert info["contact"]["name"] == "SmartFetch"
+    assert info["contact"]["email"] == "smartfetch.contact@gmail.com"
+    assert "smartfetch-playground.pages.dev" in info["contact"]["url"]
+
+
+def test_favicons(client):
+    """Verify /favicon.ico and /favicon.svg return 200 with SVG bytes and cache header."""
+    for path in ["/favicon.ico", "/favicon.svg"]:
+        resp = client.get(path)
+        assert resp.status_code == 200
+        assert "<svg" in resp.text
+        assert "max-age=86400" in resp.headers.get("cache-control", "")
+
+
+def test_unpaid_empty_probe_returns_402(client):
+    """In operational mode, unauthenticated empty probes to /fetch return 402 challenge."""
+    # Empty JSON object probe
+    resp = client.post("/fetch", json={})
+    assert resp.status_code == 402
+    assert "payment-required" in resp.headers or "PAYMENT-REQUIRED" in resp.headers
+
+    # Empty body probe with application/json
+    resp_empty = client.post("/fetch", content=b"", headers={"Content-Type": "application/json"})
+    assert resp_empty.status_code == 402
+    assert "payment-required" in resp_empty.headers or "PAYMENT-REQUIRED" in resp_empty.headers
+
+
+def test_emergency_mode_probe_rejected_with_422(monkeypatch):
+    """In emergency fail-closed mode, empty probes are rejected with 422."""
+    monkeypatch.delenv("BROWSER_WORKER_URL", raising=False)
+    monkeypatch.delenv("BROWSER_WORKER_HMAC_KEY", raising=False)
+    emergency_app = create_app()
+    emergency_client = TestClient(emergency_app)
+
+    resp = emergency_client.post("/fetch", json={})
+    assert resp.status_code == 422
+
+
+def test_paid_probe_missing_url_rejected_with_422(client):
+    """When payment signature header is present, empty URL is rejected with 422 without settlement."""
+    resp = client.post(
+        "/fetch",
+        json={},
+        headers={"payment-signature": "dummy_payment_sig"},
+    )
+    assert resp.status_code == 422
+
