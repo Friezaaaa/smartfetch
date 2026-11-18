@@ -11,11 +11,26 @@ Explore SmartFetch directly from your browser without installing anything:
 - **GitHub Pages Mirror**: [https://friezaaaa.github.io/smartfetch/](https://friezaaaa.github.io/smartfetch/)
 
 **Features**:
-- **Free Live 402 Inspection**: Decode and inspect the live Base Mainnet x402 challenge header, pricing ($0.005 USDC), seller treasury address, and service health without a wallet.
-- **Web3 Wallet Payments**: Sign EIP-712 `TransferWithAuthorization` authorizations via MetaMask, Coinbase Wallet, or Rabby on Base Mainnet (`0x2105` / `8453`) and test end-to-end settlements.
+- **Free Live 402 Inspection**: Decode and inspect the live dual-chain Base Mainnet (`eip155:8453`) and Solana Mainnet (`solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`) x402 challenge header, pricing ($0.005 / $0.01 / $0.015 USDC), seller treasury addresses, and service health without a wallet.
+- **Dual-Chain Web3 Wallet Payments (Base + Solana)**: Sign EIP-712 `TransferWithAuthorization` authorizations via MetaMask, Coinbase Wallet, or Rabby on Base Mainnet (`0x2105` / `8453`) OR sign SPL `TransferChecked` transactions via Solana Wallet Standard (Phantom, Solflare, Backpack, MetaMask Solana) on Solana Mainnet with facilitator-sponsored gas.
 - **HTML DOM + Local PDF Support**: Interactive previews featuring sandboxed HTML rendering (`sandbox="allow-scripts"`), formatted Markdown, extracted plain text, and local PDF extraction.
 - **Client-Side SSRF Protection**: Real-time validation preventing requests to internal IPs, localhost, or cloud metadata endpoints (`169.254.169.254`).
-- **Interactive Code Generator**: Ready-to-copy integration code in cURL, Python (`x402`), TypeScript (`viem`), and MCP configuration JSON.
+- **Interactive Code Generator**: Ready-to-copy integration code in cURL, Python (`x402`), TypeScript (`viem` / `@solana/web3.js`), and MCP configuration JSON.
+
+---
+
+## Apify Store (Cards, PayPal, Standby MCP)
+
+Prefer traditional cloud billing (credit/debit cards, PayPal, or prepaid Apify credits) instead of on-chain crypto wallets? SmartFetch is available as a self-contained **Pay-Per-Event (PPE) Actor** and **Standby MCP Server** on the Apify Store:
+
+- **Public Apify Store Actor**: [https://apify.com/smartfetch.dev/smartfetch](https://apify.com/smartfetch.dev/smartfetch)
+- **Standby MCP Endpoint**: `https://smartfetch-dev--smartfetch.apify.actor/mcp` (pass `Authorization: Bearer <APIFY_API_TOKEN>`)
+- **Pay-Per-Event Pricing**:
+  - `actor-start`: `$0.00` (no startup fee; `$0.00001` platform minimum)
+  - `page-fetched`: **`$0.01`** per successfully retrieved webpage or PDF (`fetch` & `batch_fetch`)
+  - `site-inspected`: **`$0.01`** per successful structured site intelligence inspection (`inspect`)
+  - `screenshot-captured`: **`$0.02`** per successful headless Chromium screenshot (`screenshot`)
+  - Zero charge on failed requests.
 
 ---
 
@@ -41,10 +56,13 @@ SmartFetch separates the public API/MCP interface from headless browser executio
 
 - **Service Version**: `1.14.0`
 - **Operating Mode**: `isolated_browser`
-- **Supported Network**: Base Mainnet (`eip155:8453`)
-- **Asset**: Native USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`)
+- **Supported Networks**:
+  - **Base Mainnet** (`eip155:8453`) — Native USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`)
+  - **Solana Mainnet** (`solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`) — Native SPL USDC (`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`)
 - **Price**: $0.005 USDC (5000 atomic units) for webpage retrieval and site inspection (`POST /fetch`, `POST /inspect`, retrieval tools, and `inspect_webpage`); $0.01 USDC (10000 atomic units) for screenshot capture (`POST /screenshot` and `screenshot_webpage`); $0.015 USDC (15000 atomic units) for parallel batch retrieval (`POST /batch-fetch` and `batch_fetch_webpages`)
-- **Seller Treasury (`payTo`)**: `0xE29Fcb6ef1534d5F138E48a8A71370BE7770A786`
+- **Seller Treasury (`payTo`)**:
+  - **Base (EVM)**: `0xE29Fcb6ef1534d5F138E48a8A71370BE7770A786`
+  - **Solana (SVM)**: `88hE4EB4yZwb4F2arPXcG7efwQyU5FDN26DuVpVKVk2W`
 - **MCP Tools**:
   - `fetch_webpage` ($0.005 USDC)
   - `webpage_to_markdown` ($0.005 USDC)

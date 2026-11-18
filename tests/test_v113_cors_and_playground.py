@@ -135,6 +135,113 @@ class TestPlaygroundSandbox(unittest.TestCase):
         self.assertIn("solanaRpcUrl", content)
         self.assertIn("performSolanaPreflightChecks", content)
 
+    def test_playground_solana_transaction_layout_passes_x402_svm_verifier(self):
+        """Verifies the exact 4-instruction VersionedTransaction layout built by Playground JS passes x402==2.20.0 ExactSvmScheme.verify()."""
+        import base64
+        import binascii
+        import os
+        import struct
+        from unittest.mock import MagicMock
+
+        from solders.hash import Hash
+        from solders.instruction import AccountMeta, Instruction
+        from solders.keypair import Keypair
+        from solders.message import MessageV0
+        from solders.pubkey import Pubkey
+        from solders.signature import Signature
+        from solders.transaction import VersionedTransaction
+        from x402.mechanisms.svm.exact.facilitator import ExactSvmScheme as ExactSvmFacilitatorScheme
+        from x402.mechanisms.svm.utils import derive_ata
+        from x402.schemas import PaymentPayload, PaymentRequirements, ResourceInfo
+
+        fee_payer_str = "BENrLoUbndxoNMUS5JXApGMtNykLjFXXixMtpDwDR9SP"
+        seller_str = "88hE4EB4yZwb4F2arPXcG7efwQyU5FDN26DuVpVKVk2W"
+        mint_str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        token_prog_str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        compute_budget_str = "ComputeBudget111111111111111111111111111111"
+        memo_prog_str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
+
+        buyer_kp = Keypair()
+        buyer_pubkey = buyer_kp.pubkey()
+        fee_payer = Pubkey.from_string(fee_payer_str)
+        mint = Pubkey.from_string(mint_str)
+        token_prog = Pubkey.from_string(token_prog_str)
+
+        buyer_ata = Pubkey.from_string(derive_ata(str(buyer_pubkey), mint_str, token_prog_str))
+        seller_ata = Pubkey.from_string(derive_ata(seller_str, mint_str, token_prog_str))
+
+        # Mirror Playground JS buildSolanaTransaction() byte-for-byte:
+        # 1. SetComputeUnitLimit(20000) -> [2, u32le(20000)]
+        cu_limit_ix = Instruction(
+            Pubkey.from_string(compute_budget_str),
+            b"\x02" + struct.pack("<I", 20000),
+            [],
+        )
+        # 2. SetComputeUnitPrice(1) -> [3, u64le(1)]
+        cu_price_ix = Instruction(
+            Pubkey.from_string(compute_budget_str),
+            b"\x03" + struct.pack("<Q", 1),
+            [],
+        )
+        # 3. SPL TransferChecked(5000, decimals=6) -> [12, u64le(5000), 6]
+        transfer_data = b"\x0c" + struct.pack("<Q", 5000) + b"\x06"
+        transfer_ix = Instruction(
+            token_prog,
+            transfer_data,
+            [
+                AccountMeta(buyer_ata, is_signer=False, is_writable=True),
+                AccountMeta(mint, is_signer=False, is_writable=False),
+                AccountMeta(seller_ata, is_signer=False, is_writable=True),
+                AccountMeta(buyer_pubkey, is_signer=True, is_writable=False),
+            ],
+        )
+        # 4. Memo (16 random hex bytes = 32 ASCII bytes)
+        memo_ix = Instruction(
+            Pubkey.from_string(memo_prog_str),
+            binascii.hexlify(os.urandom(16)),
+            [],
+        )
+
+        msg = MessageV0.try_compile(
+            payer=fee_payer,
+            instructions=[cu_limit_ix, cu_price_ix, transfer_ix, memo_ix],
+            address_lookup_table_accounts=[],
+            recent_blockhash=Hash.default(),
+        )
+        buyer_sig = buyer_kp.sign_message(b"\x80" + bytes(msg))
+        tx = VersionedTransaction.populate(msg, [Signature.default(), buyer_sig])
+        tx_b64 = base64.b64encode(bytes(tx)).decode("ascii")
+
+        requirements = PaymentRequirements(
+            scheme="exact",
+            network="solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            asset=mint_str,
+            amount="5000",
+            pay_to=seller_str,
+            max_timeout_seconds=300,
+            extra={"feePayer": fee_payer_str},
+        )
+        payload = PaymentPayload(
+            x402_version=2,
+            payload={"transaction": tx_b64},
+            accepted=requirements,
+            resource=ResourceInfo(
+                url="https://smartfetch-production-ea53.up.railway.app/fetch",
+                description="SmartFetch Web Reader",
+                mime_type="application/json",
+            ),
+        )
+
+        mock_signer = MagicMock()
+        mock_signer.get_addresses.return_value = [fee_payer_str]
+        mock_signer.verify_transaction.return_value = None
+        mock_signer.simulate_transaction.return_value = None
+
+        facilitator_scheme = ExactSvmFacilitatorScheme(signer=mock_signer)
+        verify_res = facilitator_scheme.verify(payload, requirements)
+        self.assertTrue(verify_res.is_valid, f"Expected valid SVM payload, got: {verify_res.invalid_reason}")
+        self.assertEqual(verify_res.payer, str(buyer_pubkey))
+
 
 
 if __name__ == "__main__":

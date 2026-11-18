@@ -1,21 +1,36 @@
 """Headless Chrome CDP test for SmartFetch Developer Playground (examples/playground/index.html)."""
 
 import asyncio
+from functools import partial
+import http.server
 import json
 import os
+from pathlib import Path
 import shutil
+import socketserver
 import subprocess
 import tempfile
+import threading
 import time
 import httpx
 import websockets
 
 CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-PLAYGROUND_URL = "http://127.0.0.1:3000/index.html"
+PLAYGROUND_DIR = Path(__file__).resolve().parent.parent / "examples" / "playground"
 CDP_PORT = 9444
 
 
+class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
+
 async def run_cdp_tests():
+    httpd = socketserver.TCPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(PLAYGROUND_DIR)))
+    srv_port = httpd.server_address[1]
+    srv_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    srv_thread.start()
+    PLAYGROUND_URL = f"http://127.0.0.1:{srv_port}/index.html"
     user_data_dir = tempfile.mkdtemp(prefix="chrome_playground_test_")
     proc = subprocess.Popen([
         CHROME_PATH,
@@ -142,11 +157,30 @@ async def run_cdp_tests():
             assert sol_config_display == "block", f"Expected solanaConfigGroup to be block, got: {sol_config_display}"
             print("[7c] Verified Solana radio switches button text and reveals Solana config block.")
 
-            # Test 1c: Verify browser Solana blockhash RPC fetch
-            print("[7d] Testing browser Solana blockhash RPC fetch...")
+            # Test 1c: Verify browser Solana blockhash RPC fetch & VersionedTransaction builder
+            print("[7d] Testing browser Solana blockhash RPC fetch & buildSolanaTransaction()...")
             blockhash = await eval_js("fetchRecentSolanaBlockhash()")
             assert blockhash and len(blockhash) > 20, f"Expected valid blockhash, got: {blockhash}"
             print(f"[7e] Successfully fetched live Solana blockhash from browser: {blockhash[:12]}...")
+
+            tx_b64 = await eval_js(f"""(() => {{
+                const kp = solanaWeb3.Keypair.generate();
+                const tx = buildSolanaTransaction("{blockhash}", kp.publicKey, {{
+                    scheme: "exact",
+                    network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+                    asset: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                    amount: "5000",
+                    payTo: "88hE4EB4yZwb4F2arPXcG7efwQyU5FDN26DuVpVKVk2W",
+                    extra: {{ feePayer: "BENrLoUbndxoNMUS5JXApGMtNykLjFXXixMtpDwDR9SP" }}
+                }});
+                tx.sign([kp]);
+                const raw = tx.serialize();
+                let bin = '';
+                for (let i = 0; i < raw.length; i++) bin += String.fromCharCode(raw[i]);
+                return btoa(bin);
+            }})()""")
+            assert tx_b64 and len(tx_b64) > 100, f"Expected base64 VersionedTransaction, got: {tx_b64}"
+            print(f"[7f] Successfully built & signed Solana VersionedTransaction in browser JS ({len(tx_b64)} base64 chars).")
 
             # Test 2: SSRF client-side defense check
             print("[8] Testing SSRF client-side defense...")
@@ -203,6 +237,8 @@ async def run_cdp_tests():
             print("\n*** ALL PLAYGROUND HEADLESS CHECKS PASSED CLEANLY! ***\n")
 
     finally:
+        httpd.shutdown()
+        httpd.server_close()
         proc.terminate()
         try:
             proc.wait(timeout=3)
