@@ -169,6 +169,77 @@ class TestV115OptInBehavior(unittest.TestCase):
                     self.assertEqual(res["leads"][0]["emails"], ["hello@example.com"])
                     self.assertTrue(res["leads"][0]["inspected"])
                     self.assertFalse(res["leads"][1]["inspected"])
+
+    def test_mcp_tools_call_enforces_per_tool_price_and_how_to_pay_and_llms_txt(self):
+        expected_amounts = {
+            "fetch_webpage": "5000",
+            "screenshot_webpage": "10000",
+            "batch_fetch_webpages": "15000",
+            "search_web": "10000",
+            "search_and_fetch": "20000",
+            "search_leads": "30000",
+            "search_x_posts": "8000",
+        }
+        tool_args = {
+            "fetch_webpage": {"url": "https://example.com"},
+            "screenshot_webpage": {"url": "https://example.com"},
+            "batch_fetch_webpages": {"urls": ["https://example.com"]},
+            "search_web": {"query": "x402"},
+            "search_and_fetch": {"query": "x402"},
+            "search_leads": {"query": "dentists austin"},
+            "search_x_posts": {"query": "x402"},
+        }
+        with patch.dict(os.environ, {"SERPER_API_KEY": "s", "EXA_API_KEY": "e", "TWITTERAPI_KEY": "t"}):
+            with patch("smartfetch.remote_browser.RemoteBrowserConfig.from_env", return_value=_fake_remote_cfg()):
+                app = create_app(payment_settings=_test_payment_settings(enabled=True))
+                with TestClient(app) as client:
+                    # 1. REST 402 includes how_to_pay alongside PAYMENT-REQUIRED
+                    r402 = client.post("/leads", json={"query": "dentists austin"})
+                    self.assertEqual(r402.status_code, 402)
+                    self.assertIn("payment-required", {k.lower(): v for k, v in r402.headers.items()})
+                    body402 = r402.json()
+                    self.assertIn("how_to_pay", body402)
+                    self.assertIn("option_1_x402", body402["how_to_pay"])
+                    self.assertIn("option_2_apify_standby_mcp", body402["how_to_pay"])
+                    self.assertIn("option_3_browser_playground", body402["how_to_pay"])
+
+                    # 2. MCP tools/call requires exact per-tool price and includes how_to_pay
+                    for tool_name, expected_amt in expected_amounts.items():
+                        mcp_resp = client.post(
+                            "/mcp",
+                            json={
+                                "jsonrpc": "2.0",
+                                "id": 10,
+                                "method": "tools/call",
+                                "params": {"name": tool_name, "arguments": tool_args[tool_name]},
+                            },
+                            headers={"Accept": "application/json, text/event-stream"},
+                        )
+                        self.assertEqual(mcp_resp.status_code, 200)
+                        res = mcp_resp.json()["result"]
+                        self.assertTrue(res["isError"], f"{tool_name} must not execute unpaid")
+                        sc = res["structuredContent"]
+                        self.assertEqual(sc["x402Version"], 2)
+                        self.assertIn("how_to_pay", sc)
+                        amounts = {a["amount"] for a in sc["accepts"]}
+                        self.assertEqual(amounts, {expected_amt})
+
+                    # 3. GET /llms.txt documents all 9 routes & How to Pay
+                    llms = client.get("/llms.txt").text
+                    for route in (
+                        "/fetch",
+                        "/screenshot",
+                        "/inspect",
+                        "/batch-fetch",
+                        "/map",
+                        "/search",
+                        "/search-and-fetch",
+                        "/leads",
+                        "/x-search",
+                    ):
+                        self.assertIn(route, llms)
+                    self.assertIn("How to Pay", llms)
+                    self.assertIn("smartfetch-dev--smartfetch.apify.actor/mcp", llms)
                     self.assertEqual(res["leads"][1]["business_name"], "Clinic B")
 
     def test_x_search_hard_caps_20_and_preserves_cursor(self):
@@ -373,6 +444,77 @@ class TestV115OptInBehavior(unittest.TestCase):
                     self.assertEqual(res["leads"][1]["business_name"], "No Site Pin")
                     self.assertEqual(res["leads"][1]["phones"], ["512-555-0002"])
                     self.assertFalse(res["leads"][1]["inspected"])
+
+    def test_mcp_tools_call_enforces_per_tool_price_and_how_to_pay_and_llms_txt(self):
+        expected_amounts = {
+            "fetch_webpage": "5000",
+            "screenshot_webpage": "10000",
+            "batch_fetch_webpages": "15000",
+            "search_web": "10000",
+            "search_and_fetch": "20000",
+            "search_leads": "30000",
+            "search_x_posts": "8000",
+        }
+        tool_args = {
+            "fetch_webpage": {"url": "https://example.com"},
+            "screenshot_webpage": {"url": "https://example.com"},
+            "batch_fetch_webpages": {"urls": ["https://example.com"]},
+            "search_web": {"query": "x402"},
+            "search_and_fetch": {"query": "x402"},
+            "search_leads": {"query": "dentists austin"},
+            "search_x_posts": {"query": "x402"},
+        }
+        with patch.dict(os.environ, {"SERPER_API_KEY": "s", "EXA_API_KEY": "e", "TWITTERAPI_KEY": "t"}):
+            with patch("smartfetch.remote_browser.RemoteBrowserConfig.from_env", return_value=_fake_remote_cfg()):
+                app = create_app(payment_settings=_test_payment_settings(enabled=True))
+                with TestClient(app) as client:
+                    # 1. REST 402 includes how_to_pay alongside PAYMENT-REQUIRED
+                    r402 = client.post("/leads", json={"query": "dentists austin"})
+                    self.assertEqual(r402.status_code, 402)
+                    self.assertIn("payment-required", {k.lower(): v for k, v in r402.headers.items()})
+                    body402 = r402.json()
+                    self.assertIn("how_to_pay", body402)
+                    self.assertIn("option_1_x402", body402["how_to_pay"])
+                    self.assertIn("option_2_apify_standby_mcp", body402["how_to_pay"])
+                    self.assertIn("option_3_browser_playground", body402["how_to_pay"])
+
+                    # 2. MCP tools/call requires exact per-tool price and includes how_to_pay
+                    for tool_name, expected_amt in expected_amounts.items():
+                        mcp_resp = client.post(
+                            "/mcp",
+                            json={
+                                "jsonrpc": "2.0",
+                                "id": 10,
+                                "method": "tools/call",
+                                "params": {"name": tool_name, "arguments": tool_args[tool_name]},
+                            },
+                            headers={"Accept": "application/json, text/event-stream"},
+                        )
+                        self.assertEqual(mcp_resp.status_code, 200)
+                        res = mcp_resp.json()["result"]
+                        self.assertTrue(res["isError"], f"{tool_name} must not execute unpaid")
+                        sc = res["structuredContent"]
+                        self.assertEqual(sc["x402Version"], 2)
+                        self.assertIn("how_to_pay", sc)
+                        amounts = {a["amount"] for a in sc["accepts"]}
+                        self.assertEqual(amounts, {expected_amt})
+
+                    # 3. GET /llms.txt documents all 9 routes & How to Pay
+                    llms = client.get("/llms.txt").text
+                    for route in (
+                        "/fetch",
+                        "/screenshot",
+                        "/inspect",
+                        "/batch-fetch",
+                        "/map",
+                        "/search",
+                        "/search-and-fetch",
+                        "/leads",
+                        "/x-search",
+                    ):
+                        self.assertIn(route, llms)
+                    self.assertIn("How to Pay", llms)
+                    self.assertIn("smartfetch-dev--smartfetch.apify.actor/mcp", llms)
 
 
 if __name__ == "__main__":

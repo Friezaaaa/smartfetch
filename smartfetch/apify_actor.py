@@ -567,6 +567,20 @@ async def execute_action(
             if actor is not None:
                 for row in rows:
                     await actor.push_data(row)
+                set_value_fn = getattr(actor, "set_value", None)
+                if callable(set_value_fn) and rows:
+                    import csv
+                    import inspect
+                    import io
+
+                    buf = io.StringIO()
+                    fieldnames = list(rows[0].keys())
+                    writer = csv.DictWriter(buf, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(rows)
+                    maybe_coro = set_value_fn("LEADS.csv", buf.getvalue(), content_type="text/csv")
+                    if inspect.isawaitable(maybe_coro):
+                        await maybe_coro
             if rows:
                 await _charge_event(actor, EVENT_SITE_INSPECTED, count=len(rows))
             return {
@@ -838,13 +852,46 @@ def create_standby_app(
             await _charge_event(_resolve_actor(), EVENT_PAGE_FETCHED, count=1)
         return res
 
-    for tool_name, tool_desc, tool_fn in (
+    async def search_leads(
+        query: str,
+        source: str = "maps",
+        max_leads: int = 5,
+        deep: bool = True,
+        no_cache: bool = False,
+    ) -> dict[str, Any]:
+        from .leads import search_leads_query
+
+        loop = asyncio.get_running_loop()
+        res = await loop.run_in_executor(
+            None,
+            lambda: search_leads_query(
+                query,
+                source=source,
+                max_leads=max_leads,
+                deep=deep,
+                no_cache=no_cache,
+            ),
+        )
+        res.setdefault("request_id", secrets.token_hex(8))
+        res.setdefault("service_version", SERVICE_VERSION)
+        leads_count = len(res.get("leads") or [])
+        if res.get("success") and leads_count > 0:
+            await _charge_event(_resolve_actor(), EVENT_SITE_INSPECTED, count=leads_count)
+        return res
+
+    standby_tools: list[tuple[str, str, Any]] = [
         ("fetch_webpage", FETCH_DESCRIPTION, fetch_webpage),
         ("screenshot_webpage", SCREENSHOT_DESCRIPTION, screenshot_webpage),
         ("inspect_webpage", INSPECT_DESCRIPTION, inspect_webpage),
         ("batch_fetch_webpages", BATCH_FETCH_DESCRIPTION, batch_fetch_webpages),
         ("map_website", MAP_DESCRIPTION, map_website),
-    ):
+    ]
+    from .leads import leads_configured
+    from .bazaar import LEADS_DESCRIPTION
+    if leads_configured():
+        standby_tools.append(("search_leads", LEADS_DESCRIPTION, search_leads))
+
+    for tool_name, tool_desc, tool_fn in standby_tools:
         mcp.tool(name=tool_name, description=tool_desc, structured_output=False)(_wrap_mcp_tool(tool_fn))
 
     http_app = mcp.streamable_http_app()

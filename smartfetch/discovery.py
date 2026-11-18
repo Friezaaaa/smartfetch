@@ -1644,11 +1644,18 @@ def llms_text(
 ):
     """Return a compact llms.txt service summary."""
     payment = _payment_details(settings, payment_requirement)
+    solana_enabled = bool(settings and settings.solana_pay_to and settings.solana_network)
     solana_note = (
         f" (also accepts Solana USDC on {settings.solana_network} to {settings.solana_pay_to})"
-        if settings and settings.solana_pay_to and settings.solana_network
+        if solana_enabled
         else ""
     )
+    solana_pay_line = (
+        f" or Solana (`{settings.solana_network}`)"
+        if solana_enabled
+        else ""
+    )
+    playground_wallets = "MetaMask (Base) or Phantom (Solana)" if solana_enabled else "MetaMask (Base)"
     v111_section = _v111_llms_text(_v111_requirements(v111_accepts))
     v111_price_note = (
         " V1.11 variants use their individually listed $0.05, $0.10, and "
@@ -1669,17 +1676,20 @@ Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['pric
 - [OpenAPI 3.1]({urls['openapi']})
 - [Metadata]({urls['meta']})
 - [Remote MCP Streamable HTTP]({urls['mcp']})
-- [Paid HTTP retrieval]({urls['fetch']}): POST only ($0.005)
-- [Paid HTTP screenshot]({urls.get('screenshot', urls['base'] + '/screenshot')}): POST only ($0.01)
-- [Paid HTTP site intelligence]({urls.get('inspect', urls['base'] + '/inspect')}): POST only ($0.005)
-- [Paid HTTP batch retrieval]({urls.get('batch_fetch', urls['base'] + '/batch-fetch')}): POST only ($0.015)
-- [Paid HTTP website URL mapper]({urls.get('map', urls['base'] + '/map')}): POST only ($0.005)
-{chr(10).join(filter(None, [
-    f"- [Paid HTTP web search]({urls['search']}): POST only ($0.01)" if "search" in urls else "",
-    f"- [Paid HTTP search & fetch]({urls['search_and_fetch']}): POST only ($0.02)" if "search_and_fetch" in urls else "",
-    f"- [Paid HTTP B2B enriched leads]({urls['leads']}): POST only ($0.03)" if "leads" in urls else "",
-    f"- [Paid HTTP X/Twitter search]({urls['x_search']}): POST only ($0.008)" if "x_search" in urls else "",
-]))}
+- [Paid HTTP retrieval]({urls['fetch']}): POST only ($0.005 USDC) — Stealth web/PDF/Markdown fetch: `{{"url": "https://example.com", "format": "markdown"}}`
+- [Paid HTTP screenshot]({urls.get('screenshot', urls['base'] + '/screenshot')}): POST only ($0.010 USDC) — Desktop/mobile/full-page screenshot: `{{"url": "https://example.com", "full_page": true}}`
+- [Paid HTTP site intelligence]({urls.get('inspect', urls['base'] + '/inspect')}): POST only ($0.005 USDC) — Deep site & B2B intelligence (emails, phones, socials, 30+ tech stack signatures, DNS MX/SPF/DMARC, RDAP domain age): `{{"url": "https://example.com", "deep": true}}`
+- [Paid HTTP batch retrieval]({urls.get('batch_fetch', urls['base'] + '/batch-fetch')}): POST only ($0.015 USDC) — Concurrent batch fetch 1–5 URLs: `{{"urls": ["https://example.com"]}}`
+- [Paid HTTP website URL mapper]({urls.get('map', urls['base'] + '/map')}): POST only ($0.005 USDC) — Sitemap / robots.txt / internal URL discovery up to 500 URLs: `{{"url": "https://example.com"}}`
+- [Paid HTTP web search]({urls.get('search', urls['base'] + '/search')}): POST only ($0.010 USDC) — Real-time web, news & Google Places search via Serper/Exa: `{{"query": "AI agents", "search_type": "web", "num_results": 5}}`
+- [Paid HTTP search & fetch]({urls.get('search_and_fetch', urls['base'] + '/search-and-fetch')}): POST only ($0.020 USDC) — Search the web and scrape clean Markdown from top 1–5 results in parallel: `{{"query": "x402 protocol specification", "num_results": 3}}`
+- [Paid HTTP B2B enriched leads]({urls.get('leads', urls['base'] + '/leads')}): POST only ($0.030 USDC) — B2B Lead Generation (Google Maps Places / Web + concurrent Deep /inspect for emails, phones, socials, ratings, address, DNS mail & tech stack): `{{"query": "dentists in Austin TX", "source": "places", "max_leads": 5}}`
+- [Paid HTTP X/Twitter search]({urls.get('x_search', urls['base'] + '/x-search')}): POST only ($0.008 USDC) — Live X/Twitter post search (<= 20 tweets per call) with cursor pagination: `{{"query": "x402", "query_type": "Latest", "max_tweets": 10}}`
+
+## How to Pay
+- **x402 Autonomous Payment (USDC)**: Supported on Base Mainnet (`{payment['network']}`){solana_pay_line}. Send an unpaid POST request, decode `PAYMENT-REQUIRED`, sign, and retry with `PAYMENT-SIGNATURE`. Zero charge on `502` upstream errors (SmartFetch settles only after successful delivery).
+- **Apify Standby MCP (Credit Card / Apify Token)**: Connect MCP clients to `https://smartfetch-dev--smartfetch.apify.actor/mcp` with `Authorization: Bearer <APIFY_TOKEN>`.
+- **Browser Playground**: Test interactively at {PLAYGROUND_URL} with {playground_wallets}.
 
 ## Agent Onboarding & Payment Guide
 - [Comprehensive Agent Payment Integration Guide]({GITHUB_URL}/blob/main/docs/agent-payment-guide.md)
@@ -1700,12 +1710,10 @@ Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['pric
 - inspect_webpage: structured site intelligence extracting metadata, OpenGraph, JSON-LD, contacts, tech stack, and security headers ($0.005)
 - batch_fetch_webpages: parallel batch retrieval of up to 5 URLs concurrently with fair settlement and VPS protection ($0.015)
 - map_website: website URL mapper discovering internal URLs from robots.txt, XML sitemaps, and HTML links ($0.005)
-{chr(10).join(filter(None, [
-    "- search_web: live web, news, and places search ($0.01)" if search_configured() else "",
-    "- search_and_fetch: web search + parallel Markdown fetch for top results ($0.02)" if search_configured() else "",
-    "- search_leads: B2B enriched leads from Google Maps/Web + Deep /inspect ($0.03)" if leads_configured() else "",
-    "- search_x_posts: live X/Twitter post search with pagination cursor ($0.008)" if x_search_configured() else "",
-]))}
+- search_web: live web, news, and places search ($0.010)
+- search_and_fetch: web search + parallel Markdown fetch for top results ($0.020)
+- search_leads: B2B enriched leads from Google Maps/Places/Web + Deep /inspect ($0.030)
+- search_x_posts: live X/Twitter post search with pagination cursor ($0.008)
 
 ## Paying MCP client examples
 - [Python MCP example]({PYTHON_EXAMPLE_URL})

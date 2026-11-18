@@ -81,7 +81,7 @@ from .inspect import inspect_webpage_url
 from .leads import leads_configured, search_leads_query
 from .mapper import map_website_urls
 from .mcp_logging import configure_mcp_sdk_logging
-from .payments import X402Settings, create_x402_resource_server
+from .payments import HOW_TO_PAY_GUIDE, X402Settings, create_x402_resource_server
 from .remote_browser import RemoteBrowserConfig
 from .search_tools import search_and_fetch_query, search_configured, search_web_query
 from .social import search_x_posts_query, x_search_configured
@@ -660,7 +660,25 @@ def create_smartfetch_mcp(
             extensions=extension,
         )
 
-        return payment_wrapper(handler)
+        wrapped = payment_wrapper(handler)
+
+        @wraps(handler)
+        async def payment_with_guide(**kwargs):
+            result = await wrapped(**kwargs)
+            if (
+                getattr(result, "isError", False)
+                and isinstance(getattr(result, "structuredContent", None), dict)
+                and "accepts" in result.structuredContent
+                and "how_to_pay" not in result.structuredContent
+            ):
+                enriched = dict(result.structuredContent)
+                enriched["how_to_pay"] = HOW_TO_PAY_GUIDE
+                result.structuredContent = enriched
+                if result.content and hasattr(result.content[0], "text"):
+                    result.content[0].text = json.dumps(enriched, ensure_ascii=False)
+            return result
+
+        return payment_with_guide
 
     tools = (
         (

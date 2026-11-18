@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
+import json
 import os
 import re
 from typing import Mapping, Optional
@@ -14,6 +15,26 @@ SOLANA_DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"
 SUPPORTED_NETWORKS = frozenset((BASE_SEPOLIA, BASE_MAINNET))
 SUPPORTED_SOLANA_NETWORKS = frozenset((SOLANA_MAINNET, SOLANA_DEVNET))
 DEFAULT_PRICE = "$0.005"
+HOW_TO_PAY_GUIDE = {
+    "option_1_x402": {
+        "description": (
+            "Autonomous x402 v2 payment: read the PAYMENT-REQUIRED header, sign USDC "
+            "on Base (eip155:8453) or Solana (solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp), "
+            "and retry with PAYMENT-SIGNATURE."
+        ),
+        "discovery": "https://smartfetch-production-ea53.up.railway.app/.well-known/x402.json",
+        "docs": "https://smartfetch-production-ea53.up.railway.app/llms.txt",
+    },
+    "option_2_apify_standby_mcp": {
+        "description": "Pay via credit card or Apify credits using Standby MCP.",
+        "mcp_url": "https://smartfetch-dev--smartfetch.apify.actor/mcp",
+        "auth_header": "Authorization: Bearer <APIFY_TOKEN>",
+    },
+    "option_3_browser_playground": {
+        "description": "Interactive browser tester with MetaMask (Base) or Phantom (Solana).",
+        "url": "https://smartfetch-playground.pages.dev",
+    },
+}
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"", "0", "false", "no", "off"}
 _EVM_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
@@ -332,6 +353,35 @@ def install_x402(app, settings: X402Settings, *, additional_routes=None) -> bool
             sync_facilitator_on_start=False,
         )
         app.middleware("http")(middleware)
+
+        async def how_to_pay_402_middleware(request, call_next):
+            response = await call_next(request)
+            if response.status_code != 402:
+                return response
+            body = getattr(response, "body", None)
+            if body is None:
+                chunks = [chunk async for chunk in response.body_iterator]
+                body = b"".join(chunks)
+            stripped = body.strip() if isinstance(body, (bytes, bytearray)) else b""
+            if stripped in (b"", b"{}"):
+                from fastapi.responses import JSONResponse
+
+                headers = {
+                    k: v
+                    for k, v in response.headers.items()
+                    if k.lower() not in ("content-length", "content-type")
+                }
+                return JSONResponse(
+                    status_code=402,
+                    content={
+                        "error": "payment_required",
+                        "how_to_pay": HOW_TO_PAY_GUIDE,
+                    },
+                    headers=headers,
+                )
+            return response
+
+        app.middleware("http")(how_to_pay_402_middleware)
     except Exception:
         initialization_failed = True
 

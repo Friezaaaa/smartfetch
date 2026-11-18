@@ -1,9 +1,9 @@
 {
   "actorSpecification": 1,
   "name": "smartfetch",
-  "title": "SmartFetch — Web Reader, PDFs, Screenshots & Site Intel",
-  "description": "Convert webpages & PDFs to clean Markdown (fetch), capture full-page screenshots (screenshot), inspect site tech stack/anti-bot/links (inspect), batch-fetch URLs (batch_fetch), or connect via Standby MCP Server (/mcp) with HTTP→TLS→Browser fallback.",
-  "version": "1.14",
+  "title": "SmartFetch — Google Maps B2B Leads, Site Intel, Web Reader & MCP",
+  "description": "Search Google Maps & Web for enriched B2B leads with emails, phones, socials, DNS mail & tech stack (search_leads), bulk-enrich up to 50 domains (bulk_inspect), convert webpages/PDFs to Markdown (fetch), capture full-page screenshots, map URLs, or connect via Standby MCP (/mcp).",
+  "version": "1.15",
   "buildTag": "latest",
   "usesStandbyMode": true,
   "webServerMcpPath": "/mcp",
