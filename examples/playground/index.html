@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SmartFetch Developer Playground &amp; x402 Tester</title>
+  <link rel="icon" href="https://smartfetch-production-ea53.up.railway.app/favicon.svg">
   <!-- Solana Web3 SDK via CDN with jsdelivr fallback -->
   <script src="https://cdn.jsdelivr.net/npm/@solana/web3.js@1.95.8/lib/index.iife.min.js"></script>
   <script>
@@ -217,6 +218,14 @@
               <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #fff;">
                 <input type="radio" name="paymentChain" value="solana" onchange="onChainChange()"> Solana Mainnet (SVM USDC)
               </label>
+            </div>
+          </div>
+
+          <div id="walletStatusBar" style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; background: rgba(15, 23, 42, 0.65); border: 1px solid var(--card-border); border-radius: 8px; padding: 10px 12px; margin-bottom: 16px;">
+            <span id="walletStatusPill" class="status-pill" style="background: rgba(148, 163, 184, 0.16); color: var(--text-muted); font-family: monospace;">Not connected</span>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button type="button" id="walletConnectBtn" class="btn-secondary" style="padding: 6px 12px; font-size: 0.82rem; width: auto;" onclick="connectActiveWallet()">Connect Wallet</button>
+              <button type="button" id="walletDisconnectBtn" class="btn-secondary" style="display: none; padding: 6px 12px; font-size: 0.82rem; width: auto;" onclick="disconnectActiveWallet()">Disconnect</button>
             </div>
           </div>
 
@@ -500,6 +509,10 @@ https://quotes.toscrape.com/js/</textarea>
 
   let buyerAccount = null;
   let solanaBuyerPubkey = null;
+  let connectedEvmAddress = null;
+  let connectedSolanaWallet = null;
+  let connectedSolanaAccount = null;
+  let connectedSolanaSigner = null;
   let cached402Challenge = null;
   let currentScreenshotBase64 = null;
   let currentScreenshotMime = null;
@@ -614,17 +627,149 @@ https://quotes.toscrape.com/js/</textarea>
     return isNaN(val) ? 8000 : Math.max(1000, Math.min(20000, val));
   }
 
-  function updatePaidBtnText() {
-    const mode = getOperationMode();
+  function isActiveChainConnected() {
+    const chain = getPaymentChain();
+    if (chain === 'solana') {
+      return !!(connectedSolanaSigner && (connectedSolanaSigner.pubkey || solanaBuyerPubkey));
+    }
+    return !!connectedEvmAddress;
+  }
+
+  function renderWalletStatusBar() {
     const chain = getPaymentChain();
     const isSolana = chain === 'solana';
-    const prefix = isSolana ? 'Connect Solana Wallet &amp; ' : 'Connect Wallet &amp; ';
+    const pill = document.getElementById('walletStatusPill');
+    const connectBtn = document.getElementById('walletConnectBtn');
+    const disconnectBtn = document.getElementById('walletDisconnectBtn');
+    const walletAddrEl = document.getElementById('walletAddress');
+    const chainBadge = document.getElementById('chainBadge');
+
+    if (isSolana && connectedSolanaSigner && connectedSolanaSigner.pubkey) {
+      const addr = connectedSolanaSigner.pubkey.toBase58();
+      const shortAddr = `${addr.slice(0, 4)}...${addr.slice(-4)}`;
+      if (pill) {
+        pill.textContent = `● Connected: ${shortAddr} (Solana)`;
+        pill.className = 'status-pill status-200';
+        pill.style.background = '';
+        pill.style.color = '';
+      }
+      if (connectBtn) connectBtn.style.display = 'none';
+      if (disconnectBtn) disconnectBtn.style.display = 'inline-block';
+      if (walletAddrEl) walletAddrEl.textContent = shortAddr;
+      if (chainBadge) {
+        chainBadge.style.display = 'inline-block';
+        chainBadge.textContent = 'Solana Mainnet';
+        chainBadge.className = 'badge badge-solana';
+      }
+    } else if (!isSolana && connectedEvmAddress) {
+      const shortAddr = `${connectedEvmAddress.slice(0, 6)}...${connectedEvmAddress.slice(-4)}`;
+      if (pill) {
+        pill.textContent = `● Connected: ${shortAddr} (Base)`;
+        pill.className = 'status-pill status-200';
+        pill.style.background = '';
+        pill.style.color = '';
+      }
+      if (connectBtn) connectBtn.style.display = 'none';
+      if (disconnectBtn) disconnectBtn.style.display = 'inline-block';
+      if (walletAddrEl) walletAddrEl.textContent = shortAddr;
+      if (chainBadge) {
+        chainBadge.style.display = 'inline-block';
+        chainBadge.textContent = 'Base Mainnet';
+        chainBadge.className = 'badge';
+      }
+    } else {
+      if (pill) {
+        pill.textContent = 'Not connected';
+        pill.className = 'status-pill';
+        pill.style.background = 'rgba(148, 163, 184, 0.16)';
+        pill.style.color = 'var(--text-muted)';
+      }
+      if (connectBtn) connectBtn.style.display = 'inline-block';
+      if (disconnectBtn) disconnectBtn.style.display = 'none';
+      if (walletAddrEl) walletAddrEl.textContent = 'No wallet connected';
+      if (chainBadge) {
+        chainBadge.style.display = 'inline-block';
+        chainBadge.textContent = isSolana ? 'Solana Mainnet' : 'Base Mainnet';
+        chainBadge.className = isSolana ? 'badge badge-solana' : 'badge';
+      }
+    }
+  }
+
+  function updateActionButtonLabel() {
+    const mode = getOperationMode();
+    const prefix = isActiveChainConnected() ? 'Sign &amp; ' : 'Connect Wallet &amp; ';
     let action = 'Fetch ($0.005 USDC)';
     if (mode === 'screenshot') action = 'Screenshot ($0.01 USDC)';
     else if (mode === 'inspect') action = 'Inspect ($0.005 USDC)';
     else if (mode === 'batch_fetch') action = 'Batch Fetch ($0.015 USDC)';
     else if (mode === 'map') action = 'Map Website ($0.005 USDC)';
-    document.getElementById('paidBtn').innerHTML = `&#9889; ${prefix}${action}`;
+    const paidBtn = document.getElementById('paidBtn');
+    if (paidBtn) {
+      paidBtn.innerHTML = `&#9889; ${prefix}${action}`;
+      paidBtn.disabled = false;
+    }
+  }
+
+  function updatePaidBtnText() {
+    updateActionButtonLabel();
+  }
+
+  async function connectActiveWallet() {
+    const chain = getPaymentChain();
+    try {
+      if (chain === 'solana') {
+        showStatus("Connecting to Solana Wallet...", "info");
+        const signer = await getConnectedSolanaSigner();
+        connectedSolanaSigner = signer;
+        connectedSolanaWallet = signer.wallet || null;
+        connectedSolanaAccount = signer.account || signer.pubkey.toBase58();
+        solanaBuyerPubkey = signer.pubkey;
+        renderWalletStatusBar();
+        updateActionButtonLabel();
+        showStatus(`Connected Solana wallet (${signer.pubkey.toBase58().slice(0, 4)}...${signer.pubkey.toBase58().slice(-4)}). Click the action button to sign & run.`, "ok");
+      } else {
+        if (!window.ethereum) {
+          showStatus("No Web3 EVM wallet detected! Please install MetaMask or Coinbase Wallet to test Base Mainnet payments.", "err");
+          return;
+        }
+        showStatus("Connecting to MetaMask / Web3 Wallet...", "info");
+        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+        if (!accounts || !accounts.length) {
+          throw new Error("No EVM account returned.");
+        }
+        connectedEvmAddress = accounts[0];
+        buyerAccount = connectedEvmAddress;
+        renderWalletStatusBar();
+        updateActionButtonLabel();
+        showStatus(`Connected Base wallet (${connectedEvmAddress.slice(0, 6)}...${connectedEvmAddress.slice(-4)}). Click the action button to sign & run.`, "ok");
+      }
+    } catch (err) {
+      console.error("Wallet connect error:", err);
+      showStatus(`Wallet connection failed: ${err.message || err}`, "err");
+    }
+  }
+
+  async function disconnectActiveWallet() {
+    const chain = getPaymentChain();
+    if (chain === 'solana') {
+      try {
+        if (connectedSolanaWallet && connectedSolanaWallet.features && connectedSolanaWallet.features['standard:disconnect']) {
+          await connectedSolanaWallet.features['standard:disconnect'].disconnect();
+        } else if (window.phantom && window.phantom.solana && typeof window.phantom.solana.disconnect === 'function') {
+          await window.phantom.solana.disconnect();
+        }
+      } catch (e) {}
+      connectedSolanaWallet = null;
+      connectedSolanaAccount = null;
+      connectedSolanaSigner = null;
+      solanaBuyerPubkey = null;
+    } else {
+      connectedEvmAddress = null;
+      buyerAccount = null;
+    }
+    renderWalletStatusBar();
+    updateActionButtonLabel();
+    showStatus("Wallet disconnected.", "info");
   }
 
   function onModeChange() {
@@ -638,7 +783,8 @@ https://quotes.toscrape.com/js/</textarea>
     if (mapOpts) mapOpts.style.display = mode === 'map' ? 'block' : 'none';
     const includeHtmlRow = document.getElementById('includeHtmlRow');
     if (includeHtmlRow) includeHtmlRow.style.display = mode === 'fetch' ? 'flex' : 'none';
-    updatePaidBtnText();
+    renderWalletStatusBar();
+    updateActionButtonLabel();
     cached402Challenge = null;
     updateSnippets();
   }
@@ -648,13 +794,8 @@ https://quotes.toscrape.com/js/</textarea>
     const isSolana = chain === 'solana';
     const configGroup = document.getElementById('solanaConfigGroup');
     if (configGroup) configGroup.style.display = isSolana ? 'block' : 'none';
-    const chainBadge = document.getElementById('chainBadge');
-    if (chainBadge) {
-      chainBadge.style.display = 'inline-block';
-      chainBadge.textContent = isSolana ? 'Solana Mainnet' : 'Base Mainnet';
-      chainBadge.className = isSolana ? 'badge badge-solana' : 'badge';
-    }
-    updatePaidBtnText();
+    renderWalletStatusBar();
+    updateActionButtonLabel();
     updateSnippets();
   }
 
@@ -1082,6 +1223,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
       return {
         type: 'standard',
         name: wallet.name,
+        wallet: wallet,
         account: account,
         pubkey: pubkey,
         signTransaction: async (tx) => {
@@ -1302,17 +1444,19 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     btn.disabled = true;
 
     try {
-      showStatus("Connecting to Solana Wallet...", "info");
-      const signer = await getConnectedSolanaSigner();
-      solanaBuyerPubkey = signer.pubkey;
-      const buyerStr = solanaBuyerPubkey.toBase58();
-      document.getElementById('walletAddress').textContent = buyerStr.slice(0, 4) + '...' + buyerStr.slice(-4);
-      const chainBadge = document.getElementById('chainBadge');
-      if (chainBadge) {
-        chainBadge.style.display = 'inline-block';
-        chainBadge.textContent = 'Solana Mainnet';
-        chainBadge.className = 'badge badge-solana';
+      let signer = connectedSolanaSigner;
+      if (!signer) {
+        showStatus("Connecting to Solana Wallet...", "info");
+        signer = await getConnectedSolanaSigner();
+        connectedSolanaSigner = signer;
+        connectedSolanaWallet = signer.wallet || null;
+        connectedSolanaAccount = signer.account || signer.pubkey.toBase58();
+      } else {
+        showStatus("Using connected Solana Wallet...", "info");
       }
+      solanaBuyerPubkey = signer.pubkey;
+      renderWalletStatusBar();
+      updateActionButtonLabel();
 
       // 1. Fetch challenge
       let endpoint = `${gateway}/fetch`;
@@ -1515,16 +1659,16 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     btn.disabled = true;
 
     try {
-      showStatus("Connecting to MetaMask / Web3 Wallet...", "info");
-      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-      buyerAccount = accounts[0];
-      document.getElementById('walletAddress').textContent = buyerAccount.slice(0, 6) + '...' + buyerAccount.slice(-4);
-      const chainBadge = document.getElementById('chainBadge');
-      if (chainBadge) {
-        chainBadge.style.display = 'inline-block';
-        chainBadge.textContent = 'Base Mainnet';
-        chainBadge.className = 'badge';
+      if (!connectedEvmAddress) {
+        showStatus("Connecting to MetaMask / Web3 Wallet...", "info");
+        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+        connectedEvmAddress = accounts[0];
+      } else {
+        showStatus("Using connected EVM Wallet...", "info");
       }
+      buyerAccount = connectedEvmAddress;
+      renderWalletStatusBar();
+      updateActionButtonLabel();
 
       // Verify Base Mainnet
       const chainIdHex = await window.ethereum.request({ method: 'eth_chainId' });
@@ -1593,7 +1737,9 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
       const nonceArr = new Uint8Array(32);
       crypto.getRandomValues(nonceArr);
       const nonce = "0x" + Array.from(nonceArr).map(b => b.toString(16).padStart(2, '0')).join('');
-      const validBefore = String(Math.floor(Date.now() / 1000) + 7200);
+      const nowSec = Math.floor(Date.now() / 1000);
+      const validAfter = String(nowSec - 600);
+      const validBefore = String(nowSec + (Number(accepted.maxTimeoutSeconds) || 300));
 
       const typedData = {
         types: {
@@ -1623,7 +1769,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
           from: buyerAccount,
           to: accepted.payTo,
           value: accepted.amount,
-          validAfter: "0",
+          validAfter: validAfter,
           validBefore: validBefore,
           nonce: nonce
         }
@@ -1644,7 +1790,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
             from: buyerAccount,
             to: accepted.payTo,
             value: accepted.amount,
-            validAfter: "0",
+            validAfter: validAfter,
             validBefore: validBefore,
             nonce: nonce
           },
@@ -2194,9 +2340,37 @@ JSON.stringify({
   }
 
   // Initial setup
+  async function initEvmWalletState() {
+    if (!window.ethereum || typeof window.ethereum.request !== 'function') return;
+    try {
+      const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+      if (accounts && accounts.length > 0) {
+        connectedEvmAddress = accounts[0];
+        buyerAccount = connectedEvmAddress;
+        renderWalletStatusBar();
+        updateActionButtonLabel();
+      }
+    } catch (e) {}
+
+    if (typeof window.ethereum.on === 'function') {
+      window.ethereum.on('accountsChanged', (accounts) => {
+        connectedEvmAddress = (accounts && accounts.length > 0) ? accounts[0] : null;
+        buyerAccount = connectedEvmAddress;
+        renderWalletStatusBar();
+        updateActionButtonLabel();
+      });
+      window.ethereum.on('chainChanged', () => {
+        renderWalletStatusBar();
+        updateActionButtonLabel();
+      });
+    }
+  }
+
   refreshSolanaWalletOptions();
-  updatePaidBtnText();
+  renderWalletStatusBar();
+  updateActionButtonLabel();
   updateSnippets();
+  initEvmWalletState();
 </script>
 </body>
 </html>

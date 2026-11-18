@@ -153,9 +153,37 @@ async def run_cdp_tests():
             await asyncio.sleep(0.3)
             paid_text = await eval_js("document.getElementById('paidBtn').innerHTML")
             sol_config_display = await eval_js("document.getElementById('solanaConfigGroup').style.display")
-            assert "Connect Solana Wallet" in paid_text, f"Expected Solana button text, got: {paid_text}"
+            chain_badge = await eval_js("document.getElementById('chainBadge').textContent")
+            assert "Connect Wallet" in paid_text, f"Expected Connect Wallet button text, got: {paid_text}"
+            assert chain_badge == "Solana Mainnet", f"Expected Solana Mainnet badge, got: {chain_badge}"
             assert sol_config_display == "block", f"Expected solanaConfigGroup to be block, got: {sol_config_display}"
-            print("[7c] Verified Solana radio switches button text and reveals Solana config block.")
+            print("[7c] Verified Solana radio updates chain badge, button text, and reveals Solana config block.")
+
+            # Test 1b2: Persistent Wallet Status Bar & Sign button across mode switches
+            print("[7c2] Testing persistent wallet state across operation modes...")
+            await eval_js("""(() => {
+                const kp = solanaWeb3.Keypair.generate();
+                connectedSolanaSigner = { type: 'test', name: 'TestPhantom', pubkey: kp.publicKey, signTransaction: async (t) => t };
+                solanaBuyerPubkey = kp.publicKey;
+                renderWalletStatusBar();
+                updateActionButtonLabel();
+            })()""")
+            status_pill = await eval_js("document.getElementById('walletStatusPill').textContent")
+            paid_sign_text = await eval_js("document.getElementById('paidBtn').innerHTML")
+            assert "Connected:" in status_pill and "(Solana)" in status_pill, f"Unexpected status pill: {status_pill}"
+            assert "Sign &amp;" in paid_sign_text, f"Expected Sign & button text, got: {paid_sign_text}"
+            await eval_js("""(() => {
+                const mapRadio = document.querySelector('input[name="operationMode"][value="map"]');
+                mapRadio.checked = true;
+                mapRadio.dispatchEvent(new Event('change'));
+            })()""")
+            await asyncio.sleep(0.2)
+            map_sign_text = await eval_js("document.getElementById('paidBtn').innerHTML")
+            status_pill_after = await eval_js("document.getElementById('walletStatusPill').textContent")
+            assert "Sign &amp; Map Website ($0.005 USDC)" in map_sign_text, f"Expected Sign & Map Website after mode switch, got: {map_sign_text}"
+            assert "Connected:" in status_pill_after, f"Wallet connection lost on mode switch: {status_pill_after}"
+            await eval_js("disconnectActiveWallet(); const fetchRadio = document.querySelector('input[name=\"operationMode\"][value=\"fetch\"]'); fetchRadio.checked = true; fetchRadio.dispatchEvent(new Event('change'));")
+            print("[7c3] Verified persistent wallet status bar & Sign button across mode switches.")
 
             # Test 1c: Verify browser Solana blockhash RPC fetch & VersionedTransaction builder
             print("[7d] Testing browser Solana blockhash RPC fetch & buildSolanaTransaction()...")
