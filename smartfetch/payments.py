@@ -328,21 +328,27 @@ def install_x402(app, settings: X402Settings, *, additional_routes=None) -> bool
             register_bazaar=True,
         )
         fetch_options = build_payment_options(settings, settings.price)
+        fetch_route = RouteConfig(
+            accepts=fetch_options if len(fetch_options) > 1 else fetch_options[0],
+            description=FETCH_DESCRIPTION,
+            mime_type="application/json",
+            service_name="SmartFetch",
+            tags=FETCH_TAGS,
+            extensions=fetch_discovery_extension(),
+        )
         routes = {
-            "POST /fetch": RouteConfig(
-                accepts=fetch_options if len(fetch_options) > 1 else fetch_options[0],
-                description=FETCH_DESCRIPTION,
-                mime_type="application/json",
-                service_name="SmartFetch",
-                tags=FETCH_TAGS,
-                extensions=fetch_discovery_extension(),
-            )
+            "POST /fetch": fetch_route,
+            "GET /fetch": fetch_route,
         }
         if additional_routes:
             overlap = set(routes).intersection(additional_routes)
             if overlap:
                 raise ValueError("duplicate x402 route")
             routes.update(additional_routes)
+            for key, cfg in list(additional_routes.items()):
+                if key.startswith("POST "):
+                    get_key = f"GET {key[5:]}"
+                    routes.setdefault(get_key, cfg)
 
         # The middleware initializes lazily by default. Eager initialization is
         # deliberate so an enabled deployment cannot start with a free fallback.

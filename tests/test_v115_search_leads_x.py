@@ -516,6 +516,57 @@ class TestV115OptInBehavior(unittest.TestCase):
                     self.assertIn("How to Pay", llms)
                     self.assertIn("smartfetch-dev--smartfetch.apify.actor/mcp", llms)
 
+    def test_get_support_on_all_9_paid_routes_and_openapi_unchanged(self):
+        import base64
+
+        routes = (
+            "/fetch",
+            "/screenshot",
+            "/inspect",
+            "/batch-fetch",
+            "/map",
+            "/search",
+            "/search-and-fetch",
+            "/leads",
+            "/x-search",
+        )
+        with patch.dict(os.environ, {"SERPER_API_KEY": "s", "EXA_API_KEY": "e", "TWITTERAPI_KEY": "t"}):
+            with patch("smartfetch.remote_browser.RemoteBrowserConfig.from_env", return_value=_fake_remote_cfg()):
+                app = create_app(payment_settings=_test_payment_settings(enabled=True))
+                with TestClient(app) as client:
+                    openapi = client.get("/openapi.json").json()
+                    for path in routes:
+                        self.assertEqual(list(openapi["paths"][path].keys()), ["post"])
+                        r_get = client.get(path)
+                        self.assertEqual(r_get.status_code, 402, f"GET {path} should return 402 when unpaid")
+                        hdrs = {k.lower(): v for k, v in r_get.headers.items()}
+                        self.assertIn("payment-required", hdrs)
+                        decoded = json.loads(base64.b64decode(hdrs["payment-required"]).decode("utf-8"))
+                        networks = {a["network"] for a in decoded["accepts"]}
+                        self.assertIn("eip155:8453", networks)
+                        self.assertIn("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", networks)
+                        self.assertIn("how_to_pay", r_get.json())
+
+                # Paid/authorized GET with query params and bare verifier defaults (enabled=False simulates post-payment)
+                app_free = create_app(payment_settings=_test_payment_settings(enabled=False))
+                with TestClient(app_free) as client_free:
+                    with patch("smartfetch.server.smart_fetch", return_value={"success": True, "title": "Example", "content": "ok", "markdown": "ok", "render_method": "http", "elapsed_ms": 5}):
+                        r_bare = client_free.get("/fetch")
+                        self.assertEqual(r_bare.status_code, 200)
+                        r_q = client_free.get("/fetch?url=https://example.com&format=markdown")
+                        self.assertEqual(r_q.status_code, 200)
+                    with patch("smartfetch.server.search_web_query", return_value={"success": True, "query": "x402", "provider_used": "serper", "search_type": "web", "num_results": 1, "results": [], "cached": False, "elapsed_ms": 5, "service_version": "1.15.0"}) as search_mock:
+                        r_s = client_free.get("/search?q=ai+agents&type=web&max_results=3")
+                        self.assertEqual(r_s.status_code, 200)
+                        self.assertEqual(search_mock.call_args.args[0], "ai agents")
+                        r_s_bare = client_free.get("/search")
+                        self.assertEqual(r_s_bare.status_code, 200)
+                        self.assertEqual(search_mock.call_args.args[0], "x402")
+                    with patch("smartfetch.server.search_leads_query", return_value={"success": True, "query": "software companies in Austin TX", "source": "maps", "total_leads": 0, "inspected_count": 0, "leads": [], "cached": False, "elapsed_ms": 5, "service_version": "1.15.0"}) as leads_mock:
+                        r_l_bare = client_free.get("/leads")
+                        self.assertEqual(r_l_bare.status_code, 200)
+                        self.assertEqual(leads_mock.call_args.args[0], "software companies in Austin TX")
+
 
 if __name__ == "__main__":
     unittest.main()

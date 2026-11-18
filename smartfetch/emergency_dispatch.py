@@ -135,6 +135,44 @@ class EmergencyDispatch:
             if terminal_unhealthy:
                 await _send_json(send, 503, _UNAVAILABLE["service_unhealthy"], unavailable=True)
                 return
+            if method == "GET" and path in (
+                "/fetch",
+                "/screenshot",
+                "/inspect",
+                "/batch-fetch",
+                "/map",
+                "/search",
+                "/search-and-fetch",
+                "/leads",
+                "/x-search",
+            ):
+                from .remote_browser import RemoteBrowserConfig
+
+                remote_cfg = RemoteBrowserConfig.from_env()
+                if path in ("/search", "/search-and-fetch", "/leads", "/x-search"):
+                    from .leads import leads_configured
+                    from .search_tools import search_configured
+                    from .social import x_search_configured
+
+                    provider_ready = (
+                        search_configured()
+                        if path in ("/search", "/search-and-fetch")
+                        else (leads_configured() if path == "/leads" else x_search_configured())
+                    )
+                    if not provider_ready:
+                        await _send_json(send, 503, _UNAVAILABLE["provider_unavailable"], unavailable=True)
+                        return
+                    if path == "/search-and-fetch" and not remote_cfg.is_configured:
+                        await _send_json(send, 503, _UNAVAILABLE["retrieval_unavailable"], unavailable=True)
+                        return
+                    await self.app(scope, receive, send)
+                    return
+                if remote_cfg.is_configured:
+                    await self.app(scope, receive, send)
+                    return
+                if path == "/fetch":
+                    await _send_fetch_method_guidance(send, method, operational=False)
+                    return
             if path == "/fetch" and method in ("GET", "HEAD"):
                 from .remote_browser import RemoteBrowserConfig
                 operational = RemoteBrowserConfig.from_env().is_configured

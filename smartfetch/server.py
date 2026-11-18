@@ -3,6 +3,7 @@
 import asyncio
 import os
 import secrets
+from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -318,7 +319,49 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             "mode": "emergency_fail_closed",
         }
 
+    _BOOL_QUERY_KEYS = frozenset((
+        "force_browser",
+        "no_cache",
+        "only_main_content",
+        "scroll",
+        "dismiss_cookies",
+        "full_page",
+        "deep",
+        "include_subdomains",
+        "include_html",
+    ))
+
+    async def _extract_request_body(request: Request, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
+        if request.method != "GET":
+            return await request.json()
+        body: dict[str, Any] = {}
+        for k, v in request.query_params.items():
+            if k in _BOOL_QUERY_KEYS:
+                body[k] = v.strip().lower() in ("1", "true", "yes", "on")
+            else:
+                body[k] = v
+        if "q" in body and "query" not in body:
+            body["query"] = body["q"]
+        if "type" in body and "search_type" not in body:
+            body["search_type"] = body["type"]
+        if "sort" in body and "query_type" not in body:
+            body["query_type"] = body["sort"]
+        if "max_results" in body:
+            body.setdefault("num_results", body["max_results"])
+            body.setdefault("max_leads", body["max_results"])
+            body.setdefault("max_tweets", body["max_results"])
+        if "urls" in body and isinstance(body["urls"], str):
+            body["urls"] = [u.strip() for u in body["urls"].split(",") if u.strip()]
+        elif "url" in body and "urls" not in body:
+            body["urls"] = [body["url"]]
+        if defaults:
+            for dk, dv in defaults.items():
+                if dk not in body or body[dk] in ("", None, []):
+                    body[dk] = dv
+        return body
+
     @application.post("/fetch")
+    @application.get("/fetch", include_in_schema=False)
     async def fetch(request: Request):
         remote_cfg = RemoteBrowserConfig.from_env()
         if not remote_cfg.is_configured:
@@ -328,7 +371,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 headers={"Retry-After": "3600", "Cache-Control": "no-store"},
             )
         try:
-            body = await request.json()
+            body = await _extract_request_body(request, defaults={"url": "https://example.com"})
         except Exception:
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
         if not isinstance(body, dict):
@@ -375,6 +418,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             return JSONResponse(status_code=502, content={"success": False, "error_code": "fetch_failed", "error": str(exc)})
 
     @application.post("/screenshot")
+    @application.get("/screenshot", include_in_schema=False)
     async def screenshot_endpoint(request: Request):
         remote_cfg = RemoteBrowserConfig.from_env()
         if not remote_cfg.is_configured:
@@ -384,7 +428,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 headers={"Retry-After": "3600", "Cache-Control": "no-store"},
             )
         try:
-            body = await request.json()
+            body = await _extract_request_body(request, defaults={"url": "https://example.com"})
         except Exception:
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
         if not isinstance(body, dict):
@@ -429,6 +473,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             return JSONResponse(status_code=502, content={"success": False, "error_code": "screenshot_failed", "error": str(exc)})
 
     @application.post("/inspect")
+    @application.get("/inspect", include_in_schema=False)
     async def inspect_endpoint(request: Request):
         remote_cfg = RemoteBrowserConfig.from_env()
         if not remote_cfg.is_configured:
@@ -438,7 +483,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 headers={"Retry-After": "3600", "Cache-Control": "no-store"},
             )
         try:
-            body = await request.json()
+            body = await _extract_request_body(request, defaults={"url": "https://example.com"})
         except Exception:
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
         if not isinstance(body, dict):
@@ -466,6 +511,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             return JSONResponse(status_code=502, content={"success": False, "error_code": "inspect_failed", "error": str(exc)})
 
     @application.post("/batch-fetch")
+    @application.get("/batch-fetch", include_in_schema=False)
     async def batch_fetch_endpoint(request: Request):
         remote_cfg = RemoteBrowserConfig.from_env()
         if not remote_cfg.is_configured:
@@ -475,7 +521,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 headers={"Retry-After": "3600", "Cache-Control": "no-store"},
             )
         try:
-            body = await request.json()
+            body = await _extract_request_body(request, defaults={"urls": ["https://example.com"]})
         except Exception:
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
         if not isinstance(body, dict):
@@ -509,6 +555,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             )
 
     @application.post("/map")
+    @application.get("/map", include_in_schema=False)
     async def map_endpoint(request: Request):
         remote_cfg = RemoteBrowserConfig.from_env()
         if not remote_cfg.is_configured:
@@ -518,7 +565,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 headers={"Retry-After": "3600", "Cache-Control": "no-store"},
             )
         try:
-            body = await request.json()
+            body = await _extract_request_body(request, defaults={"url": "https://example.com"})
         except Exception:
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
         if not isinstance(body, dict):
@@ -549,6 +596,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             return JSONResponse(status_code=502, content={"success": False, "error_code": "map_failed", "error": str(exc)})
 
     @application.post("/search")
+    @application.get("/search", include_in_schema=False)
     async def search_endpoint(request: Request):
         if not search_configured():
             return JSONResponse(
@@ -557,7 +605,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 headers={"Retry-After": "3600", "Cache-Control": "no-store"},
             )
         try:
-            body = await request.json()
+            body = await _extract_request_body(request, defaults={"query": "x402"})
         except Exception:
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
         if not isinstance(body, dict):
@@ -595,6 +643,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             return JSONResponse(status_code=502, content={"success": False, "error_code": "search_failed", "error": str(exc)})
 
     @application.post("/search-and-fetch")
+    @application.get("/search-and-fetch", include_in_schema=False)
     async def search_and_fetch_endpoint(request: Request):
         if not search_configured():
             return JSONResponse(
@@ -610,7 +659,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 headers={"Retry-After": "3600", "Cache-Control": "no-store"},
             )
         try:
-            body = await request.json()
+            body = await _extract_request_body(request, defaults={"query": "x402"})
         except Exception:
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
         if not isinstance(body, dict):
@@ -646,6 +695,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             return JSONResponse(status_code=502, content={"success": False, "error_code": "search_and_fetch_failed", "error": str(exc)})
 
     @application.post("/leads")
+    @application.get("/leads", include_in_schema=False)
     async def leads_endpoint(request: Request):
         if not leads_configured():
             return JSONResponse(
@@ -654,7 +704,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 headers={"Retry-After": "3600", "Cache-Control": "no-store"},
             )
         try:
-            body = await request.json()
+            body = await _extract_request_body(request, defaults={"query": "software companies in Austin TX"})
         except Exception:
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
         if not isinstance(body, dict):
@@ -692,6 +742,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             return JSONResponse(status_code=502, content={"success": False, "error_code": "leads_failed", "error": str(exc)})
 
     @application.post("/x-search")
+    @application.get("/x-search", include_in_schema=False)
     async def x_search_endpoint(request: Request):
         if not x_search_configured():
             return JSONResponse(
@@ -700,7 +751,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 headers={"Retry-After": "3600", "Cache-Control": "no-store"},
             )
         try:
-            body = await request.json()
+            body = await _extract_request_body(request, defaults={"query": "x402"})
         except Exception:
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
         if not isinstance(body, dict):
