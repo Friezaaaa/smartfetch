@@ -280,11 +280,6 @@ https://quotes.toscrape.com/js/</textarea>
                 <option value="http_only">http_only (fast HTTP stream without browser)</option>
               </select>
             </div>
-
-            <div class="form-group checkbox-group">
-              <input type="checkbox" id="includeHtml" checked>
-              <label for="includeHtml" style="margin-bottom: 0; cursor: pointer;">Include Bounded HTML (include_html: true)</label>
-            </div>
           </div>
 
           <div id="screenshotOptions" style="display: none;">
@@ -321,10 +316,25 @@ https://quotes.toscrape.com/js/</textarea>
             </div>
           </div>
 
-          <div class="form-group checkbox-group" style="margin-top: 10px;">
-            <input type="checkbox" id="noCache">
-            <label for="noCache" style="margin-bottom: 0; cursor: pointer;">Bypass Server Cache (no_cache: true)</label>
-          </div>
+          <details id="advancedOptions" style="margin-top: 8px; margin-bottom: 14px; background: rgba(15, 23, 42, 0.55); border: 1px solid var(--card-border); border-radius: 8px; padding: 10px 12px;">
+            <summary style="cursor: pointer; font-size: 0.85rem; font-weight: 600; color: var(--text-muted); user-select: none;">Advanced options</summary>
+            <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 10px;">
+              <div id="includeHtmlRow" class="checkbox-group" style="align-items: flex-start;">
+                <input type="checkbox" id="includeHtml" checked style="margin-top: 3px;">
+                <div>
+                  <label for="includeHtml" style="margin-bottom: 2px; cursor: pointer; color: var(--text-main); font-weight: 500;">Include raw HTML code</label>
+                  <span style="display: block; font-size: 0.76rem; color: var(--text-muted);">Needed for the Sandboxed HTML Preview tab</span>
+                </div>
+              </div>
+              <div id="noCacheRow" class="checkbox-group" style="align-items: flex-start;">
+                <input type="checkbox" id="noCache" style="margin-top: 3px;">
+                <div>
+                  <label for="noCache" style="margin-bottom: 2px; cursor: pointer; color: var(--text-main); font-weight: 500;">Force fresh fetch (skip 60s cache)</label>
+                  <span style="display: block; font-size: 0.76rem; color: var(--text-muted);">Re-downloads live instead of reusing a 60s saved copy</span>
+                </div>
+              </div>
+            </div>
+          </details>
 
           <div id="executionStatus" class="alert" style="margin-top: 14px;"></div>
 
@@ -592,6 +602,8 @@ https://quotes.toscrape.com/js/</textarea>
     document.getElementById('screenshotOptions').style.display = mode === 'screenshot' ? 'block' : 'none';
     document.getElementById('inspectOptions').style.display = mode === 'inspect' ? 'block' : 'none';
     document.getElementById('batchFetchOptions').style.display = mode === 'batch_fetch' ? 'block' : 'none';
+    const includeHtmlRow = document.getElementById('includeHtmlRow');
+    if (includeHtmlRow) includeHtmlRow.style.display = mode === 'fetch' ? 'flex' : 'none';
     updatePaidBtnText();
     cached402Challenge = null;
     updateSnippets();

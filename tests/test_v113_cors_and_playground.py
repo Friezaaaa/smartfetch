@@ -137,6 +137,12 @@ class TestPlaygroundSandbox(unittest.TestCase):
         self.assertIn("decodePaymentRequiredError", content)
         self.assertIn("normalizeSolanaPubkey", content)
         self.assertIn("normalizeSignedTxBytes", content)
+        self.assertIn("<summary", content)
+        self.assertIn("Advanced options</summary>", content)
+        self.assertIn("Include raw HTML code", content)
+        self.assertIn("Needed for the Sandboxed HTML Preview tab", content)
+        self.assertIn("Force fresh fetch (skip 60s cache)", content)
+        self.assertIn("Re-downloads live instead of reusing a 60s saved copy", content)
 
     def test_playground_solana_transaction_layout_passes_x402_svm_verifier(self):
         """Verifies the exact 4-instruction VersionedTransaction layout built by Playground JS passes x402==2.20.0 ExactSvmScheme.verify()."""
