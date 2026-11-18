@@ -134,6 +134,9 @@ class TestPlaygroundSandbox(unittest.TestCase):
         self.assertIn("solscan.io/tx/", content)
         self.assertIn("solanaRpcUrl", content)
         self.assertIn("performSolanaPreflightChecks", content)
+        self.assertIn("decodePaymentRequiredError", content)
+        self.assertIn("normalizeSolanaPubkey", content)
+        self.assertIn("normalizeSignedTxBytes", content)
 
     def test_playground_solana_transaction_layout_passes_x402_svm_verifier(self):
         """Verifies the exact 4-instruction VersionedTransaction layout built by Playground JS passes x402==2.20.0 ExactSvmScheme.verify()."""

@@ -227,8 +227,8 @@
             </div>
             <div class="form-group" style="margin-bottom: 4px;">
               <label for="solanaRpcUrl">Solana RPC Endpoint (CORS-friendly)</label>
-              <input type="text" id="solanaRpcUrl" value="https://solana.publicnode.com" placeholder="https://solana.publicnode.com">
-              <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px;">Used for recent blockhash and balance pre-flight checks. Fallbacks: debridge.finance, ankr, solana-mainnet.</span>
+              <input type="text" id="solanaRpcUrl" value="https://solana-rpc.debridge.finance" placeholder="https://solana-rpc.debridge.finance">
+              <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px;">Used for recent blockhash and balance pre-flight checks. Fallbacks: debridge.finance, solana.publicnode.com.</span>
             </div>
           </div>
 
@@ -799,10 +799,10 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     const userRpc = document.getElementById('solanaRpcUrl').value.trim();
     const rpcCandidates = [
       userRpc,
-      "https://solana.publicnode.com",
       "https://solana-rpc.debridge.finance",
+      "https://solana.publicnode.com",
       "https://api.mainnet-beta.solana.com"
-    ].filter(Boolean);
+    ].filter((v, idx, arr) => Boolean(v) && arr.indexOf(v) === idx);
 
     let lastErr = null;
     for (const endpoint of rpcCandidates) {
@@ -853,6 +853,13 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     const sellerPubkeyStr = accept.payTo || SOLANA_PAY_TO;
     const mintStr = accept.asset || SOLANA_USDC_MINT;
     const requiredAmount = BigInt(accept.amount || "5000");
+
+    if (buyerPubkeyStr === sellerPubkeyStr) {
+      showStatus(
+        `&#9888; <strong>Self-Transfer Notice:</strong> Connected wallet (<code style="word-break:break-all;">${buyerPubkeyStr}</code>) is the same as the Seller treasury address. To test a separate buyer-to-seller payment, switch to your Buyer account in Phantom.`,
+        "warning"
+      );
+    }
 
     // 1. Check Seller ATA
     const sellerAta = deriveAta(sellerPubkeyStr, mintStr);
@@ -906,7 +913,10 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     }
   }
 
-  function buildSolanaTransaction(blockhash, buyerPubkey, solanaAccept) {
+  function buildSolanaTransaction(blockhash, buyerPubkeyInput, solanaAccept) {
+    const buyerPubkey = buyerPubkeyInput instanceof solanaWeb3.PublicKey
+      ? buyerPubkeyInput
+      : new solanaWeb3.PublicKey(buyerPubkeyInput.toBase58 ? buyerPubkeyInput.toBase58() : buyerPubkeyInput.toString());
     const feePayer = new solanaWeb3.PublicKey((solanaAccept.extra && solanaAccept.extra.feePayer) || SOLANA_FEE_PAYER);
     const seller = new solanaWeb3.PublicKey(solanaAccept.payTo || SOLANA_PAY_TO);
     const mint = new solanaWeb3.PublicKey(solanaAccept.asset || SOLANA_USDC_MINT);
@@ -917,10 +927,11 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     const sellerAta = deriveAta(seller.toBase58(), mint.toBase58());
     const computeBudgetProg = new solanaWeb3.PublicKey(COMPUTE_BUDGET_PROGRAM_STR);
 
-    // 1. SetComputeUnitLimit instruction (20,000 units): [2, u32le(20000)]
+    // 1. SetComputeUnitLimit instruction (40,000 units): [2, u32le(40000)]
+    // Gives headroom for Phantom's Lighthouse security assertion instructions while staying well within CDP caps.
     const cuLimitData = new Uint8Array(5);
     cuLimitData[0] = 2;
-    new DataView(cuLimitData.buffer).setUint32(1, 20000, true);
+    new DataView(cuLimitData.buffer).setUint32(1, 40000, true);
     const cuLimitIx = new solanaWeb3.TransactionInstruction({
       programId: computeBudgetProg,
       keys: [],
@@ -957,29 +968,49 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
       data: transferData
     });
 
-    // 4. Memo instruction (16 random hex bytes)
-    let memoStr = (solanaAccept.extra && solanaAccept.extra.memo) || null;
-    if (!memoStr) {
-      const memoBytes = new Uint8Array(16);
-      crypto.getRandomValues(memoBytes);
-      let hex = '';
-      for (let i = 0; i < memoBytes.length; i++) hex += memoBytes[i].toString(16).padStart(2, '0');
-      memoStr = hex;
+    const instructions = [cuLimitIx, cuPriceIx, transferIx];
+
+    // 4. Optional Memo instruction (only when explicitly requested by solanaAccept.extra.memo,
+    // leaving 3 optional instruction slots free for Phantom's Lighthouse security guard)
+    const memoStr = (solanaAccept.extra && typeof solanaAccept.extra.memo === 'string' && solanaAccept.extra.memo.length > 0)
+      ? solanaAccept.extra.memo
+      : null;
+    if (memoStr) {
+      const memoData = new TextEncoder().encode(memoStr);
+      instructions.push(new solanaWeb3.TransactionInstruction({
+        programId: memoProg,
+        keys: [],
+        data: memoData
+      }));
     }
-    const memoData = new TextEncoder().encode(memoStr);
-    const memoIx = new solanaWeb3.TransactionInstruction({
-      programId: memoProg,
-      keys: [],
-      data: memoData
-    });
 
     const msg = new solanaWeb3.TransactionMessage({
       payerKey: feePayer,
       recentBlockhash: blockhash,
-      instructions: [cuLimitIx, cuPriceIx, transferIx, memoIx]
+      instructions: instructions
     }).compileToV0Message();
 
     return new solanaWeb3.VersionedTransaction(msg);
+  }
+
+  function normalizeSolanaPubkey(raw) {
+    if (!raw) throw new Error("Wallet did not return a public key.");
+    if (raw instanceof solanaWeb3.PublicKey) return raw;
+    if (typeof raw.toBase58 === 'function') return new solanaWeb3.PublicKey(raw.toBase58());
+    if (raw.publicKey) return new solanaWeb3.PublicKey(raw.publicKey);
+    if (raw.address) return new solanaWeb3.PublicKey(raw.address);
+    return new solanaWeb3.PublicKey(raw);
+  }
+
+  function normalizeSignedTxBytes(raw) {
+    if (!raw) throw new Error("Wallet did not return signed transaction bytes.");
+    if (raw instanceof Uint8Array) return raw;
+    if (typeof raw.serialize === 'function') {
+      const ser = raw.serialize();
+      return ser instanceof Uint8Array ? ser : new Uint8Array(ser);
+    }
+    if (raw.signedTransaction) return normalizeSignedTxBytes(raw.signedTransaction);
+    return new Uint8Array(raw);
   }
 
   async function getConnectedSolanaSigner() {
@@ -996,7 +1027,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
       const connResult = await connectFeature.connect();
       const account = connResult.accounts[0];
       if (!account) throw new Error(`No account returned from ${name}.`);
-      const pubkey = new solanaWeb3.PublicKey(account.publicKey || account.address);
+      const pubkey = normalizeSolanaPubkey(account);
       return {
         type: 'standard',
         name: wallet.name,
@@ -1009,16 +1040,17 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
           try {
             results = await signFeature.signTransaction({
               transaction: tx.serialize(),
-              account: account
+              account: account,
+              chain: 'solana:mainnet'
             });
           } catch(e) {
             results = await signFeature.signTransaction({
-              transaction: tx,
+              transaction: tx.serialize(),
               account: account
             });
           }
-          const item = results[0];
-          return item.signedTransaction || (item.serialize ? item.serialize() : item);
+          const item = Array.isArray(results) ? results[0] : results;
+          return normalizeSignedTxBytes(item);
         }
       };
     }
@@ -1032,14 +1064,14 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     if (selectedMode === 'phantom' || (selectedMode === 'auto' && window.phantom && window.phantom.solana)) {
       const provider = window.phantom ? window.phantom.solana : window.solana;
       const resp = await provider.connect();
-      const pubkey = resp.publicKey || provider.publicKey;
+      const pubkey = normalizeSolanaPubkey((resp && resp.publicKey) || provider.publicKey);
       return {
         type: 'injected',
         name: 'Phantom',
         pubkey: pubkey,
         signTransaction: async (tx) => {
           const signed = await provider.signTransaction(tx);
-          return signed.serialize();
+          return normalizeSignedTxBytes(signed);
         }
       };
     }
@@ -1048,14 +1080,14 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     if (selectedMode === 'solflare' || (selectedMode === 'auto' && window.solflare)) {
       const provider = window.solflare;
       await provider.connect();
-      const pubkey = provider.publicKey;
+      const pubkey = normalizeSolanaPubkey(provider.publicKey);
       return {
         type: 'injected',
         name: 'Solflare',
         pubkey: pubkey,
         signTransaction: async (tx) => {
           const signed = await provider.signTransaction(tx);
-          return signed.serialize();
+          return normalizeSignedTxBytes(signed);
         }
       };
     }
@@ -1064,14 +1096,14 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     if (selectedMode === 'backpack' || (selectedMode === 'auto' && window.backpack)) {
       const provider = window.backpack;
       await provider.connect();
-      const pubkey = provider.publicKey;
+      const pubkey = normalizeSolanaPubkey(provider.publicKey);
       return {
         type: 'injected',
         name: 'Backpack',
         pubkey: pubkey,
         signTransaction: async (tx) => {
           const signed = await provider.signTransaction(tx);
-          return signed.serialize();
+          return normalizeSignedTxBytes(signed);
         }
       };
     }
@@ -1080,14 +1112,14 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     if (window.solana) {
       const provider = window.solana;
       const resp = await provider.connect();
-      const pubkey = (resp && resp.publicKey) || provider.publicKey;
+      const pubkey = normalizeSolanaPubkey((resp && resp.publicKey) || provider.publicKey);
       return {
         type: 'injected',
         name: 'Solana Wallet',
         pubkey: pubkey,
         signTransaction: async (tx) => {
           const signed = await provider.signTransaction(tx);
-          return signed.serialize();
+          return normalizeSignedTxBytes(signed);
         }
       };
     }
@@ -1097,7 +1129,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
       const firstWallet = registeredWallets.values().next().value;
       const connResult = await firstWallet.features['standard:connect'].connect();
       const account = connResult.accounts[0];
-      const pubkey = new solanaWeb3.PublicKey(account.publicKey || account.address);
+      const pubkey = normalizeSolanaPubkey(account);
       return {
         type: 'standard',
         name: firstWallet.name,
@@ -1105,17 +1137,61 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
         pubkey: pubkey,
         signTransaction: async (tx) => {
           const signFeature = firstWallet.features['solana:signTransaction'];
-          const results = await signFeature.signTransaction({
-            transaction: tx.serialize(),
-            account: account
-          });
-          const item = results[0];
-          return item.signedTransaction || item;
+          let results;
+          try {
+            results = await signFeature.signTransaction({
+              transaction: tx.serialize(),
+              account: account,
+              chain: 'solana:mainnet'
+            });
+          } catch(e) {
+            results = await signFeature.signTransaction({
+              transaction: tx.serialize(),
+              account: account
+            });
+          }
+          const item = Array.isArray(results) ? results[0] : results;
+          return normalizeSignedTxBytes(item);
         }
       };
     }
 
     throw new Error("No Solana wallet (Phantom, Solflare, or Backpack) detected. If you only have MetaMask, select 'Base Mainnet (EVM USDC)' above to test instantly without any setup!");
+  }
+
+  function decodePaymentRequiredError(resp, respData) {
+    const reqHdr = resp.headers.get('payment-required') || resp.headers.get('PAYMENT-REQUIRED');
+    let decodedChallenge = null;
+    let errText = '';
+    if (reqHdr) {
+      try {
+        decodedChallenge = JSON.parse(decodeURIComponent(escape(atob(reqHdr))));
+        if (decodedChallenge && decodedChallenge.error) {
+          errText = String(decodedChallenge.error);
+          // Parse embedded facilitator JSON if present
+          const jsonIdx = errText.indexOf('{');
+          if (jsonIdx !== -1) {
+            try {
+              const inner = JSON.parse(errText.slice(jsonIdx));
+              const reason = inner.invalidReason || inner.errorReason || '';
+              const msg = inner.invalidMessage || inner.errorMessage || '';
+              if (reason || msg) {
+                errText = `${reason ? reason + ': ' : ''}${msg || errText}`;
+              }
+            } catch(_) {}
+          }
+        }
+      } catch(e) {
+        console.warn("Failed to decode PAYMENT-REQUIRED header on error:", e);
+      }
+    }
+    if (!errText && respData && (respData.error || respData.detail || respData.message)) {
+      errText = respData.error || respData.detail || respData.message;
+    }
+    if (!errText) {
+      errText = (respData && Object.keys(respData).length > 0) ? JSON.stringify(respData) : `Payment rejected by facilitator (HTTP ${resp.status})`;
+    }
+    return { errText, decodedChallenge };
   }
 
   // Common response result renderer
@@ -1334,8 +1410,14 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
 
         handlePaidSuccessDisplay(respData, mode, paidResp.status, settlement, "Solana Mainnet");
       } else {
-        showStatus(`&#10060; Operation failed (HTTP ${paidResp.status}): ${JSON.stringify(respData)}`, "danger");
-        document.getElementById('metaOutput').textContent = JSON.stringify({ status: paidResp.status, body: respData }, null, 2);
+        const { errText, decodedChallenge } = decodePaymentRequiredError(paidResp, respData);
+        showStatus(`&#10060; Operation failed (HTTP ${paidResp.status}): ${escapeHtml(errText)}`, "danger");
+        document.getElementById('metaOutput').textContent = JSON.stringify({
+          status: paidResp.status,
+          error: errText,
+          paymentRequired: decodedChallenge,
+          body: respData
+        }, null, 2);
         switchOutputTab('meta');
       }
     } catch(err) {
@@ -1575,8 +1657,14 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
 
         handlePaidSuccessDisplay(respData, mode, paidResp.status, settlement, "Base Mainnet");
       } else {
-        showStatus(`&#10060; Operation failed (HTTP ${paidResp.status}): ${JSON.stringify(respData)}`, "danger");
-        document.getElementById('metaOutput').textContent = JSON.stringify({ status: paidResp.status, body: respData }, null, 2);
+        const { errText, decodedChallenge } = decodePaymentRequiredError(paidResp, respData);
+        showStatus(`&#10060; Operation failed (HTTP ${paidResp.status}): ${escapeHtml(errText)}`, "danger");
+        document.getElementById('metaOutput').textContent = JSON.stringify({
+          status: paidResp.status,
+          error: errText,
+          paymentRequired: decodedChallenge,
+          body: respData
+        }, null, 2);
         switchOutputTab('meta');
       }
     } catch(err) {
