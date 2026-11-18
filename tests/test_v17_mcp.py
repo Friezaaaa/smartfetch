@@ -130,32 +130,30 @@ class V17MCPDiscoveryTests(unittest.TestCase):
         self.assertIn('primary webpage and pdf retrieval tool', tool['description'].lower())
         self.assertEqual(tool['_meta']['availability'], 'unavailable')
         self.assertFalse(tool['_meta']['payment_challenge_enabled'])
-        self.assertEqual(tool['inputSchema'], {
-            'properties': {
-                'url': {
-                    'description': 'Public HTTP or HTTPS URL of a webpage or PDF to retrieve.',
-                    'title': 'Url',
-                    'type': 'string',
-                },
-                'max_chars': {
-                    'default': 20000,
-                    'description': 'Maximum characters returned for content and Markdown.',
-                    'maximum': 50000,
-                    'minimum': 1000,
-                    'title': 'Max Chars',
-                    'type': 'integer',
-                },
-                'force_browser': {
-                    'default': False,
-                    'description': 'Start with browser rendering instead of fast HTTP retrieval.',
-                    'title': 'Force Browser',
-                    'type': 'boolean',
-                },
-            },
-            'required': ['url'],
-            'title': 'fetch_webpageArguments',
-            'type': 'object',
+        self.assertEqual(tool['inputSchema']['required'], ['url'])
+        self.assertEqual(tool['inputSchema']['title'], 'fetch_webpageArguments')
+        self.assertEqual(tool['inputSchema']['type'], 'object')
+        self.assertEqual(tool['inputSchema']['properties']['url'], {
+            'description': 'Public HTTP or HTTPS URL of a webpage or PDF to retrieve.',
+            'title': 'Url',
+            'type': 'string',
         })
+        self.assertEqual(tool['inputSchema']['properties']['max_chars'], {
+            'default': 20000,
+            'description': 'Maximum characters returned for content and Markdown.',
+            'maximum': 50000,
+            'minimum': 1000,
+            'title': 'Max Chars',
+            'type': 'integer',
+        })
+        self.assertEqual(tool['inputSchema']['properties']['force_browser'], {
+            'default': False,
+            'description': 'Start with browser rendering instead of fast HTTP retrieval.',
+            'title': 'Force Browser',
+            'type': 'boolean',
+        })
+        for opt_prop in ('wait_ms', 'wait_for_selector', 'scroll', 'dismiss_cookies'):
+            self.assertIn(opt_prop, tool['inputSchema']['properties'])
         self.assertEqual(slash_response.status_code, 307)
         self.assertEqual(slash_response.headers['location'], 'http://testserver/mcp')
         self.assertNotIn('payment-required', slash_response.headers)

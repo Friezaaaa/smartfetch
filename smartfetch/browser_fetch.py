@@ -122,12 +122,28 @@ def _cleanup_profile(profile):
     shutil.rmtree(profile, ignore_errors=True)
 
 
-def _remote_browser_fetch(url: str, config: RemoteBrowserConfig) -> dict:
+def _remote_browser_fetch(
+    url: str,
+    config: RemoteBrowserConfig,
+    *,
+    wait_ms: int = 0,
+    wait_for_selector: str | None = None,
+    scroll: bool = False,
+    dismiss_cookies: bool = True,
+) -> dict:
     client = RemoteBrowserClient(config)
     timeout = float(os.getenv('BROWSER_TIMEOUT_SECONDS', '15'))
     max_chars = int(os.getenv('DEFAULT_MAX_OUTPUT_CHARS', '20000'))
     try:
-        result = client.render(url, timeout=timeout, max_chars=max_chars)
+        render_kwargs: dict[str, object] = {}
+        if wait_ms or wait_for_selector is not None or scroll or not dismiss_cookies:
+            render_kwargs.update({
+                'wait_ms': wait_ms,
+                'wait_for_selector': wait_for_selector,
+                'scroll': scroll,
+                'dismiss_cookies': dismiss_cookies,
+            })
+        result = client.render(url, timeout=timeout, max_chars=max_chars, **render_kwargs)
         return {
             'html': result.get('html', ''),
             'final_url': result.get('final_url', url),
@@ -144,10 +160,24 @@ def _remote_browser_fetch(url: str, config: RemoteBrowserConfig) -> dict:
         raise annotated from rbe
 
 
-def browser_fetch(url: str) -> dict:
+def browser_fetch(
+    url: str,
+    *,
+    wait_ms: int = 0,
+    wait_for_selector: str | None = None,
+    scroll: bool = False,
+    dismiss_cookies: bool = True,
+) -> dict:
     remote_config = RemoteBrowserConfig.from_env()
     if remote_config.is_configured:
-        return _remote_browser_fetch(url, remote_config)
+        return _remote_browser_fetch(
+            url,
+            remote_config,
+            wait_ms=wait_ms,
+            wait_for_selector=wait_for_selector,
+            scroll=scroll,
+            dismiss_cookies=dismiss_cookies,
+        )
 
     if os.getenv('BROWSER_WORKER_REQUIRED', 'false').lower() in ('1', 'true', 'yes'):
         error = RuntimeError('Browser rendering is unavailable: VPS browser worker is required but not configured')
@@ -207,14 +237,19 @@ def browser_screenshot(
     quality: int = 82,
     no_cache: bool = False,
     request_id: str | None = None,
+    wait_ms: int = 0,
+    wait_for_selector: str | None = None,
+    scroll: bool = False,
+    dismiss_cookies: bool = True,
 ) -> dict:
+    has_custom_capture = bool(wait_ms or wait_for_selector is not None or scroll or not dismiss_cookies)
     cache_key = build_screenshot_cache_key(
         url,
         viewport=viewport,
         full_page=full_page,
         image_format=image_format,
     )
-    if not no_cache:
+    if not no_cache and not has_custom_capture:
         cached = get_cache_provider().get(cache_key)
         if cached is not None and cached.get("success"):
             res = dict(cached)
@@ -226,6 +261,14 @@ def browser_screenshot(
         client = RemoteBrowserClient(remote_config)
         timeout = float(os.getenv("BROWSER_TIMEOUT_SECONDS", "18"))
         try:
+            ss_kwargs: dict[str, object] = {}
+            if has_custom_capture:
+                ss_kwargs.update({
+                    "wait_ms": wait_ms,
+                    "wait_for_selector": wait_for_selector,
+                    "scroll": scroll,
+                    "dismiss_cookies": dismiss_cookies,
+                })
             result = client.screenshot(
                 url,
                 viewport=viewport,
@@ -233,8 +276,9 @@ def browser_screenshot(
                 image_format=image_format,
                 timeout=timeout,
                 request_id=request_id,
+                **ss_kwargs,
             )
-            if not no_cache and result.get("success"):
+            if not no_cache and not has_custom_capture and result.get("success"):
                 get_cache_provider().set(cache_key, result)
             return result
         except RemoteBrowserError as rbe:
@@ -285,6 +329,14 @@ def browser_screenshot(
         )
         try:
             instance.start(timeout=min(10.0, timeout))
+            local_ss_kwargs: dict[str, object] = {}
+            if has_custom_capture:
+                local_ss_kwargs.update({
+                    "wait_ms": wait_ms,
+                    "wait_for_selector": wait_for_selector,
+                    "scroll": scroll,
+                    "dismiss_cookies": dismiss_cookies,
+                })
             result = instance.screenshot(
                 safe,
                 deadline=time.monotonic() + timeout,
@@ -292,6 +344,7 @@ def browser_screenshot(
                 full_page=full_page,
                 image_format=image_format,
                 quality=quality,
+                **local_ss_kwargs,
             )
             final_url = result.get("final_url", safe)
             try:

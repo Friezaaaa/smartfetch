@@ -41,8 +41,24 @@ FREE_MCP_METHODS = (
     "resources/list",
     "resources/templates/list",
 )
-_FETCH_VALIDATOR = Draft202012Validator(FETCH_INPUT_SCHEMA, format_checker=FormatChecker())
-_RENDER_VALIDATOR = Draft202012Validator(RENDER_INPUT_SCHEMA, format_checker=FormatChecker())
+_CAPTURE_OPTION_PROPERTIES = {
+    "wait_ms": {"type": "integer", "minimum": 0, "maximum": 5000},
+    "wait_for_selector": {"type": ["string", "null"], "maxLength": 256},
+    "scroll": {"type": "boolean"},
+    "dismiss_cookies": {"type": "boolean"},
+}
+
+def _with_capture_options(schema: dict) -> dict:
+    return {
+        **schema,
+        "properties": {
+            **schema.get("properties", {}),
+            **_CAPTURE_OPTION_PROPERTIES,
+        },
+    }
+
+_FETCH_VALIDATOR = Draft202012Validator(_with_capture_options(FETCH_INPUT_SCHEMA), format_checker=FormatChecker())
+_RENDER_VALIDATOR = Draft202012Validator(_with_capture_options(RENDER_INPUT_SCHEMA), format_checker=FormatChecker())
 SCREENSHOT_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -50,6 +66,7 @@ SCREENSHOT_INPUT_SCHEMA = {
         "viewport": {"type": "string", "enum": ["desktop", "mobile"]},
         "full_page": {"type": "boolean"},
         "image_format": {"type": "string", "enum": ["jpeg", "png"]},
+        **_CAPTURE_OPTION_PROPERTIES,
     },
     "required": ["url"],
 }
@@ -103,6 +120,7 @@ MCP_FETCH_ARGUMENT_SCHEMA = {
         "url": {"type": "string"},
         "max_chars": {"type": "integer", "minimum": 1000, "maximum": 50000},
         "force_browser": {"type": "boolean"},
+        **_CAPTURE_OPTION_PROPERTIES,
     },
     "required": ["url"],
 }
@@ -111,6 +129,7 @@ MCP_RENDER_ARGUMENT_SCHEMA = {
     "properties": {
         "url": {"type": "string"},
         "max_chars": {"type": "integer", "minimum": 1000, "maximum": 50000},
+        **_CAPTURE_OPTION_PROPERTIES,
     },
     "required": ["url"],
 }
@@ -121,6 +140,7 @@ MCP_SCREENSHOT_ARGUMENT_SCHEMA = {
         "viewport": {"type": "string", "enum": ["desktop", "mobile"]},
         "full_page": {"type": "boolean"},
         "image_format": {"type": "string", "enum": ["jpeg", "png"]},
+        **_CAPTURE_OPTION_PROPERTIES,
     },
     "required": ["url"],
 }

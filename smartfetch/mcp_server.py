@@ -199,10 +199,22 @@ def create_smartfetch_mcp(
         url: Annotated[str, Field(description="Public HTTP or HTTPS URL of a webpage or PDF to retrieve.")],
         max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS, description="Maximum characters returned for content and Markdown.")] = MCP_DEFAULT_MAX_CHARS,
         force_browser: Annotated[bool, Field(description="Start with browser rendering instead of fast HTTP retrieval.")] = False,
+        wait_ms: Annotated[int, Field(ge=0, le=5000, description="Optional extra wait in milliseconds (0-5000) after page load.")] = 0,
+        wait_for_selector: Annotated[Optional[str], Field(max_length=256, description="Optional CSS selector to wait for before extraction.")] = None,
+        scroll: Annotated[bool, Field(description="Scroll down to trigger lazy-loaded content before extraction.")] = False,
+        dismiss_cookies: Annotated[bool, Field(description="Attempt to dismiss cookie/GDPR banners before extraction.")] = True,
     ) -> dict[str, Any]:
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string")
-        return await fetch_handler(url.strip(), force_browser, max_chars)
+        extra_kwargs: dict[str, Any] = {}
+        if wait_ms or wait_for_selector is not None or scroll or not dismiss_cookies:
+            extra_kwargs.update({
+                "wait_ms": wait_ms,
+                "wait_for_selector": wait_for_selector,
+                "scroll": scroll,
+                "dismiss_cookies": dismiss_cookies,
+            })
+        return await fetch_handler(url.strip(), force_browser, max_chars, **extra_kwargs)
 
     async def webpage_to_markdown(
         url: Annotated[str, Field(description="Public HTTP or HTTPS URL of a webpage or PDF to retrieve as Markdown.")],
@@ -263,10 +275,22 @@ def create_smartfetch_mcp(
     async def render_webpage(
         url: Annotated[str, Field(description="Public HTTP or HTTPS webpage URL for forced headless browser rendering.")],
         max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS, description="Maximum characters returned for content, Markdown, and HTML.")] = MCP_DEFAULT_MAX_CHARS,
+        wait_ms: Annotated[int, Field(ge=0, le=5000, description="Optional extra wait in milliseconds (0-5000) after page load.")] = 0,
+        wait_for_selector: Annotated[Optional[str], Field(max_length=256, description="Optional CSS selector to wait for before extraction.")] = None,
+        scroll: Annotated[bool, Field(description="Scroll down to trigger lazy-loaded content before extraction.")] = False,
+        dismiss_cookies: Annotated[bool, Field(description="Attempt to dismiss cookie/GDPR banners before extraction.")] = True,
     ) -> dict[str, Any]:
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string")
-        result = await fetch_handler(url.strip(), True, max_chars, include_html=True)
+        extra_kwargs: dict[str, Any] = {}
+        if wait_ms or wait_for_selector is not None or scroll or not dismiss_cookies:
+            extra_kwargs.update({
+                "wait_ms": wait_ms,
+                "wait_for_selector": wait_for_selector,
+                "scroll": scroll,
+                "dismiss_cookies": dismiss_cookies,
+            })
+        result = await fetch_handler(url.strip(), True, max_chars, include_html=True, **extra_kwargs)
         content = result.get("content", "")
         markdown = result.get("markdown", "")
         html_text = result.get("html", "")
@@ -306,6 +330,10 @@ def create_smartfetch_mcp(
         viewport: Annotated[str, Field(description="Device viewport preset ('desktop' for 1280x800, 'mobile' for 390x844).")] = "desktop",
         full_page: Annotated[bool, Field(description="Capture the full scrollable page height up to 4000px.")] = False,
         image_format: Annotated[str, Field(description="Output image format ('jpeg' or 'png').")] = "jpeg",
+        wait_ms: Annotated[int, Field(ge=0, le=5000, description="Optional extra wait in milliseconds (0-5000) before capture.")] = 0,
+        wait_for_selector: Annotated[Optional[str], Field(max_length=256, description="Optional CSS selector to wait for before capture.")] = None,
+        scroll: Annotated[bool, Field(description="Scroll down to trigger lazy-loaded content before capture.")] = False,
+        dismiss_cookies: Annotated[bool, Field(description="Attempt to dismiss cookie/GDPR banners before capture.")] = True,
     ) -> dict[str, Any]:
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string")
@@ -313,13 +341,21 @@ def create_smartfetch_mcp(
             raise ValueError("viewport must be 'desktop' or 'mobile'")
         if image_format not in ("jpeg", "png"):
             raise ValueError("image_format must be 'jpeg' or 'png'")
+        extra_kwargs: dict[str, Any] = {}
+        if wait_ms or wait_for_selector is not None or scroll or not dismiss_cookies:
+            extra_kwargs.update({
+                "wait_ms": wait_ms,
+                "wait_for_selector": wait_for_selector,
+                "scroll": scroll,
+                "dismiss_cookies": dismiss_cookies,
+            })
         if screenshot_handler is not None:
-            return await screenshot_handler(url.strip(), viewport, full_page, image_format)
+            return await screenshot_handler(url.strip(), viewport, full_page, image_format, **extra_kwargs)
         import asyncio
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
-            lambda: browser_screenshot(url.strip(), viewport=viewport, full_page=full_page, image_format=image_format),
+            lambda: browser_screenshot(url.strip(), viewport=viewport, full_page=full_page, image_format=image_format, **extra_kwargs),
         )
 
     async def inspect_webpage(

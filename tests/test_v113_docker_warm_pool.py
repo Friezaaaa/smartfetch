@@ -61,30 +61,39 @@ class TestWarmChromiumInstanceDockerWarm(unittest.TestCase):
         mock_ws = MagicMock()
         mock_ws_connect.return_value = mock_ws
 
-        # Mock CDP message sequence for wait_ready=True
-        responses = [
-            # 1. Target.createBrowserContext
-            '{"id": 1, "result": {"browserContextId": "ctx-warm-1"}}',
-            # 2. Target.createTarget
-            '{"id": 2, "result": {"targetId": "target-warm-2"}}',
-            # 3. Target.attachToTarget
-            '{"id": 3, "result": {"sessionId": "sess-warm-3"}}',
-            # 4. Page.enable
-            '{"id": 4, "result": {}}',
-            # 5. Page.navigate
-            '{"id": 5, "result": {}}',
-            # 6. Runtime.evaluate (document.readyState)
-            '{"id": 6, "result": {"result": {"value": "complete"}}}',
-            # 7. Runtime.evaluate (responseStatus)
-            '{"id": 7, "result": {"result": {"value": 200}}}',
-            # 8. Runtime.evaluate (HTML)
-            '{"id": 8, "result": {"result": {"value": "<html><body><h1>Warm Page</h1></body></html>"}}}',
-            # 9. Runtime.evaluate (URL)
-            '{"id": 9, "result": {"result": {"value": "https://example.com/warm"}}}',
-            # 10. Target.disposeBrowserContext
-            '{"id": 10, "result": {}}',
-        ]
-        mock_ws.recv.side_effect = responses
+        def make_cdp_mock(*, status_code=200, html="<html><body><h1>Warm Page</h1></body></html>", final_url="https://example.com/warm"):
+            queue = []
+            def on_send(raw):
+                msg = json.loads(raw)
+                cid, method, params = msg["id"], msg["method"], msg.get("params", {})
+                res = {}
+                if method == "Target.createBrowserContext":
+                    res = {"browserContextId": "ctx-warm-1"}
+                elif method == "Target.createTarget":
+                    res = {"targetId": "target-warm-2"}
+                elif method == "Target.attachToTarget":
+                    res = {"sessionId": "sess-warm-3"}
+                elif method == "Runtime.evaluate":
+                    expr = params.get("expression", "")
+                    if expr == "document.readyState":
+                        res = {"result": {"value": "complete"}}
+                    elif "innerText.slice" in expr:
+                        res = {"result": {"value": "warm page"}}
+                    elif "innerText.trim().length" in expr:
+                        res = {"result": {"value": 100}}
+                    elif "responseStatus" in expr:
+                        res = {"result": {"value": status_code}}
+                    elif expr == "document.documentElement.outerHTML":
+                        res = {"result": {"value": html}}
+                    elif expr == "window.location.href":
+                        res = {"result": {"value": final_url}}
+                queue.append(json.dumps({"id": cid, "result": res}))
+            ws = MagicMock()
+            ws.send.side_effect = on_send
+            ws.recv.side_effect = lambda: queue.pop(0)
+            return ws
+
+        mock_ws_connect.return_value = make_cdp_mock()
         mock_extract.return_value = {
             "title": "Warm Page",
             "content": "Warm Page Content",
@@ -111,22 +120,33 @@ class TestWarmChromiumInstanceDockerWarm(unittest.TestCase):
         inst = WarmChromiumInstance(instance_id="warm-404-test")
         inst.ws_endpoint = "ws://127.0.0.1:9222/devtools/browser/test"
 
-        mock_ws = MagicMock()
-        mock_ws_connect.return_value = mock_ws
+        queue = []
+        def on_send(raw):
+            msg = json.loads(raw)
+            cid, method, params = msg["id"], msg["method"], msg.get("params", {})
+            res = {}
+            if method == "Target.createBrowserContext":
+                res = {"browserContextId": "ctx-warm-1"}
+            elif method == "Target.createTarget":
+                res = {"targetId": "target-warm-2"}
+            elif method == "Target.attachToTarget":
+                res = {"sessionId": "sess-warm-3"}
+            elif method == "Runtime.evaluate":
+                expr = params.get("expression", "")
+                if expr == "document.readyState":
+                    res = {"result": {"value": "complete"}}
+                elif "innerText.slice" in expr:
+                    res = {"result": {"value": "blocked"}}
+                elif "innerText.trim().length" in expr:
+                    res = {"result": {"value": 50}}
+                elif "responseStatus" in expr:
+                    res = {"result": {"value": 403}}
+            queue.append(json.dumps({"id": cid, "result": res}))
 
-        responses = [
-            '{"id": 1, "result": {"browserContextId": "ctx-warm-1"}}',
-            '{"id": 2, "result": {"targetId": "target-warm-2"}}',
-            '{"id": 3, "result": {"sessionId": "sess-warm-3"}}',
-            '{"id": 4, "result": {}}',
-            '{"id": 5, "result": {}}',
-            # readyState: complete
-            '{"id": 6, "result": {"result": {"value": "complete"}}}',
-            # responseStatus: 403 Forbidden
-            '{"id": 7, "result": {"result": {"value": 403}}}',
-            '{"id": 8, "result": {}}',
-        ]
-        mock_ws.recv.side_effect = responses
+        mock_ws = MagicMock()
+        mock_ws.send.side_effect = on_send
+        mock_ws.recv.side_effect = lambda: queue.pop(0)
+        mock_ws_connect.return_value = mock_ws
 
         with self.assertRaises(RuntimeError) as ctx:
             inst.render(

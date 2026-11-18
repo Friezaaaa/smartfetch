@@ -399,6 +399,10 @@ class RemoteBrowserClient:
         timeout: float = 15.0,
         max_chars: int = 20000,
         request_id: str | None = None,
+        wait_ms: int = 0,
+        wait_for_selector: str | None = None,
+        scroll: bool = False,
+        dismiss_cookies: bool = True,
         _url_validator=None,
     ) -> dict[str, Any]:
         """Render a target URL on the isolated worker, failing closed on boundary error."""
@@ -444,11 +448,19 @@ class RemoteBrowserClient:
 
         # 5. Construct request payload
         render_timeout = min(timeout, self.config.render_timeout)
-        payload = {
+        payload: dict[str, Any] = {
             "url": safe_url,
             "timeout_seconds": render_timeout,
             "max_chars": max_chars,
         }
+        if wait_ms:
+            payload["wait_ms"] = max(0, min(5000, int(wait_ms)))
+        if wait_for_selector:
+            payload["wait_for_selector"] = str(wait_for_selector)[:256]
+        if scroll:
+            payload["scroll"] = True
+        if not dismiss_cookies:
+            payload["dismiss_cookies"] = False
         payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
         base_url = self.config.worker_url.rstrip("/")
@@ -526,6 +538,10 @@ class RemoteBrowserClient:
         image_format: str = "jpeg",
         timeout: float = 18.0,
         request_id: str | None = None,
+        wait_ms: int = 0,
+        wait_for_selector: str | None = None,
+        scroll: bool = False,
+        dismiss_cookies: bool = True,
         _url_validator=None,
     ) -> dict[str, Any]:
         """Capture screenshot on the isolated worker, failing closed on boundary error."""
@@ -571,13 +587,21 @@ class RemoteBrowserClient:
 
         # 5. Construct request payload
         render_timeout = min(timeout, self.config.render_timeout)
-        payload = {
+        payload: dict[str, Any] = {
             "url": safe_url,
             "timeout_seconds": render_timeout,
             "viewport": viewport,
             "full_page": full_page,
             "image_format": image_format,
         }
+        if wait_ms:
+            payload["wait_ms"] = max(0, min(5000, int(wait_ms)))
+        if wait_for_selector:
+            payload["wait_for_selector"] = str(wait_for_selector)[:256]
+        if scroll:
+            payload["scroll"] = True
+        if not dismiss_cookies:
+            payload["dismiss_cookies"] = False
         payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
         base_url = self.config.worker_url.rstrip("/")

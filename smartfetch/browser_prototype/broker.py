@@ -1,11 +1,12 @@
 """Local-only bounded proxy broker; deliberately not wired into the service."""
 
+import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import select
 import socket
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from .policy import DestinationPolicy, PolicyError
 from .resolver import resolve_system
@@ -189,10 +190,42 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if remaining <= 0:
                 self._reply(503)
                 return None
-            upstream = broker.connector(ip, target.port, min(remaining, 2.0))
-            peer = upstream.getpeername()[0]
-            broker.policy.verify_peer(ip, peer)
-            upstream.settimeout(min(remaining, 2.0))
+
+            proxy_cfg = broker._parsed_upstream_proxy
+            if proxy_cfg is not None:
+                proxy_host, proxy_port, proxy_auth_header = proxy_cfg
+                upstream = broker.connector(proxy_host, proxy_port, min(remaining, 2.0))
+                upstream.settimeout(min(remaining, 2.0))
+                if connect:
+                    connect_req = (
+                        f"CONNECT {target.host}:{target.port} HTTP/1.1\r\n"
+                        f"Host: {target.host}:{target.port}\r\n"
+                    )
+                    if proxy_auth_header:
+                        connect_req += f"Proxy-Authorization: {proxy_auth_header}\r\n"
+                    connect_req += "\r\n"
+                    upstream.sendall(connect_req.encode("ascii"))
+                    resp_buf = bytearray()
+                    while b"\r\n\r\n" not in resp_buf:
+                        rem = broker.total_deadline - time.monotonic()
+                        if rem <= 0:
+                            raise TimeoutError()
+                        upstream.settimeout(min(rem, 2.0))
+                        chunk = upstream.recv(1024)
+                        if not chunk:
+                            raise OSError("Upstream proxy closed during CONNECT")
+                        resp_buf.extend(chunk)
+                        if len(resp_buf) > 8192:
+                            raise OSError("Upstream proxy CONNECT response too large")
+                    status_line = resp_buf.split(b"\r\n", 1)[0].decode("ascii", errors="replace")
+                    parts = status_line.split(" ", 2)
+                    if len(parts) < 2 or not parts[1].startswith("200"):
+                        raise OSError(f"Upstream proxy CONNECT rejected: {status_line}")
+            else:
+                upstream = broker.connector(ip, target.port, min(remaining, 2.0))
+                peer = upstream.getpeername()[0]
+                broker.policy.verify_peer(ip, peer)
+                upstream.settimeout(min(remaining, 2.0))
         except PolicyError:
             if upstream is not None:
                 upstream.close()
@@ -272,9 +305,19 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             host = target.host
             if target.port != 80:
                 host += f":{target.port}"
-            request = (
-                f"GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
-            ).encode("ascii")
+            proxy_cfg = self.broker._parsed_upstream_proxy
+            if proxy_cfg is not None:
+                _, _, proxy_auth_header = proxy_cfg
+                req_target = f"http://{host}{path}"
+                req_str = f"GET {req_target} HTTP/1.1\r\nHost: {host}\r\n"
+                if proxy_auth_header:
+                    req_str += f"Proxy-Authorization: {proxy_auth_header}\r\n"
+                req_str += "Connection: close\r\n\r\n"
+                request = req_str.encode("ascii")
+            else:
+                request = (
+                    f"GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+                ).encode("ascii")
             if len(request) > self.broker.max_request_bytes:
                 self._reply(431)
                 return
@@ -338,7 +381,8 @@ class Broker:
                  max_request_bytes: int = 8192,
                  max_tunnel_bytes_each_direction: int = 2_000_000,
                  max_connections: int = 16, max_requests: int = 32,
-                 max_operation_bytes: int = 4_000_000):
+                 max_operation_bytes: int = 4_000_000,
+                 upstream_proxy_url: str | None = None):
         if (max_request_bytes < 256 or max_tunnel_bytes_each_direction < 1 or
                 max_connections < 1 or max_requests < 1 or
                 max_operation_bytes < 1):
@@ -351,6 +395,12 @@ class Broker:
         self.max_tunnel_bytes_each_direction = max_tunnel_bytes_each_direction
         self.max_requests = max_requests
         self.max_operation_bytes = max_operation_bytes
+        self.upstream_proxy_url = (
+            upstream_proxy_url.strip()
+            if isinstance(upstream_proxy_url, str) and upstream_proxy_url.strip()
+            else None
+        )
+        self._parsed_upstream_proxy = self._parse_upstream_proxy(self.upstream_proxy_url)
         self._slots = threading.BoundedSemaphore(max_connections)
         self._lock = threading.Lock()
         self._closing = threading.Event()
@@ -366,6 +416,22 @@ class Broker:
         self.operation_bytes = 0
         self._server = None
         self._serve_thread = None
+
+    @staticmethod
+    def _parse_upstream_proxy(proxy_url: str | None) -> tuple[str, int, str | None] | None:
+        if not proxy_url:
+            return None
+        parsed = urlsplit(proxy_url)
+        if parsed.scheme.lower() != "http" or not parsed.hostname:
+            raise ValueError("upstream_proxy_url must be an http://[user:pass@]host:port URL")
+        port = parsed.port or 8080
+        auth_header: str | None = None
+        if parsed.username is not None or parsed.password is not None:
+            user = unquote(parsed.username or "")
+            pwd = unquote(parsed.password or "")
+            token = base64.b64encode(f"{user}:{pwd}".encode("utf-8")).decode("ascii")
+            auth_header = f"Basic {token}"
+        return parsed.hostname, port, auth_header
 
     def _count(self, field: str):
         with self._lock:

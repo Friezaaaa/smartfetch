@@ -61,6 +61,10 @@ def smart_fetch(
     render_mode: str = "auto",
     no_cache: bool = False,
     include_html: bool = False,
+    wait_ms: int = 0,
+    wait_for_selector: str | None = None,
+    scroll: bool = False,
+    dismiss_cookies: bool = True,
     _browser_limiter=None,
 ) -> dict:
     started = time.perf_counter()
@@ -68,6 +72,7 @@ def smart_fetch(
     http_error = None
     http_diagnostics = None
     http_attempt_state = {}
+    has_custom_capture = bool(wait_ms or wait_for_selector is not None or scroll or not dismiss_cookies)
 
     # Resolve render mode with backward compatibility for force_browser
     mode_lower = (render_mode or "auto").lower()
@@ -86,7 +91,7 @@ def smart_fetch(
     )
 
     # 1. Cache lookup
-    if not no_cache:
+    if not no_cache and not has_custom_capture:
         cached = get_cache_provider().get(cache_key)
         if cached is not None and cached.get("success"):
             obs = ObservabilityRecord(
@@ -330,7 +335,15 @@ def smart_fetch(
         raise RuntimeError("SmartFetch browser escalation limit reached for this batch")
     browser_start = time.perf_counter()
     try:
-        page = browser_fetch(url)
+        bf_kwargs: dict[str, object] = {}
+        if has_custom_capture:
+            bf_kwargs.update({
+                "wait_ms": wait_ms,
+                "wait_for_selector": wait_for_selector,
+                "scroll": scroll,
+                "dismiss_cookies": dismiss_cookies,
+            })
+        page = browser_fetch(url, **bf_kwargs)
         obs.browser_latency_ms = round((time.perf_counter() - browser_start) * 1000, 2)
         obs.retrieval_tier = "browser"
         try:
@@ -377,7 +390,7 @@ def smart_fetch(
         }
         if include_html:
             payload['html'] = page.get('html', '')
-        if not no_cache and page.get('status_code') == 200:
+        if not no_cache and not has_custom_capture and page.get('status_code') == 200:
             get_cache_provider().set(cache_key, payload)
         return shape_output(payload, max_chars)
     except Exception as browser_error:

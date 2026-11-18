@@ -47,22 +47,41 @@ class ScreenshotUnitTests(unittest.TestCase):
 
         fake_image = base64.b64encode(b"FAKE_IMAGE_DATA_12345").decode("ascii")
 
-        # Mock incoming CDP responses in sequential order
-        responses = [
-            '{"id": 1, "result": {"browserContextId": "ctx-123"}}',
-            '{"id": 2, "result": {"targetId": "target-456"}}',
-            '{"id": 3, "result": {"sessionId": "sess-789"}}',
-            '{"id": 4, "result": {}}',  # Page.enable
-            '{"id": 5, "result": {}}',  # Emulation.setDeviceMetricsOverride
-            '{"id": 6, "result": {}}',  # Page.navigate
-            '{"id": 7, "result": {"result": {"value": "complete"}}}',  # readyState
-            '{"id": 8, "result": {"result": {"value": 200}}}',  # responseStatus
-            f'{{"id": 9, "result": {{"data": "{fake_image}"}}}}',  # Page.captureScreenshot
-            '{"id": 10, "result": {"result": {"value": "https://example.com"}}}',  # url
-            '{"id": 11, "result": {"result": {"value": "Example Title"}}}',  # title
-            '{"id": 12, "result": {}}',  # Target.disposeBrowserContext
-        ]
-        mock_ws.recv.side_effect = responses
+        def make_ss_ws(img_b64):
+            queue = []
+            def on_send(raw):
+                msg = json.loads(raw)
+                cid, method, params = msg["id"], msg["method"], msg.get("params", {})
+                res = {}
+                if method == "Target.createBrowserContext":
+                    res = {"browserContextId": "ctx-123"}
+                elif method == "Target.createTarget":
+                    res = {"targetId": "target-456"}
+                elif method == "Target.attachToTarget":
+                    res = {"sessionId": "sess-789"}
+                elif method == "Page.captureScreenshot":
+                    res = {"data": img_b64}
+                elif method == "Runtime.evaluate":
+                    expr = params.get("expression", "")
+                    if expr == "document.readyState":
+                        res = {"result": {"value": "complete"}}
+                    elif "innerText.slice" in expr:
+                        res = {"result": {"value": "example"}}
+                    elif "innerText.trim().length" in expr:
+                        res = {"result": {"value": 100}}
+                    elif "responseStatus" in expr:
+                        res = {"result": {"value": 200}}
+                    elif expr == "window.location.href":
+                        res = {"result": {"value": "https://example.com"}}
+                    elif "document.title" in expr:
+                        res = {"result": {"value": "Example Title"}}
+                queue.append(json.dumps({"id": cid, "result": res}))
+            ws = MagicMock()
+            ws.send.side_effect = on_send
+            ws.recv.side_effect = lambda: queue.pop(0)
+            return ws
+
+        mock_ws_connect.return_value = make_ss_ws(fake_image)
 
         res = inst.screenshot(
             "https://example.com",
@@ -86,24 +105,36 @@ class ScreenshotUnitTests(unittest.TestCase):
         inst = WarmChromiumInstance(instance_id="test-screenshot-cap")
         inst.ws_endpoint = "ws://127.0.0.1:9222/devtools/browser/abc"
 
-        mock_ws = MagicMock()
-        mock_ws_connect.return_value = mock_ws
-
         huge_payload = base64.b64encode(b"X" * 3_000_001).decode("ascii")
+        queue = []
+        def on_send(raw):
+            msg = json.loads(raw)
+            cid, method, params = msg["id"], msg["method"], msg.get("params", {})
+            res = {}
+            if method == "Target.createBrowserContext":
+                res = {"browserContextId": "ctx-123"}
+            elif method == "Target.createTarget":
+                res = {"targetId": "target-456"}
+            elif method == "Target.attachToTarget":
+                res = {"sessionId": "sess-789"}
+            elif method == "Page.captureScreenshot":
+                res = {"data": huge_payload}
+            elif method == "Runtime.evaluate":
+                expr = params.get("expression", "")
+                if expr == "document.readyState":
+                    res = {"result": {"value": "complete"}}
+                elif "innerText.slice" in expr:
+                    res = {"result": {"value": "example"}}
+                elif "innerText.trim().length" in expr:
+                    res = {"result": {"value": 100}}
+                elif "responseStatus" in expr:
+                    res = {"result": {"value": 200}}
+            queue.append(json.dumps({"id": cid, "result": res}))
 
-        responses = [
-            '{"id": 1, "result": {"browserContextId": "ctx-123"}}',
-            '{"id": 2, "result": {"targetId": "target-456"}}',
-            '{"id": 3, "result": {"sessionId": "sess-789"}}',
-            '{"id": 4, "result": {}}',
-            '{"id": 5, "result": {}}',
-            '{"id": 6, "result": {}}',
-            '{"id": 7, "result": {"result": {"value": "complete"}}}',
-            '{"id": 8, "result": {"result": {"value": 200}}}',
-            f'{{"id": 9, "result": {{"data": "{huge_payload}"}}}}',
-            '{"id": 10, "result": {}}',
-        ]
-        mock_ws.recv.side_effect = responses
+        mock_ws = MagicMock()
+        mock_ws.send.side_effect = on_send
+        mock_ws.recv.side_effect = lambda: queue.pop(0)
+        mock_ws_connect.return_value = mock_ws
 
         with self.assertRaises(RuntimeError) as ctx:
             inst.screenshot(

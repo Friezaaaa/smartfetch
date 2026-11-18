@@ -71,6 +71,10 @@ def process_control_job(
 
     try:
         relay.set_active_job(socket_path, op_id, deadline)
+        wait_ms = int(req.get("wait_ms", 0) or 0)
+        wait_for_selector = req.get("wait_for_selector")
+        scroll = bool(req.get("scroll", False))
+        dismiss_cookies = bool(req.get("dismiss_cookies", True))
         if action == "screenshot":
             viewport = str(req.get("viewport", "desktop"))
             full_page = bool(req.get("full_page", False))
@@ -83,6 +87,10 @@ def process_control_job(
                 full_page=full_page,
                 image_format=image_format,
                 quality=quality,
+                wait_ms=wait_ms,
+                wait_for_selector=wait_for_selector,
+                scroll=scroll,
+                dismiss_cookies=dismiss_cookies,
             )
         else:
             max_chars = int(req.get("max_chars", 20000))
@@ -91,6 +99,10 @@ def process_control_job(
                 deadline=deadline,
                 max_chars=max_chars,
                 wait_ready=True,
+                wait_ms=wait_ms,
+                wait_for_selector=wait_for_selector,
+                scroll=scroll,
+                dismiss_cookies=dismiss_cookies,
             )
         return {
             "ok": True,

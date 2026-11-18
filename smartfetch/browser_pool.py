@@ -28,6 +28,215 @@ from smartfetch.limits import normalize_max_chars, shape_output
 
 _LOGGER = logging.getLogger("smartfetch.browser_pool")
 
+DEFAULT_STEALTH_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
+
+_STEALTH_NEW_DOCUMENT_SCRIPT = """(() => {
+  try {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true });
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'], configurable: true });
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => [
+        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+        { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' }
+      ],
+      configurable: true
+    });
+    if (!window.chrome) {
+      Object.defineProperty(window, 'chrome', { value: { runtime: {} }, configurable: true });
+    } else if (!window.chrome.runtime) {
+      window.chrome.runtime = {};
+    }
+  } catch (_) {}
+})();"""
+
+_DISMISS_COOKIES_SCRIPT = """(() => {
+  try {
+    const clickRe = /^(accept( all)?|accept cookies|allow all|agree|i agree|got it|ok|consent|continue)$/i;
+    const btns = document.querySelectorAll('button, [role="button"], a[role="button"], input[type="button"], input[type="submit"]');
+    for (const el of btns) {
+      const txt = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim();
+      if (txt && txt.length <= 32 && clickRe.test(txt)) {
+        const inBanner = el.closest('[id*="cookie" i], [class*="cookie" i], [id*="consent" i], [class*="consent" i], [id*="gdpr" i], [class*="gdpr" i], [aria-label*="cookie" i], [aria-label*="consent" i]');
+        if (inBanner) { try { el.click(); } catch (_) {} }
+      }
+    }
+    const selectors = [
+      '#onetrust-banner-sdk', '.onetrust-pc-dark-filter', '#CybotCookiebotDialog',
+      '#cookie-banner', '.cookie-banner', '#cookie-consent', '.cookie-consent',
+      '[id*="cookie-notice" i]', '[class*="cookie-notice" i]', '[class*="gdpr" i]'
+    ];
+    for (const sel of selectors) {
+      for (const node of document.querySelectorAll(sel)) {
+        if (!node || node.matches('main, article, body, html') || node.querySelector('main, article')) continue;
+        node.style.setProperty('display', 'none', 'important');
+      }
+    }
+  } catch (_) {}
+})();"""
+
+_SCROLL_STEP_SCRIPT = """(() => {
+  try {
+    const h = Math.max(document.body ? document.body.scrollHeight : 0, document.documentElement ? document.documentElement.scrollHeight : 0);
+    window.scrollTo(0, Math.min(h, Math.floor(h * 0.45)));
+    window.scrollTo(0, Math.min(h, Math.floor(h * 0.9)));
+  } catch (_) {}
+})();"""
+
+_CF_CHALLENGE_MARKERS = ("just a moment", "checking your browser", "attention required")
+
+
+def normalize_capture_options(
+    *,
+    wait_ms: int = 0,
+    wait_for_selector: str | None = None,
+    scroll: bool = False,
+    dismiss_cookies: bool = True,
+) -> tuple[int, str | None, bool, bool]:
+    """Validates and bounds optional pre-capture browser controls."""
+    try:
+        bounded_wait_ms = max(0, min(5000, int(wait_ms or 0)))
+    except (TypeError, ValueError):
+        bounded_wait_ms = 0
+
+    clean_selector: str | None = None
+    if isinstance(wait_for_selector, str):
+        stripped = wait_for_selector.strip()
+        if stripped:
+            clean_selector = stripped[:256]
+
+    return bounded_wait_ms, clean_selector, bool(scroll), bool(dismiss_cookies)
+
+
+def _apply_stealth_overrides(page_send: Any) -> None:
+    """Applies Desktop Chrome UA and navigator/window stealth overrides to a CDP page session."""
+    page_send(
+        "Network.setUserAgentOverride",
+        {
+            "userAgent": DEFAULT_STEALTH_USER_AGENT,
+            "acceptLanguage": "en-US,en;q=0.9",
+            "platform": "Win32",
+        },
+    )
+    page_send(
+        "Page.addScriptToEvaluateOnNewDocument",
+        {"source": _STEALTH_NEW_DOCUMENT_SCRIPT},
+    )
+
+
+def _smart_settle_page(
+    page_send: Any,
+    deadline: float,
+    *,
+    wait_ms: int = 0,
+    wait_for_selector: str | None = None,
+    scroll: bool = False,
+    dismiss_cookies: bool = True,
+) -> None:
+    """Waits for readyState, Cloudflare JS challenge resolution, DOM stability, and pre-capture actions."""
+    # 1. Poll document.readyState
+    while time.monotonic() < deadline:
+        time.sleep(0.1)
+        try:
+            ready_eval = page_send(
+                "Runtime.evaluate",
+                {"expression": "document.readyState", "returnByValue": True},
+            )
+            ready = ready_eval.get("result", {}).get("value")
+            if ready in {"interactive", "complete"}:
+                break
+        except Exception:
+            pass
+
+    # 2. Cloudflare JS challenge auto-resolution check (up to 4.5s within deadline)
+    cf_deadline = min(deadline, time.monotonic() + 4.5)
+    while time.monotonic() < cf_deadline:
+        try:
+            cf_eval = page_send(
+                "Runtime.evaluate",
+                {
+                    "expression": "(document.title + ' ' + (document.body ? document.body.innerText.slice(0, 400) : '')).toLowerCase()",
+                    "returnByValue": True,
+                },
+            )
+            snippet = str(cf_eval.get("result", {}).get("value") or "")
+            if not any(marker in snippet for marker in _CF_CHALLENGE_MARKERS):
+                break
+        except Exception:
+            break
+        rem = cf_deadline - time.monotonic()
+        if rem <= 0:
+            break
+        time.sleep(min(0.3, rem))
+
+    # 3. Smart DOM text stability poll (two consecutive non-empty checks, capped at 2.5s)
+    stable_deadline = min(deadline, time.monotonic() + 2.5)
+    prev_len: int | None = None
+    while time.monotonic() < stable_deadline:
+        try:
+            len_eval = page_send(
+                "Runtime.evaluate",
+                {
+                    "expression": "document.body ? document.body.innerText.trim().length : 0",
+                    "returnByValue": True,
+                },
+            )
+            cur_len = int(len_eval.get("result", {}).get("value") or 0)
+            if cur_len > 0 and prev_len is not None and cur_len == prev_len:
+                break
+            prev_len = cur_len
+        except Exception:
+            break
+        rem = stable_deadline - time.monotonic()
+        if rem <= 0:
+            break
+        time.sleep(min(0.15, rem))
+
+    # 4. Optional wait_for_selector
+    if wait_for_selector:
+        sel_expr = f"document.querySelector({json.dumps(wait_for_selector)}) !== null"
+        while time.monotonic() < deadline:
+            try:
+                sel_eval = page_send(
+                    "Runtime.evaluate",
+                    {"expression": sel_expr, "returnByValue": True},
+                )
+                if sel_eval.get("result", {}).get("value") is True:
+                    break
+            except Exception:
+                break
+            rem = deadline - time.monotonic()
+            if rem <= 0:
+                break
+            time.sleep(min(0.15, rem))
+
+    # 5. Optional wait_ms
+    if wait_ms > 0:
+        rem = deadline - time.monotonic()
+        if rem > 0:
+            time.sleep(min(wait_ms / 1000.0, rem))
+
+    # 6. Optional lazy-load scroll + 250ms settle
+    if scroll:
+        try:
+            page_send("Runtime.evaluate", {"expression": _SCROLL_STEP_SCRIPT, "returnByValue": True})
+            rem = deadline - time.monotonic()
+            if rem > 0:
+                time.sleep(min(0.25, rem))
+        except Exception:
+            pass
+
+    # 7. Optional cookie/GDPR banner dismissal
+    if dismiss_cookies:
+        try:
+            page_send("Runtime.evaluate", {"expression": _DISMISS_COOKIES_SCRIPT, "returnByValue": True})
+        except Exception:
+            pass
+
 DEFAULT_POOL_SIZE = int(os.getenv("BROWSER_POOL_SIZE", "1"))
 MAX_JOBS_PER_INSTANCE = int(os.getenv("BROWSER_POOL_MAX_JOBS", "100"))
 MAX_INSTANCE_AGE_SECONDS = float(os.getenv("BROWSER_POOL_MAX_AGE_SECONDS", "1800.0"))  # 30 minutes
@@ -107,6 +316,8 @@ class WarmChromiumInstance:
             "--headless=new",
             "--disable-gpu",
             "--disable-dev-shm-usage",
+            "--disable-blink-features=AutomationControlled",
+            "--window-size=1280,800",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-background-networking",
@@ -216,10 +427,21 @@ class WarmChromiumInstance:
         deadline: float,
         max_chars: int = 20000,
         wait_ready: bool = False,
+        wait_ms: int = 0,
+        wait_for_selector: str | None = None,
+        scroll: bool = False,
+        dismiss_cookies: bool = True,
     ) -> dict[str, Any]:
         """Renders the given URL in a dedicated ephemeral BrowserContext."""
         if not self.ws_endpoint:
             raise RuntimeError("Warm Chromium instance is not running")
+
+        bounded_wait_ms, clean_selector, do_scroll, do_dismiss_cookies = normalize_capture_options(
+            wait_ms=wait_ms,
+            wait_for_selector=wait_for_selector,
+            scroll=scroll,
+            dismiss_cookies=dismiss_cookies,
+        )
 
         start_time = time.monotonic()
         remaining = deadline - start_time
@@ -295,23 +517,20 @@ class WarmChromiumInstance:
                         return data.get("result", {})
 
             page_send("Page.enable")
+            if wait_ready:
+                _apply_stealth_overrides(page_send)
             page_send("Page.navigate", {"url": url})
 
             status_code = 200
             if wait_ready:
-                while time.monotonic() < deadline:
-                    time.sleep(0.1)
-                    try:
-                        ready_eval = page_send(
-                            "Runtime.evaluate",
-                            {"expression": "document.readyState", "returnByValue": True},
-                        )
-                        ready = ready_eval.get("result", {}).get("value")
-                        if ready in {"interactive", "complete"}:
-                            break
-                    except Exception:
-                        pass
-                time.sleep(0.3)
+                _smart_settle_page(
+                    page_send,
+                    deadline,
+                    wait_ms=bounded_wait_ms,
+                    wait_for_selector=clean_selector,
+                    scroll=do_scroll,
+                    dismiss_cookies=do_dismiss_cookies,
+                )
                 try:
                     status_eval = page_send(
                         "Runtime.evaluate",
@@ -394,10 +613,21 @@ class WarmChromiumInstance:
         full_page: bool = False,
         image_format: str = "jpeg",
         quality: int = 82,
+        wait_ms: int = 0,
+        wait_for_selector: str | None = None,
+        scroll: bool = False,
+        dismiss_cookies: bool = True,
     ) -> dict[str, Any]:
         """Capture screenshot of given URL in a dedicated ephemeral BrowserContext."""
         if not self.ws_endpoint:
             raise RuntimeError("Warm Chromium instance is not running")
+
+        bounded_wait_ms, clean_selector, do_scroll, do_dismiss_cookies = normalize_capture_options(
+            wait_ms=wait_ms,
+            wait_for_selector=wait_for_selector,
+            scroll=scroll,
+            dismiss_cookies=dismiss_cookies,
+        )
 
         start_time = time.monotonic()
         remaining = deadline - start_time
@@ -468,6 +698,7 @@ class WarmChromiumInstance:
                         return data.get("result", {})
 
             page_send("Page.enable")
+            _apply_stealth_overrides(page_send)
 
             # Configure viewport via Emulation.setDeviceMetricsOverride
             vp_mode = (viewport or "desktop").lower()
@@ -495,21 +726,14 @@ class WarmChromiumInstance:
 
             page_send("Page.navigate", {"url": url})
 
-            # Wait for document.readyState
-            while time.monotonic() < deadline:
-                time.sleep(0.1)
-                try:
-                    ready_eval = page_send(
-                        "Runtime.evaluate",
-                        {"expression": "document.readyState", "returnByValue": True},
-                    )
-                    ready = ready_eval.get("result", {}).get("value")
-                    if ready in {"interactive", "complete"}:
-                        break
-                except Exception:
-                    pass
-
-            time.sleep(0.4)
+            _smart_settle_page(
+                page_send,
+                deadline,
+                wait_ms=bounded_wait_ms,
+                wait_for_selector=clean_selector,
+                scroll=do_scroll,
+                dismiss_cookies=do_dismiss_cookies,
+            )
 
             # Check HTTP status
             status_code = 200

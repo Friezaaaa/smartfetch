@@ -1,9 +1,17 @@
+import ipaddress
 import os
 import socket
 import time
 from urllib.parse import urljoin, urlparse
 
 import requests
+
+try:
+    from curl_cffi import CurlOpt
+    from curl_cffi import requests as curl_requests
+except ImportError:  # pragma: no cover - optional fallback if curl_cffi unavailable
+    CurlOpt = None
+    curl_requests = None
 
 from .diagnostics import (
     attach_diagnostics,
@@ -13,6 +21,7 @@ from .diagnostics import (
 from .security import (
     DNSResolutionError,
     install_dns_rebinding_protection,
+    resolve_and_pin_public_url,
     validate_public_url,
 )
 
@@ -42,16 +51,76 @@ SESSION.headers.update({
 install_dns_rebinding_protection(SESSION)
 
 
+def _format_curl_resolve_entry(hostname: str, port: int, addresses: tuple[str, ...]) -> list[str]:
+    """Builds a libcurl CURLOPT_RESOLVE list pinning validated public IP addresses."""
+    ip_addrs: list[str] = []
+    for addr in addresses:
+        try:
+            ip_obj = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        ip_addrs.append(f'[{ip_obj.compressed}]' if ip_obj.version == 6 else ip_obj.compressed)
+    if not ip_addrs:
+        return []
+    return [f'{hostname}:{port}:{",".join(ip_addrs)}']
+
+
+def _curl_cffi_get(url: str):
+    """Performs a Chrome TLS-impersonating GET with strict SSRF IP-pinning."""
+    pinned = resolve_and_pin_public_url(url)
+    curl_opts = {}
+    if CurlOpt is not None:
+        resolve_entries = _format_curl_resolve_entry(pinned.hostname, pinned.port, pinned.addresses)
+        if resolve_entries:
+            curl_opts[CurlOpt.RESOLVE] = resolve_entries
+
+    return curl_requests.get(
+        pinned.url,
+        impersonate='chrome',
+        headers={
+            'Accept': SESSION.headers.get('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'),
+            'Accept-Language': SESSION.headers.get('Accept-Language', 'en-US,en;q=0.9'),
+            'Upgrade-Insecure-Requests': '1',
+        },
+        allow_redirects=False,
+        proxies={},
+        timeout=TIMEOUT,
+        stream=True,
+        curl_options=curl_opts or None,
+    )
+
+
+def _should_use_curl_cffi() -> bool:
+    """Use curl_cffi only when SESSION.get and SESSION.send are not mocked in unit tests."""
+    if curl_requests is None:
+        return False
+    return (
+        getattr(SESSION.get, '__func__', None) is requests.Session.get
+        and getattr(SESSION.send, '__func__', None) is requests.Session.send
+    )
+
+
 def _request_with_retry(url: str):
+    use_curl = _should_use_curl_cffi()
+    transient_excs: tuple[type[BaseException], ...] = (requests.ConnectionError, requests.Timeout)
+    if use_curl:
+        transient_excs = transient_excs + (
+            curl_requests.exceptions.ConnectionError,
+            curl_requests.exceptions.Timeout,
+        )
+
     for attempt in range(2):
         try:
-            response = SESSION.get(
-                url,
-                allow_redirects=False,
-                timeout=TIMEOUT,
-                stream=True,
-            )
-        except (requests.ConnectionError, requests.Timeout):
+            if use_curl:
+                response = _curl_cffi_get(url)
+            else:
+                response = SESSION.get(
+                    url,
+                    allow_redirects=False,
+                    timeout=TIMEOUT,
+                    stream=True,
+                )
+        except transient_excs:
             if attempt == 0:
                 continue
             raise
@@ -65,9 +134,15 @@ def _request_with_retry(url: str):
 
 
 def _network_failure(error: BaseException) -> tuple[str, str]:
-    if isinstance(error, requests.exceptions.SSLError):
+    ssl_types: tuple[type[BaseException], ...] = (requests.exceptions.SSLError,)
+    timeout_types: tuple[type[BaseException], ...] = (requests.Timeout,)
+    if curl_requests is not None:
+        ssl_types = ssl_types + (curl_requests.exceptions.SSLError,)
+        timeout_types = timeout_types + (curl_requests.exceptions.Timeout,)
+
+    if isinstance(error, ssl_types):
         return 'tls', 'tls'
-    if isinstance(error, requests.Timeout):
+    if isinstance(error, timeout_types):
         return 'connect', 'timeout'
     current = error
     seen = set()
@@ -116,18 +191,31 @@ def http_fetch(url: str, *, _attempt_state=None) -> dict:
         try:
             response, retried = _request_with_retry(current)
             retry_attempted = retry_attempted or retried
+        except (DNSResolutionError, ValueError) as error:
+            is_dns = isinstance(error, DNSResolutionError)
+            _annotate_and_raise(error, make_diagnostics(
+                url,
+                'http',
+                'dns' if is_dns else 'validate',
+                'dns' if is_dns else 'policy_rejection',
+                http_attempted=True,
+                http_retry_attempted=retry_attempted,
+            ))
         except Exception as error:
             phase, failure_code = _network_failure(error)
+            retry_types: tuple[type[BaseException], ...] = (requests.ConnectionError, requests.Timeout)
+            if curl_requests is not None:
+                retry_types = retry_types + (
+                    curl_requests.exceptions.ConnectionError,
+                    curl_requests.exceptions.Timeout,
+                )
             _annotate_and_raise(error, make_diagnostics(
                 url,
                 'http',
                 phase,
                 failure_code,
                 http_attempted=True,
-                http_retry_attempted=isinstance(
-                    error,
-                    (requests.ConnectionError, requests.Timeout),
-                ),
+                http_retry_attempted=isinstance(error, retry_types),
             ))
 
         if response.status_code in {301, 302, 303, 307, 308}:

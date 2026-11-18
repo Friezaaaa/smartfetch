@@ -86,6 +86,7 @@ class BrowserDaemonConfig:
     ssl_cert: str | None = None
     ssl_key: str | None = None
     ssl_ca: str | None = None
+    upstream_proxy_url: str | None = None
     max_request_bytes: int = _MAX_REQUEST_BYTES
     max_response_bytes: int = 10_485_760
     prewarm: bool = False
@@ -109,6 +110,7 @@ class BrowserDaemonConfig:
             ssl_cert=environ.get("BROWSER_WORKER_SSL_CERT", "").strip() or None,
             ssl_key=environ.get("BROWSER_WORKER_SSL_KEY", "").strip() or None,
             ssl_ca=environ.get("BROWSER_WORKER_SSL_CA", "").strip() or None,
+            upstream_proxy_url=environ.get("BROWSER_UPSTREAM_PROXY", "").strip() or None,
             prewarm=prewarm,
         )
 
@@ -242,11 +244,19 @@ class WarmPoolWorkerRunner(WorkerRunner):
                     full_page=bool(kwargs.get("full_page", False)),
                     image_format=kwargs.get("image_format", "jpeg"),
                     quality=int(kwargs.get("quality", 82)),
+                    wait_ms=int(kwargs.get("wait_ms", 0) or 0),
+                    wait_for_selector=kwargs.get("wait_for_selector"),
+                    scroll=bool(kwargs.get("scroll", False)),
+                    dismiss_cookies=bool(kwargs.get("dismiss_cookies", True)),
                 )
             return instance.render(
                 url,
                 deadline=deadline,
                 max_chars=max_chars,
+                wait_ms=int(kwargs.get("wait_ms", 0) or 0),
+                wait_for_selector=kwargs.get("wait_for_selector"),
+                scroll=bool(kwargs.get("scroll", False)),
+                dismiss_cookies=bool(kwargs.get("dismiss_cookies", True)),
             )
         finally:
             pool.release(instance)
@@ -766,6 +776,18 @@ class BrowserWorkerHandler(BaseHTTPRequestHandler):
 
         try:
             self.daemon_server._active_jobs += 1
+            from smartfetch.browser_pool import normalize_capture_options
+
+            raw_wait_ms = req_data.get("wait_ms", 0)
+            raw_selector = req_data.get("wait_for_selector")
+            raw_scroll = req_data.get("scroll", False)
+            raw_dismiss = req_data.get("dismiss_cookies", True)
+            wait_ms, wait_for_selector, scroll, dismiss_cookies = normalize_capture_options(
+                wait_ms=raw_wait_ms,
+                wait_for_selector=raw_selector,
+                scroll=raw_scroll,
+                dismiss_cookies=raw_dismiss,
+            )
             if self.path == "/v1/screenshot":
                 viewport = str(req_data.get("viewport", "desktop"))
                 if viewport not in ("desktop", "mobile"):
@@ -782,14 +804,36 @@ class BrowserWorkerHandler(BaseHTTPRequestHandler):
                     full_page=full_page,
                     image_format=image_format,
                     quality=quality,
+                    wait_ms=wait_ms,
+                    wait_for_selector=wait_for_selector,
+                    scroll=scroll,
+                    dismiss_cookies=dismiss_cookies,
                 )
             else:
-                self._handle_render_job(safe_url, timeout_seconds=timeout_seconds, max_chars=max_chars)
+                self._handle_render_job(
+                    safe_url,
+                    timeout_seconds=timeout_seconds,
+                    max_chars=max_chars,
+                    wait_ms=wait_ms,
+                    wait_for_selector=wait_for_selector,
+                    scroll=scroll,
+                    dismiss_cookies=dismiss_cookies,
+                )
         finally:
             self.daemon_server._active_jobs -= 1
             self.daemon_server.semaphore.release()
 
-    def _handle_render_job(self, url: str, *, timeout_seconds: float, max_chars: int) -> None:
+    def _handle_render_job(
+        self,
+        url: str,
+        *,
+        timeout_seconds: float,
+        max_chars: int,
+        wait_ms: int = 0,
+        wait_for_selector: str | None = None,
+        scroll: bool = False,
+        dismiss_cookies: bool = True,
+    ) -> None:
         started = time.monotonic()
         deadline = started + timeout_seconds
         operation_id = secrets.token_bytes(16)
@@ -812,7 +856,11 @@ class BrowserWorkerHandler(BaseHTTPRequestHandler):
                 pass
 
             # Start Broker with strict public DestinationPolicy
-            broker = Broker(DestinationPolicy(), total_deadline=deadline)
+            broker = Broker(
+                DestinationPolicy(),
+                total_deadline=deadline,
+                upstream_proxy_url=self.daemon_server.config.upstream_proxy_url,
+            )
             broker_address = broker.start()
 
             # Start BridgeServer tied to this job's Unix socket
@@ -835,7 +883,15 @@ class BrowserWorkerHandler(BaseHTTPRequestHandler):
                 except OSError:
                     pass
 
-            # Execute worker runner
+            # Execute worker runner (only pass capture options when non-default for MockWorkerRunner compat)
+            extra_run_kwargs: dict[str, Any] = {}
+            if wait_ms or wait_for_selector is not None or scroll or not dismiss_cookies:
+                extra_run_kwargs.update({
+                    "wait_ms": wait_ms,
+                    "wait_for_selector": wait_for_selector,
+                    "scroll": scroll,
+                    "dismiss_cookies": dismiss_cookies,
+                })
             result = self.daemon_server.runner.run(
                 url,
                 socket_path=str(socket_path),
@@ -843,6 +899,7 @@ class BrowserWorkerHandler(BaseHTTPRequestHandler):
                 deadline=deadline,
                 max_chars=max_chars,
                 timeout_seconds=timeout_seconds,
+                **extra_run_kwargs,
             )
 
             elapsed_ms = round((time.monotonic() - started) * 1000)
@@ -914,6 +971,10 @@ class BrowserWorkerHandler(BaseHTTPRequestHandler):
         full_page: bool = False,
         image_format: str = "jpeg",
         quality: int = 82,
+        wait_ms: int = 0,
+        wait_for_selector: str | None = None,
+        scroll: bool = False,
+        dismiss_cookies: bool = True,
     ) -> None:
         started = time.monotonic()
         deadline = started + timeout_seconds
@@ -935,7 +996,11 @@ class BrowserWorkerHandler(BaseHTTPRequestHandler):
             except OSError:
                 pass
 
-            broker = Broker(DestinationPolicy(), total_deadline=deadline)
+            broker = Broker(
+                DestinationPolicy(),
+                total_deadline=deadline,
+                upstream_proxy_url=self.daemon_server.config.upstream_proxy_url,
+            )
             broker_address = broker.start()
 
             if hasattr(socket, "AF_UNIX"):
@@ -956,6 +1021,14 @@ class BrowserWorkerHandler(BaseHTTPRequestHandler):
                 except OSError:
                     pass
 
+            extra_ss_kwargs: dict[str, Any] = {}
+            if wait_ms or wait_for_selector is not None or scroll or not dismiss_cookies:
+                extra_ss_kwargs.update({
+                    "wait_ms": wait_ms,
+                    "wait_for_selector": wait_for_selector,
+                    "scroll": scroll,
+                    "dismiss_cookies": dismiss_cookies,
+                })
             result = self.daemon_server.runner.run(
                 url,
                 socket_path=str(socket_path),
@@ -967,6 +1040,7 @@ class BrowserWorkerHandler(BaseHTTPRequestHandler):
                 full_page=full_page,
                 image_format=image_format,
                 quality=quality,
+                **extra_ss_kwargs,
             )
 
             elapsed_ms = round((time.monotonic() - started) * 1000)

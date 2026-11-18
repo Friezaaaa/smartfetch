@@ -116,9 +116,21 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         render_mode: str = "auto",
         no_cache: bool = False,
         include_html: bool = False,
+        wait_ms: int = 0,
+        wait_for_selector: str | None = None,
+        scroll: bool = False,
+        dismiss_cookies: bool = True,
     ) -> dict:
         loop = asyncio.get_running_loop()
         should_force = force_browser
+        extra_kwargs: dict[str, Any] = {}
+        if wait_ms or wait_for_selector is not None or scroll or not dismiss_cookies:
+            extra_kwargs.update({
+                "wait_ms": wait_ms,
+                "wait_for_selector": wait_for_selector,
+                "scroll": scroll,
+                "dismiss_cookies": dismiss_cookies,
+            })
         result = await loop.run_in_executor(
             None,
             lambda: smart_fetch(
@@ -129,6 +141,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 render_mode=render_mode,
                 no_cache=no_cache,
                 include_html=include_html,
+                **extra_kwargs,
             ),
         )
         result["request_id"] = secrets.token_hex(8)
@@ -142,8 +155,20 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         image_format: str = "jpeg",
         *,
         no_cache: bool = False,
+        wait_ms: int = 0,
+        wait_for_selector: str | None = None,
+        scroll: bool = False,
+        dismiss_cookies: bool = True,
     ) -> dict:
         loop = asyncio.get_running_loop()
+        extra_kwargs: dict[str, Any] = {}
+        if wait_ms or wait_for_selector is not None or scroll or not dismiss_cookies:
+            extra_kwargs.update({
+                "wait_ms": wait_ms,
+                "wait_for_selector": wait_for_selector,
+                "scroll": scroll,
+                "dismiss_cookies": dismiss_cookies,
+            })
         result = await loop.run_in_executor(
             None,
             lambda: browser_screenshot(
@@ -152,6 +177,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 full_page=full_page,
                 image_format=image_format,
                 no_cache=no_cache,
+                **extra_kwargs,
             ),
         )
         result["request_id"] = secrets.token_hex(8)
@@ -295,7 +321,22 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         no_cache = bool(body.get("no_cache", False)) or request.headers.get("cache-control") == "no-cache"
         max_chars = int(body.get("max_chars", 20000))
         max_chars = max(1000, min(50000, max_chars))
+        from .browser_pool import normalize_capture_options
+        wait_ms, wait_for_selector, scroll, dismiss_cookies = normalize_capture_options(
+            wait_ms=body.get("wait_ms", 0),
+            wait_for_selector=body.get("wait_for_selector"),
+            scroll=body.get("scroll", False),
+            dismiss_cookies=body.get("dismiss_cookies", True),
+        )
         try:
+            extra_kwargs: dict[str, Any] = {}
+            if wait_ms or wait_for_selector is not None or scroll or not dismiss_cookies:
+                extra_kwargs.update({
+                    "wait_ms": wait_ms,
+                    "wait_for_selector": wait_for_selector,
+                    "scroll": scroll,
+                    "dismiss_cookies": dismiss_cookies,
+                })
             result = await _run_mcp_fetch(
                 url.strip(),
                 force_browser,
@@ -303,6 +344,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 format=fmt,
                 render_mode=render_mode,
                 no_cache=no_cache,
+                **extra_kwargs,
             )
             return JSONResponse(status_code=200, content=result)
         except Exception as exc:
@@ -334,13 +376,29 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         if image_format not in ("jpeg", "png"):
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_image_format", "error": "Image format must be 'jpeg' or 'png'"})
         no_cache = bool(body.get("no_cache", False)) or request.headers.get("cache-control") == "no-cache"
+        from .browser_pool import normalize_capture_options
+        wait_ms, wait_for_selector, scroll, dismiss_cookies = normalize_capture_options(
+            wait_ms=body.get("wait_ms", 0),
+            wait_for_selector=body.get("wait_for_selector"),
+            scroll=body.get("scroll", False),
+            dismiss_cookies=body.get("dismiss_cookies", True),
+        )
         try:
+            extra_kwargs: dict[str, Any] = {}
+            if wait_ms or wait_for_selector is not None or scroll or not dismiss_cookies:
+                extra_kwargs.update({
+                    "wait_ms": wait_ms,
+                    "wait_for_selector": wait_for_selector,
+                    "scroll": scroll,
+                    "dismiss_cookies": dismiss_cookies,
+                })
             result = await _run_screenshot(
                 url.strip(),
                 viewport=viewport,
                 full_page=full_page,
                 image_format=image_format,
                 no_cache=no_cache,
+                **extra_kwargs,
             )
             return JSONResponse(status_code=200, content=result)
         except Exception as exc:

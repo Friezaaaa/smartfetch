@@ -45,6 +45,7 @@ services:
       - BROWSER_WORKER_SSL_CERT=/etc/smartfetch/certs/server.crt
       - BROWSER_WORKER_SSL_KEY=/etc/smartfetch/certs/server.key
       - BROWSER_WORKER_SSL_CA=/etc/smartfetch/certs/ca.crt
+      - "BROWSER_UPSTREAM_PROXY=${BROWSER_UPSTREAM_PROXY:-}"
     volumes:
       - smartfetch_vps_ipc:/ipc
       - /var/run/docker.sock:/var/run/docker.sock
