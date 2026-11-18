@@ -859,3 +859,165 @@ def batch_fetch_mcp_discovery_extension():
         output_example=BATCH_FETCH_OUTPUT_EXAMPLE,
     )
 
+
+MAP_DESCRIPTION = (
+    "Website URL discovery and sitemap mapper. Discovers and maps internal URLs "
+    "across a website using robots.txt, XML sitemaps (including nested sitemap "
+    "indexes), and HTML links, with optional search filtering and subdomain support."
+)
+MAP_TAGS = [
+    "sitemap",
+    "url-mapper",
+    "crawler",
+    "discovery",
+    "agents",
+]
+MAP_INPUT_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "description": "Public HTTP or HTTPS website URL to map.",
+        },
+        "search": {
+            "type": ["string", "null"],
+            "default": None,
+            "description": "Optional case-insensitive substring filter for discovered URLs (e.g. 'docs' or 'blog').",
+        },
+        "include_subdomains": {
+            "type": "boolean",
+            "default": False,
+            "description": "Include URLs on subdomains of the base domain.",
+        },
+        "max_urls": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 200,
+            "description": "Maximum number of URLs returned (1 to 500).",
+        },
+        "no_cache": {
+            "type": "boolean",
+            "default": False,
+            "description": "Bypass cache lookup.",
+        },
+    },
+    "required": ["url"],
+}
+MAP_INPUT_EXAMPLE = {
+    "url": "https://example.com",
+    "search": "docs",
+    "include_subdomains": False,
+    "max_urls": 200,
+    "no_cache": False,
+}
+MAP_OUTPUT_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "success": {"type": "boolean"},
+        "requested_url": {"type": "string", "format": "uri"},
+        "final_url": {"type": "string", "format": "uri"},
+        "base_domain": {"type": "string"},
+        "urls": {
+            "type": "array",
+            "items": {"type": "string", "format": "uri"},
+        },
+        "total_discovered": {"type": "integer", "minimum": 0},
+        "returned_count": {"type": "integer", "minimum": 0},
+        "max_urls": {"type": "integer", "minimum": 1, "maximum": 500},
+        "include_subdomains": {"type": "boolean"},
+        "search": {"type": ["string", "null"]},
+        "sources": {
+            "type": "object",
+            "properties": {
+                "sitemap_urls_found": {"type": "integer"},
+                "page_links_found": {"type": "integer"},
+                "sitemaps_checked": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["sitemap_urls_found", "page_links_found", "sitemaps_checked"],
+        },
+        "render_method": {"type": "string", "enum": ["http", "browser"]},
+        "cache_hit": {"type": "boolean"},
+        "elapsed_ms": {"type": "integer", "minimum": 0},
+        "request_id": {"type": "string"},
+        "service_version": {"type": "string"},
+    },
+    "required": [
+        "success",
+        "requested_url",
+        "final_url",
+        "base_domain",
+        "urls",
+        "total_discovered",
+        "returned_count",
+        "max_urls",
+        "include_subdomains",
+        "search",
+        "sources",
+        "render_method",
+        "cache_hit",
+        "elapsed_ms",
+        "request_id",
+        "service_version",
+    ],
+}
+MAP_OUTPUT_EXAMPLE = {
+    "success": True,
+    "requested_url": "https://example.com",
+    "final_url": "https://example.com/",
+    "base_domain": "example.com",
+    "urls": [
+        "https://example.com/docs",
+        "https://example.com/docs/getting-started",
+        "https://example.com/docs/api",
+    ],
+    "total_discovered": 3,
+    "returned_count": 3,
+    "max_urls": 200,
+    "include_subdomains": False,
+    "search": "docs",
+    "sources": {
+        "sitemap_urls_found": 2,
+        "page_links_found": 5,
+        "sitemaps_checked": ["https://example.com/sitemap.xml"],
+    },
+    "render_method": "http",
+    "cache_hit": False,
+    "elapsed_ms": 95,
+    "request_id": "c1d2e3f4a5b60708",
+    "service_version": SERVICE_VERSION,
+}
+
+
+def map_discovery_extension():
+    """Build the official x402 v2 Bazaar declaration for POST /map."""
+    from x402.extensions.bazaar import OutputConfig, declare_discovery_extension
+
+    extension = declare_discovery_extension(
+        input=MAP_INPUT_EXAMPLE,
+        input_schema=MAP_INPUT_SCHEMA,
+        body_type="json",
+        output=OutputConfig(
+            example=MAP_OUTPUT_EXAMPLE,
+            schema=MAP_OUTPUT_SCHEMA,
+        ),
+    )
+    extension["bazaar"]["info"]["input"]["method"] = "POST"
+    return extension
+
+
+def map_mcp_discovery_extension():
+    """Build the official x402 v2 Bazaar declaration for map_website."""
+    return mcp_discovery_extension(
+        tool_name="map_website",
+        description=MAP_DESCRIPTION,
+        input_schema=MAP_INPUT_SCHEMA,
+        input_example=MAP_INPUT_EXAMPLE,
+        output_schema=MAP_OUTPUT_SCHEMA,
+        output_example=MAP_OUTPUT_EXAMPLE,
+    )
+

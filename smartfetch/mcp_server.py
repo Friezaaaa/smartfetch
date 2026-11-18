@@ -29,6 +29,11 @@ from .bazaar import (
     INSPECT_INPUT_SCHEMA,
     INSPECT_OUTPUT_EXAMPLE,
     INSPECT_OUTPUT_SCHEMA,
+    MAP_DESCRIPTION,
+    MAP_INPUT_EXAMPLE,
+    MAP_INPUT_SCHEMA,
+    MAP_OUTPUT_EXAMPLE,
+    MAP_OUTPUT_SCHEMA,
     MARKDOWN_DESCRIPTION,
     MARKDOWN_OUTPUT_EXAMPLE,
     MARKDOWN_OUTPUT_SCHEMA,
@@ -53,6 +58,7 @@ from .batch import batch_fetch_urls
 from .browser_fetch import browser_screenshot
 from .config import HOST, MAX_REQUEST_BODY_BYTES, SERVICE_NAME, SERVICE_VERSION
 from .inspect import inspect_webpage_url
+from .mapper import map_website_urls
 from .mcp_logging import configure_mcp_sdk_logging
 from .payments import X402Settings, create_x402_resource_server
 from .remote_browser import RemoteBrowserConfig
@@ -68,6 +74,7 @@ MCP_TOOLS = (
     "screenshot_webpage",
     "inspect_webpage",
     "batch_fetch_webpages",
+    "map_website",
 )
 V111_MCP_TOOLS = ("search_and_extract", "extract_structured_data")
 MCP_TRANSPORT = "streamable-http"
@@ -79,6 +86,7 @@ FetchHandler = Callable[..., Awaitable[dict[str, Any]]]
 ScreenshotHandler = Callable[..., Awaitable[dict[str, Any]]]
 InspectHandler = Callable[..., Awaitable[dict[str, Any]]]
 BatchFetchHandler = Callable[..., Awaitable[dict[str, Any]]]
+MapHandler = Callable[..., Awaitable[dict[str, Any]]]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -163,6 +171,7 @@ def create_smartfetch_mcp(
     screenshot_handler: ScreenshotHandler | None = None,
     inspect_handler: InspectHandler | None = None,
     batch_fetch_handler: BatchFetchHandler | None = None,
+    map_handler: MapHandler | None = None,
     v111_service=None,
 ) -> SmartFetchMCP:
     """Build the production MCP server with optional x402 payment protection."""
@@ -350,6 +359,36 @@ def create_smartfetch_mcp(
             lambda: batch_fetch_urls(urls, max_chars_per_url=max_chars_per_url, render_mode=render_mode, no_cache=no_cache),
         )
 
+    async def map_website(
+        url: Annotated[str, Field(description="Public HTTP or HTTPS website URL to map.")],
+        search: Annotated[Optional[str], Field(description="Optional case-insensitive substring filter for discovered URLs.")] = None,
+        include_subdomains: Annotated[bool, Field(description="Include URLs on subdomains of the base domain.")] = False,
+        max_urls: Annotated[int, Field(ge=1, le=500, description="Maximum number of URLs returned (1 to 500).")] = 200,
+        no_cache: Annotated[bool, Field(description="Bypass cache lookup.")] = False,
+    ) -> dict[str, Any]:
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("url must be a non-empty string")
+        if map_handler is not None:
+            return await map_handler(
+                url.strip(),
+                search=search,
+                include_subdomains=include_subdomains,
+                max_urls=max_urls,
+                no_cache=no_cache,
+            )
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: map_website_urls(
+                url.strip(),
+                search=search,
+                include_subdomains=include_subdomains,
+                max_urls=max_urls,
+                no_cache=no_cache,
+            ),
+        )
+
     def protect(
         name: str,
         description: str,
@@ -501,6 +540,17 @@ def create_smartfetch_mcp(
             batch_fetch_accepts,
             "$0.015",
         ),
+        (
+            "map_website",
+            MAP_DESCRIPTION,
+            map_website,
+            MAP_INPUT_SCHEMA,
+            MAP_INPUT_EXAMPLE,
+            MAP_OUTPUT_SCHEMA,
+            MAP_OUTPUT_EXAMPLE,
+            accepts,
+            settings.price,
+        ),
     )
 
     remote_cfg = RemoteBrowserConfig.from_env()
@@ -591,10 +641,18 @@ def create_emergency_mcp() -> SmartFetchMCP:
             "error": "Retrieval is temporarily unavailable",
         }
 
+    async def _dummy_map(url: str, search: Optional[str] = None, include_subdomains: bool = False, max_urls: int = 200, no_cache: bool = False) -> dict[str, Any]:
+        return {
+            "success": False,
+            "error_code": "retrieval_unavailable",
+            "error": "Retrieval is temporarily unavailable",
+        }
+
     return create_smartfetch_mcp(
         settings,
         _dummy_fetch,
         screenshot_handler=_dummy_screenshot,
         inspect_handler=_dummy_inspect,
         batch_fetch_handler=_dummy_batch_fetch,
+        map_handler=_dummy_map,
     )

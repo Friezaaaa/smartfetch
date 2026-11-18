@@ -29,6 +29,7 @@ LEGACY_TOOLS = (
     "screenshot_webpage",
     "inspect_webpage",
     "batch_fetch_webpages",
+    "map_website",
 )
 FREE_MCP_METHODS = (
     "initialize",
@@ -83,6 +84,19 @@ BATCH_FETCH_INPUT_SCHEMA = {
 }
 _BATCH_FETCH_VALIDATOR = Draft202012Validator(BATCH_FETCH_INPUT_SCHEMA, format_checker=FormatChecker())
 
+MAP_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "url": {"type": "string", "format": "uri", "pattern": "^https?://"},
+        "search": {"type": ["string", "null"]},
+        "include_subdomains": {"type": "boolean"},
+        "max_urls": {"type": "integer", "minimum": 1, "maximum": 500},
+        "no_cache": {"type": "boolean"},
+    },
+    "required": ["url"],
+}
+_MAP_VALIDATOR = Draft202012Validator(MAP_INPUT_SCHEMA, format_checker=FormatChecker())
+
 MCP_FETCH_ARGUMENT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -135,11 +149,23 @@ MCP_BATCH_FETCH_ARGUMENT_SCHEMA = {
     },
     "required": ["urls"],
 }
+MCP_MAP_ARGUMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "url": {"type": "string"},
+        "search": {"type": ["string", "null"]},
+        "include_subdomains": {"type": "boolean"},
+        "max_urls": {"type": "integer", "minimum": 1, "maximum": 500},
+        "no_cache": {"type": "boolean"},
+    },
+    "required": ["url"],
+}
 _MCP_FETCH_VALIDATOR = Draft202012Validator(MCP_FETCH_ARGUMENT_SCHEMA)
 _MCP_RENDER_VALIDATOR = Draft202012Validator(MCP_RENDER_ARGUMENT_SCHEMA)
 _MCP_SCREENSHOT_VALIDATOR = Draft202012Validator(MCP_SCREENSHOT_ARGUMENT_SCHEMA)
 _MCP_INSPECT_VALIDATOR = Draft202012Validator(MCP_INSPECT_ARGUMENT_SCHEMA)
 _MCP_BATCH_FETCH_VALIDATOR = Draft202012Validator(MCP_BATCH_FETCH_ARGUMENT_SCHEMA)
+_MCP_MAP_VALIDATOR = Draft202012Validator(MCP_MAP_ARGUMENT_SCHEMA)
 _FREE_MCP_MODELS = {
     "initialize": InitializeRequest,
     "notifications/initialized": InitializedNotification,
@@ -321,6 +347,31 @@ def classify_batch_fetch(
     )
 
 
+def classify_map(
+    body: bytes,
+    headers: tuple[tuple[bytes, bytes], ...],
+    *,
+    allow_unpaid_probe: bool = False,
+) -> ValidatedCall | None:
+    if allow_unpaid_probe:
+        try:
+            payload = _parse_json(body, headers)
+            if not payload or not payload.get("url"):
+                return None
+        except EmergencyRequestError:
+            return None
+    else:
+        payload = _parse_json(body, headers)
+    if not _MAP_VALIDATOR.is_valid(payload):
+        raise EmergencyRequestError(422, "invalid_request")
+    return ValidatedCall(
+        transport="http",
+        tool="map_website",
+        browser=False,
+        jsonrpc_id=None,
+    )
+
+
 def classify_mcp(
     body: bytes,
     headers: tuple[tuple[bytes, bytes], ...],
@@ -382,6 +433,15 @@ def classify_mcp(
         )
     if tool == "batch_fetch_webpages":
         if not _MCP_BATCH_FETCH_VALIDATOR.is_valid(arguments):
+            raise EmergencyRequestError(422, "invalid_request", request_id)
+        return ValidatedCall(
+            transport="mcp",
+            tool=tool,
+            browser=False,
+            jsonrpc_id=request_id,
+        )
+    if tool == "map_website":
+        if not _MCP_MAP_VALIDATOR.is_valid(arguments):
             raise EmergencyRequestError(422, "invalid_request", request_id)
         return ValidatedCall(
             transport="mcp",

@@ -284,7 +284,7 @@ def test_mcp_tools_list_has_seven_tools():
             }, headers={"Accept": "application/json"})
             assert tools_res.status_code == 200
             tools = tools_res.json()["result"]["tools"]
-            assert len(tools) == 7
+            assert len(tools) == 8
             tool_names = [t["name"] for t in tools]
             assert "batch_fetch_webpages" in tool_names
 
@@ -309,7 +309,7 @@ def test_discovery_manifests_include_batch_fetch():
 
             # 3. MCP discovery
             mcp_meta = client.get("/.well-known/mcp.json").json()
-            assert len(mcp_meta["tools"]) == 7
+            assert len(mcp_meta["tools"]) == 8
             assert any(t["name"] == "batch_fetch_webpages" for t in mcp_meta["tools"])
 
             # 4. Meta

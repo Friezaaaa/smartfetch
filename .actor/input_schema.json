@@ -6,13 +6,15 @@
     "action": {
       "title": "Action",
       "type": "string",
-      "description": "Operation to perform: fetch (Markdown/text extraction), screenshot (headless Chromium image), inspect (structured SEO & site intelligence), or batch_fetch (parallel multi-URL retrieval).",
-      "enum": ["fetch", "screenshot", "inspect", "batch_fetch"],
+      "description": "Operation to perform: fetch (Markdown/text extraction), screenshot (headless Chromium image), inspect (structured SEO & site intelligence), batch_fetch (parallel multi-URL retrieval), bulk_inspect (B2B Lead & Tech-Stack Enrichment across up to 50 domains), or map (discover internal URLs from sitemaps & links).",
+      "enum": ["fetch", "screenshot", "inspect", "batch_fetch", "bulk_inspect", "map"],
       "enumTitles": [
         "Fetch Webpage / PDF",
         "Capture Screenshot",
         "Inspect Site Intelligence",
-        "Batch Fetch URLs"
+        "Batch Fetch URLs",
+        "Bulk B2B Lead & Tech-Stack Enrichment",
+        "Map Website URLs"
       ],
       "default": "fetch",
       "editor": "select"
@@ -20,16 +22,37 @@
     "url": {
       "title": "Target URL",
       "type": "string",
-      "description": "Public HTTP/HTTPS webpage or PDF URL (used for fetch, screenshot, and inspect).",
+      "description": "Public HTTP/HTTPS webpage or PDF URL (used for fetch, screenshot, inspect, and map).",
       "default": "https://example.com",
       "editor": "textfield"
     },
     "urls": {
-      "title": "Batch Target URLs",
+      "title": "Batch / Bulk Target URLs or Domains",
       "type": "array",
-      "description": "List of public HTTP/HTTPS URLs to retrieve in parallel (up to 5 URLs for paying users, capped at 3 URLs on the Free plan).",
+      "description": "List of public URLs or bare domains (e.g. stripe.com) for batch_fetch (up to 5 URLs) or bulk_inspect (up to 50 domains for paying users, 5 on the Free plan).",
       "default": [],
       "editor": "stringList"
+    },
+    "search": {
+      "title": "Map URL Search Filter",
+      "type": "string",
+      "description": "Optional case-insensitive substring filter when action is 'map' (e.g. 'docs' or 'pricing').",
+      "default": "",
+      "editor": "textfield"
+    },
+    "include_subdomains": {
+      "title": "Include Subdomains (Map)",
+      "type": "boolean",
+      "description": "Include URLs on subdomains of the target domain when action is 'map'.",
+      "default": false
+    },
+    "max_urls": {
+      "title": "Maximum Mapped URLs",
+      "type": "integer",
+      "description": "Maximum number of URLs to return when action is 'map' (1-500).",
+      "minimum": 1,
+      "maximum": 500,
+      "default": 200
     },
     "max_chars": {
       "title": "Maximum Characters",

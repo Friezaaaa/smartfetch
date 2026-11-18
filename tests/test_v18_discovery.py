@@ -190,6 +190,7 @@ class V18MCPBazaarIntegrationTests(unittest.TestCase):
                 'screenshot_webpage',
                 'inspect_webpage',
                 'batch_fetch_webpages',
+                'map_website',
             ],
         )
         for response in free_responses:

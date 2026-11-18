@@ -85,6 +85,22 @@ def build_inspect_cache_key(
     return f"sf:inspect:{url_digest}:{mode}"
 
 
+def build_map_cache_key(
+    url: str,
+    search: str | None = None,
+    include_subdomains: bool = False,
+    max_urls: int = 200,
+) -> str:
+    """Builds a normalized SHA-256 cache key scoped by URL, search filter, subdomains, and max_urls."""
+    canonical_url = normalize_cache_url(url)
+    search_norm = (search or "").strip().lower()
+    sub_flag = "sub" if include_subdomains else "exact"
+    limit = max(1, min(500, int(max_urls or 200)))
+    raw = f"{canonical_url}|{search_norm}|{sub_flag}|{limit}"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return f"sf:map:{digest}"
+
+
 class ResultCacheProvider(ABC):
     """Abstract protocol for retrieval result cache backends (In-memory, Redis, Valkey, etc.)."""
 

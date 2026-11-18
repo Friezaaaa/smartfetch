@@ -55,7 +55,7 @@ def test_discovery_endpoints(monkeypatch):
         res = client.get("/.well-known/mcp.json")
         assert res.status_code == 200
         mcp_meta = res.json()
-        assert len(mcp_meta["tools"]) == 7
+        assert len(mcp_meta["tools"]) == 8
 
         # 3. /meta
         res = client.get("/meta")
@@ -114,9 +114,9 @@ def test_mcp_free_methods_and_paid_tools():
         assert res.status_code == 200
         data = res.json()
         tools = data["result"]["tools"]
-        assert len(tools) == 7
+        assert len(tools) == 8
         tool_names = [t["name"] for t in tools]
-        for expected in ("fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage", "screenshot_webpage", "inspect_webpage", "batch_fetch_webpages"):
+        for expected in ("fetch_webpage", "webpage_to_markdown", "extract_webpage_text", "render_webpage", "screenshot_webpage", "inspect_webpage", "batch_fetch_webpages", "map_website"):
             assert expected in tool_names
         print("FIRST TOOL IN TOOLS LIST:", repr(tools[0]))
         for t in tools:

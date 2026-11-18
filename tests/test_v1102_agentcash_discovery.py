@@ -194,6 +194,7 @@ class CurrentVersionAndRegistryTests(unittest.TestCase):
             'screenshot_webpage',
             'inspect_webpage',
             'batch_fetch_webpages',
+            'map_website',
         ))
 
 

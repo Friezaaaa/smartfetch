@@ -2,8 +2,8 @@
 
 Supports both execution modes on the Apify platform:
 1. Standard Run Mode:
-   Reads Actor input (`action`: `fetch` | `screenshot` | `inspect` | `batch_fetch`),
-   executes retrieval/inspection/screenshot locally, stores screenshot binary in the
+   Reads Actor input (`action`: `fetch` | `screenshot` | `inspect` | `batch_fetch` | `bulk_inspect` | `map`),
+   executes retrieval/inspection/screenshot/mapping locally, stores screenshot binary in the
    Apify Key-Value Store (`Actor.set_value`), pushes structured output to the default
    Dataset (`Actor.push_data`), and charges Pay-Per-Event (`Actor.charge`) strictly
    on successful results (zero charge on errors).
@@ -11,11 +11,12 @@ Supports both execution modes on the Apify platform:
    Starts a FastAPI + FastMCP Streamable HTTP server on `APIFY_ACTOR_STANDBY_PORT`
    (default 4321), responds `200 OK` to Apify's `x-apify-container-server-readiness-probe`
    at `GET /`, and exposes `fetch_webpage`, `screenshot_webpage`, `inspect_webpage`,
-   and `batch_fetch_webpages` on `/mcp` with per-call Pay-Per-Event charging.
+   `batch_fetch_webpages`, and `map_website` on `/mcp` with per-call Pay-Per-Event charging.
 """
 
 import asyncio
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from functools import wraps
 import json
@@ -23,6 +24,7 @@ import logging
 import os
 import secrets
 from typing import Annotated, Any, Mapping
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -36,6 +38,7 @@ from .bazaar import (
     BATCH_FETCH_DESCRIPTION,
     FETCH_DESCRIPTION,
     INSPECT_DESCRIPTION,
+    MAP_DESCRIPTION,
     SCREENSHOT_DESCRIPTION,
 )
 from .batch import batch_fetch_urls
@@ -43,6 +46,7 @@ from .browser_fetch import browser_screenshot
 from .config import MAX_REQUEST_BODY_BYTES, SERVICE_NAME, SERVICE_VERSION
 from .core import smart_fetch
 from .inspect import inspect_webpage_url
+from .mapper import map_website_urls
 from .mcp_logging import configure_mcp_sdk_logging
 from .server import MCPAcceptNormalization
 
@@ -54,7 +58,83 @@ EVENT_SITE_INSPECTED = "site-inspected"
 EVENT_SCREENSHOT_CAPTURED = "screenshot-captured"
 
 FREE_PLAN_MAX_BATCH_URLS = 3
+FREE_PLAN_MAX_BULK_INSPECT_URLS = 5
+PAID_MAX_BULK_INSPECT_URLS = 50
+BULK_INSPECT_MAX_WORKERS = 5
 DEFAULT_STANDBY_PORT = 4321
+
+
+def _normalize_url_or_domain(raw: str) -> str:
+    """Prepends https:// if the user supplied a bare domain like stripe.com."""
+    cleaned = str(raw or "").strip()
+    if not cleaned:
+        return ""
+    if not cleaned.lower().startswith(("http://", "https://")):
+        return f"https://{cleaned}"
+    return cleaned
+
+
+def _flatten_inspect_row(target_url: str, res: dict[str, Any] | None, error: str | None = None) -> dict[str, Any]:
+    """Formats an inspect_webpage_url result into a flat, CSV/Excel-ready Dataset row."""
+    parsed = urlparse(target_url)
+    domain = (parsed.hostname or target_url).lower()
+    if error or not res or not res.get("success"):
+        err_msg = error or (res.get("error") if isinstance(res, dict) else "Inspection failed")
+        return {
+            "action": "bulk_inspect",
+            "domain": domain,
+            "url": target_url,
+            "requested_url": target_url,
+            "final_url": res.get("final_url", target_url) if isinstance(res, dict) else target_url,
+            "success": False,
+            "status_code": res.get("status_code") if isinstance(res, dict) else None,
+            "title": None,
+            "description": None,
+            "emails": "",
+            "phones": "",
+            "github": None,
+            "linkedin": None,
+            "x_twitter": None,
+            "tech_stack": "",
+            "https": target_url.lower().startswith("https://"),
+            "has_hsts": False,
+            "has_csp": False,
+            "error": str(err_msg) if err_msg else "Inspection failed",
+        }
+
+    final_url = str(res.get("final_url") or target_url)
+    final_host = urlparse(final_url).hostname
+    if final_host:
+        domain = final_host.lower()
+    meta = res.get("metadata") or {}
+    contacts = res.get("contacts") or {}
+    social = contacts.get("social_links") or {}
+    sec = res.get("security_headers") or {}
+    emails_list = contacts.get("emails") or []
+    phones_list = contacts.get("phones") or []
+    tech_list = res.get("tech_stack") or []
+
+    return {
+        "action": "bulk_inspect",
+        "domain": domain,
+        "url": final_url,
+        "requested_url": target_url,
+        "final_url": final_url,
+        "success": True,
+        "status_code": res.get("status_code", 200),
+        "title": meta.get("title"),
+        "description": meta.get("description"),
+        "emails": ", ".join(str(e) for e in emails_list),
+        "phones": ", ".join(str(p) for p in phones_list),
+        "github": social.get("github"),
+        "linkedin": social.get("linkedin"),
+        "x_twitter": social.get("x_twitter"),
+        "tech_stack": ", ".join(str(t) for t in tech_list),
+        "https": bool(sec.get("https", final_url.lower().startswith("https://"))),
+        "has_hsts": bool(sec.get("strict_transport_security")),
+        "has_csp": bool(sec.get("content_security_policy")),
+        "error": None,
+    }
 
 
 def _get_actor_cls(actor_cls: Any = None) -> Any:
@@ -308,11 +388,133 @@ async def execute_action(
                 await actor.push_data(err_item)
             return err_item
 
+    if action == "bulk_inspect":
+        raw_items: list[str] = []
+        if isinstance(raw_urls, (list, tuple)):
+            raw_items = [str(u).strip() for u in raw_urls if isinstance(u, str) and str(u).strip()]
+        elif url:
+            raw_items = [url]
+
+        normalized_urls: list[str] = []
+        seen_urls: set[str] = set()
+        for item in raw_items:
+            norm = _normalize_url_or_domain(item)
+            if norm and norm not in seen_urls:
+                seen_urls.add(norm)
+                normalized_urls.append(norm)
+
+        if not normalized_urls:
+            err_item = {
+                "action": "bulk_inspect",
+                "success": False,
+                "urls": [],
+                "error_code": "invalid_urls",
+                "error": "urls must be a non-empty list of URLs or domains",
+            }
+            if actor is not None:
+                await actor.push_data(err_item)
+            return err_item
+
+        paying = is_user_paying(environ)
+        max_allowed = PAID_MAX_BULK_INSPECT_URLS if paying else FREE_PLAN_MAX_BULK_INSPECT_URLS
+        free_plan_batch_capped = False
+        if len(normalized_urls) > max_allowed:
+            normalized_urls = normalized_urls[:max_allowed]
+            if not paying:
+                free_plan_batch_capped = True
+
+        def _inspect_one(target_url: str) -> dict[str, Any]:
+            try:
+                res_one = inspect_webpage_url(
+                    target_url,
+                    force_browser=(render_mode == "browser"),
+                    render_mode=render_mode,
+                    no_cache=no_cache,
+                )
+                return _flatten_inspect_row(target_url, res_one)
+            except Exception as exc:
+                return _flatten_inspect_row(target_url, None, error=str(exc))
+
+        def _run_all_bulk_inspect() -> list[dict[str, Any]]:
+            with ThreadPoolExecutor(max_workers=min(BULK_INSPECT_MAX_WORKERS, len(normalized_urls))) as pool:
+                return list(pool.map(_inspect_one, normalized_urls))
+
+        rows = await loop.run_in_executor(None, _run_all_bulk_inspect)
+        succeeded_count = sum(1 for r in rows if r.get("success"))
+        failed_count = len(rows) - succeeded_count
+
+        if actor is not None:
+            for row in rows:
+                await actor.push_data(row)
+
+        if succeeded_count > 0:
+            await _charge_event(actor, EVENT_SITE_INSPECTED, count=succeeded_count)
+
+        return {
+            "action": "bulk_inspect",
+            "success": succeeded_count > 0,
+            "total_urls": len(rows),
+            "succeeded_count": succeeded_count,
+            "failed_count": failed_count,
+            "free_plan_batch_capped": free_plan_batch_capped,
+            "max_urls_allowed": max_allowed,
+            "results": rows,
+        }
+
+    if action == "map":
+        norm_url = _normalize_url_or_domain(url)
+        if not norm_url:
+            err_item = {
+                "action": "map",
+                "success": False,
+                "requested_url": url,
+                "error_code": "invalid_url",
+                "error": "url must be a non-empty string",
+            }
+            if actor is not None:
+                await actor.push_data(err_item)
+            return err_item
+        search_val = actor_input.get("search")
+        search_str = str(search_val).strip() if isinstance(search_val, str) and search_val.strip() else None
+        include_subdomains = bool(actor_input.get("include_subdomains", False))
+        max_urls_val = int(actor_input.get("max_urls") or 200)
+        max_urls_val = max(1, min(500, max_urls_val))
+        try:
+            res = await loop.run_in_executor(
+                None,
+                lambda: map_website_urls(
+                    norm_url,
+                    search=search_str,
+                    include_subdomains=include_subdomains,
+                    max_urls=max_urls_val,
+                    no_cache=no_cache,
+                ),
+            )
+            res["action"] = "map"
+            res.setdefault("request_id", secrets.token_hex(8))
+            res.setdefault("service_version", SERVICE_VERSION)
+            if res.get("success"):
+                await _charge_event(actor, EVENT_PAGE_FETCHED, count=1)
+            if actor is not None:
+                await actor.push_data(res)
+            return res
+        except Exception as exc:
+            err_item = {
+                "action": "map",
+                "success": False,
+                "requested_url": norm_url,
+                "error_code": "map_failed",
+                "error": str(exc),
+            }
+            if actor is not None:
+                await actor.push_data(err_item)
+            return err_item
+
     err_item = {
         "action": action,
         "success": False,
         "error_code": "invalid_action",
-        "error": f"Unsupported action '{action}'. Must be fetch, screenshot, inspect, or batch_fetch.",
+        "error": f"Unsupported action '{action}'. Must be fetch, screenshot, inspect, batch_fetch, bulk_inspect, or map.",
     }
     if actor is not None:
         await actor.push_data(err_item)
@@ -481,11 +683,38 @@ def create_standby_app(
             await _charge_event(_resolve_actor(), EVENT_PAGE_FETCHED, count=succeeded_count)
         return res
 
+    async def map_website(
+        url: Annotated[str, Field(description="Public HTTP or HTTPS root/starting URL to map.")],
+        search: Annotated[str | None, Field(description="Optional case-insensitive substring filter for discovered URLs.")] = None,
+        include_subdomains: Annotated[bool, Field(description="Include URLs on subdomains of the target domain.")] = False,
+        max_urls: Annotated[int, Field(ge=1, le=500, description="Maximum number of URLs to return (1-500).")] = 200,
+        no_cache: Annotated[bool, Field(description="Bypass cache lookup.")] = False,
+    ) -> dict[str, Any]:
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("url must be a non-empty string")
+        loop = asyncio.get_running_loop()
+        res = await loop.run_in_executor(
+            None,
+            lambda: map_website_urls(
+                url.strip(),
+                search=search,
+                include_subdomains=include_subdomains,
+                max_urls=max_urls,
+                no_cache=no_cache,
+            ),
+        )
+        res.setdefault("request_id", secrets.token_hex(8))
+        res.setdefault("service_version", SERVICE_VERSION)
+        if res.get("success"):
+            await _charge_event(_resolve_actor(), EVENT_PAGE_FETCHED, count=1)
+        return res
+
     for tool_name, tool_desc, tool_fn in (
         ("fetch_webpage", FETCH_DESCRIPTION, fetch_webpage),
         ("screenshot_webpage", SCREENSHOT_DESCRIPTION, screenshot_webpage),
         ("inspect_webpage", INSPECT_DESCRIPTION, inspect_webpage),
         ("batch_fetch_webpages", BATCH_FETCH_DESCRIPTION, batch_fetch_webpages),
+        ("map_website", MAP_DESCRIPTION, map_website),
     ):
         mcp.tool(name=tool_name, description=tool_desc, structured_output=False)(_wrap_mcp_tool(tool_fn))
 
@@ -527,6 +756,7 @@ def create_standby_app(
                     "screenshot_webpage",
                     "inspect_webpage",
                     "batch_fetch_webpages",
+                    "map_website",
                 ],
             },
         )

@@ -93,7 +93,7 @@ class Stage5DocumentationTests(unittest.TestCase):
             self.assertNotIn("payment-required", rendered.lower())
             self.assertNotIn("payment-signature", rendered.lower())
         self.assertEqual(x402["resources"], [])
-        self.assertEqual(len(meta["tools"]), 7)
+        self.assertEqual(len(meta["tools"]), 8)
         for definition in V111_VARIANTS:
             self.assertNotIn(definition.rest_path, openapi["paths"])
 

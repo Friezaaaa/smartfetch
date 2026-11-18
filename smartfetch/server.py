@@ -16,6 +16,8 @@ from .bazaar import (
     FETCH_DESCRIPTION,
     INSPECT_DESCRIPTION,
     INSPECT_TAGS,
+    MAP_DESCRIPTION,
+    MAP_TAGS,
     MARKDOWN_DESCRIPTION,
     RENDER_DESCRIPTION,
     SCREENSHOT_DESCRIPTION,
@@ -23,6 +25,7 @@ from .bazaar import (
     TEXT_DESCRIPTION,
     batch_fetch_discovery_extension,
     inspect_discovery_extension,
+    map_discovery_extension,
     screenshot_discovery_extension,
 )
 from .browser_fetch import browser_screenshot
@@ -30,6 +33,7 @@ from .config import HOST, PORT, SERVICE_NAME, SERVICE_VERSION
 from .core import smart_fetch
 from .diagnostics import RetrievalFailure
 from .inspect import inspect_webpage_url
+from .mapper import map_website_urls
 from .discovery import (
     agent_card_document,
     docs_html,
@@ -193,6 +197,26 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             ),
         )
 
+    async def _run_map(
+        url: str,
+        *,
+        search: str | None = None,
+        include_subdomains: bool = False,
+        max_urls: int = 200,
+        no_cache: bool = False,
+    ) -> dict:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: map_website_urls(
+                url,
+                search=search,
+                include_subdomains=include_subdomains,
+                max_urls=max_urls,
+                no_cache=no_cache,
+            ),
+        )
+
     remote_cfg = RemoteBrowserConfig.from_env()
     if remote_cfg.is_configured:
         mcp = create_smartfetch_mcp(
@@ -201,6 +225,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             screenshot_handler=_run_screenshot,
             inspect_handler=_run_inspect,
             batch_fetch_handler=_run_batch_fetch,
+            map_handler=_run_map,
         )
     else:
         mcp = create_emergency_mcp()
@@ -398,6 +423,46 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 content={"success": False, "error_code": "batch_fetch_failed", "error": str(exc)},
             )
 
+    @application.post("/map")
+    async def map_endpoint(request: Request):
+        remote_cfg = RemoteBrowserConfig.from_env()
+        if not remote_cfg.is_configured:
+            return JSONResponse(
+                status_code=503,
+                content={"success": False, "error_code": "retrieval_unavailable", "error": "Retrieval is temporarily unavailable"},
+                headers={"Retry-After": "3600", "Cache-Control": "no-store"},
+            )
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
+        if not isinstance(body, dict):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_request", "error": "Invalid request"})
+        url = body.get("url")
+        if not isinstance(url, str) or not url.strip():
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_url", "error": "URL must be a non-empty string"})
+        search = body.get("search")
+        if search is not None and not isinstance(search, str):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_search", "error": "search must be a string"})
+        include_subdomains = bool(body.get("include_subdomains", False))
+        max_urls_raw = body.get("max_urls", 200)
+        try:
+            max_urls = max(1, min(500, int(max_urls_raw)))
+        except (ValueError, TypeError):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_max_urls", "error": "max_urls must be an integer"})
+        no_cache = bool(body.get("no_cache", False)) or request.headers.get("cache-control") == "no-cache"
+        try:
+            result = await _run_map(
+                url.strip(),
+                search=search,
+                include_subdomains=include_subdomains,
+                max_urls=max_urls,
+                no_cache=no_cache,
+            )
+            return JSONResponse(status_code=200, content=result)
+        except Exception as exc:
+            return JSONResponse(status_code=502, content={"success": False, "error_code": "map_failed", "error": str(exc)})
+
     @application.get("/", response_class=HTMLResponse)
     async def root(request: Request):
         remote_cfg = RemoteBrowserConfig.from_env()
@@ -439,6 +504,12 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                     "availability": "available",
                     "payment_challenge_enabled": settings.enabled,
                     "price": "$0.015",
+                },
+                "map": {
+                    "url": urls["map"],
+                    "availability": "available",
+                    "payment_challenge_enabled": settings.enabled,
+                    "price": "$0.005",
                 },
                 "mcp": {
                     "url": urls["mcp"],
@@ -499,6 +570,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 {"name": "screenshot_webpage", "description": SCREENSHOT_DESCRIPTION},
                 {"name": "inspect_webpage", "description": INSPECT_DESCRIPTION},
                 {"name": "batch_fetch_webpages", "description": BATCH_FETCH_DESCRIPTION},
+                {"name": "map_website", "description": MAP_DESCRIPTION},
             ],
         }
 
@@ -588,6 +660,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         screenshot_options = build_payment_options(settings, "$0.01")
         inspect_options = build_payment_options(settings, "$0.005")
         batch_fetch_options = build_payment_options(settings, "$0.015")
+        map_options = build_payment_options(settings, "$0.005")
 
         extra_routes = {
             "POST /screenshot": RouteConfig(
@@ -613,6 +686,14 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 service_name="SmartFetch",
                 tags=BATCH_FETCH_TAGS,
                 extensions=batch_fetch_discovery_extension(),
+            ),
+            "POST /map": RouteConfig(
+                accepts=map_options if len(map_options) > 1 else map_options[0],
+                description=MAP_DESCRIPTION,
+                mime_type="application/json",
+                service_name="SmartFetch",
+                tags=MAP_TAGS,
+                extensions=map_discovery_extension(),
             ),
         }
         install_x402(application, settings, additional_routes=extra_routes)

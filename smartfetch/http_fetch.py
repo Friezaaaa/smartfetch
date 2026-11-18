@@ -24,12 +24,19 @@ TIMEOUT = (CONNECT_TIMEOUT, READ_TIMEOUT)
 MAX_REDIRECTS = 5
 TRANSIENT_STATUS_CODES = {502, 503, 504}
 
+DEFAULT_USER_AGENT = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+    'AppleWebKit/537.36 (KHTML, like Gecko) '
+    'Chrome/131.0.0.0 Safari/537.36'
+)
+
 SESSION = requests.Session()
 SESSION.trust_env = False
 SESSION.headers.update({
-    'User-Agent': 'SmartFetch/0.1 (+agent web retrieval prototype)',
-    'Accept': 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1',
-    'Accept-Language': 'en-US,en;q=0.8',
+    'User-Agent': DEFAULT_USER_AGENT,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.7',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Upgrade-Insecure-Requests': '1',
 })
 # Mount SSRF and DNS rebinding protection adapter on retrieval session
 install_dns_rebinding_protection(SESSION)

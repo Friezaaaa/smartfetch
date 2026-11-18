@@ -232,6 +232,19 @@ async def run_cdp_tests():
             assert ssrf_warn_display == "none", "SSRF warning should be hidden for valid URL"
             print("[11] Verified valid URL re-enables buttons cleanly.")
 
+            # Test 3: Verify Map Website ($0.005) mode UI and snippet generation
+            await eval_js("""(() => {
+                const mapRadio = document.querySelector('input[name="operationMode"][value="map"]');
+                mapRadio.checked = true;
+                mapRadio.dispatchEvent(new Event('change'));
+            })()""")
+            await asyncio.sleep(0.2)
+            map_opts_display = await eval_js("document.getElementById('mapOptions').style.display")
+            curl_snippet = await eval_js("document.getElementById('snippetCurl').textContent")
+            assert map_opts_display == "block", f"Expected mapOptions to be block, got: {map_opts_display}"
+            assert "/map" in curl_snippet, f"Expected /map in curl snippet, got: {curl_snippet}"
+            print("[12] Verified Map Website ($0.005) mode reveals #mapOptions and updates code snippets.")
+
             # Check if any exceptions occurred during all interactions
             assert len(exceptions) == 0, f"Exceptions occurred during test: {exceptions}"
             print("\n*** ALL PLAYGROUND HEADLESS CHECKS PASSED CLEANLY! ***\n")

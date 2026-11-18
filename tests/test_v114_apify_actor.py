@@ -167,7 +167,7 @@ class ApifyPackagingAndSchemaTests(unittest.TestCase):
         self.assertIn("action", input_schema["properties"])
         self.assertEqual(
             input_schema["properties"]["action"]["enum"],
-            ["fetch", "screenshot", "inspect", "batch_fetch"],
+            ["fetch", "screenshot", "inspect", "batch_fetch", "bulk_inspect", "map"],
         )
 
         ppe = json.loads((REPO_ROOT / ".actor" / "pay_per_event.json").read_text(encoding="utf-8"))
@@ -272,6 +272,96 @@ class ApifyStandardRunTests(unittest.TestCase):
         self.assertEqual(len(fake_actor.pushed_items), 1)
         self.assertFalse(fake_actor.pushed_items[0]["success"])
 
+    def test_standard_run_bulk_inspect_normalizes_domains_and_charges_only_succeeded(self):
+        fake_actor = FakeApifyActor(
+            {
+                "action": "bulk_inspect",
+                "urls": ["stripe.com", "https://linear.app", "fail.example.com"],
+            }
+        )
+
+        def fake_inspect(target_url: str, **_kw):
+            if "fail.example.com" in target_url:
+                raise RuntimeError("DNS failed")
+            return {
+                "success": True,
+                "requested_url": target_url,
+                "final_url": f"{target_url}/",
+                "status_code": 200,
+                "metadata": {"title": f"Title {target_url}", "description": "B2B SaaS"},
+                "contacts": {
+                    "emails": ["sales@example.com", "support@example.com"],
+                    "phones": ["+1-800-555-0199"],
+                    "social_links": {
+                        "github": "https://github.com/example",
+                        "linkedin": "https://linkedin.com/company/example",
+                        "x_twitter": "https://x.com/example",
+                    },
+                },
+                "tech_stack": ["Next.js", "Stripe", "Cloudflare"],
+                "security_headers": {
+                    "https": True,
+                    "strict_transport_security": "max-age=31536000",
+                    "content_security_policy": None,
+                },
+            }
+
+        with patch("smartfetch.apify_actor.inspect_webpage_url", side_effect=fake_inspect):
+            res = asyncio.run(
+                apify_actor.run_standard_mode(
+                    actor_cls=fake_actor,
+                    environ={"APIFY_USER_IS_PAYING": "true"},
+                )
+            )
+
+        self.assertTrue(res["success"])
+        self.assertEqual(res["total_urls"], 3)
+        self.assertEqual(res["succeeded_count"], 2)
+        self.assertEqual(res["failed_count"], 1)
+        # Strictly charges 2 site-inspected events (0 for the failed domain)
+        self.assertEqual(fake_actor.charges, [("site-inspected", 2)])
+        self.assertEqual(len(fake_actor.pushed_items), 3)
+
+        first = fake_actor.pushed_items[0]
+        self.assertEqual(first["action"], "bulk_inspect")
+        self.assertEqual(first["domain"], "stripe.com")
+        self.assertEqual(first["requested_url"], "https://stripe.com")
+        self.assertEqual(first["emails"], "sales@example.com, support@example.com")
+        self.assertEqual(first["tech_stack"], "Next.js, Stripe, Cloudflare")
+        self.assertTrue(first["https"])
+        self.assertTrue(first["has_hsts"])
+        self.assertFalse(first["has_csp"])
+
+        failed = fake_actor.pushed_items[2]
+        self.assertFalse(failed["success"])
+        self.assertIn("DNS failed", failed["error"])
+
+    def test_standard_run_bulk_inspect_free_plan_caps_to_5_urls(self):
+        domains = [f"company{i}.com" for i in range(8)]
+        fake_actor = FakeApifyActor({"action": "bulk_inspect", "urls": domains})
+        with patch("smartfetch.apify_actor.inspect_webpage_url") as mock_inspect:
+            mock_inspect.side_effect = lambda u, **_kw: {
+                "success": True,
+                "requested_url": u,
+                "final_url": u,
+                "status_code": 200,
+                "metadata": {"title": "Co"},
+                "contacts": {"emails": [], "phones": [], "social_links": {}},
+                "tech_stack": [],
+                "security_headers": {"https": True},
+            }
+            res = asyncio.run(
+                apify_actor.run_standard_mode(
+                    actor_cls=fake_actor,
+                    environ={"APIFY_USER_IS_PAYING": "false"},
+                )
+            )
+
+        self.assertTrue(res["success"])
+        self.assertTrue(res["free_plan_batch_capped"])
+        self.assertEqual(res["total_urls"], 5)
+        self.assertEqual(fake_actor.charges, [("site-inspected", 5)])
+
 
 class ApifyStandbyMCPTests(unittest.TestCase):
     def test_standby_readiness_probe_and_mcp_tool_execution(self):
@@ -309,7 +399,13 @@ class ApifyStandbyMCPTests(unittest.TestCase):
                 tool_names = [t["name"] for t in list_res.json()["result"]["tools"]]
                 self.assertEqual(
                     set(tool_names),
-                    {"fetch_webpage", "screenshot_webpage", "inspect_webpage", "batch_fetch_webpages"},
+                    {
+                        "fetch_webpage",
+                        "screenshot_webpage",
+                        "inspect_webpage",
+                        "batch_fetch_webpages",
+                        "map_website",
+                    },
                 )
 
                 # 3. MCP tools/call fetch_webpage charges page-fetched

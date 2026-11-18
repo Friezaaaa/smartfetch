@@ -202,6 +202,9 @@
               <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #fff;">
                 <input type="radio" name="operationMode" value="batch_fetch" onchange="onModeChange()"> Batch Fetch ($0.015)
               </label>
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #fff;">
+                <input type="radio" name="operationMode" value="map" onchange="onModeChange()"> Map Website ($0.005)
+              </label>
             </div>
           </div>
 
@@ -316,6 +319,21 @@ https://quotes.toscrape.com/js/</textarea>
             </div>
           </div>
 
+          <div id="mapOptions" style="display: none;">
+            <div class="form-group">
+              <label for="mapSearch">Search Filter (Optional Substring)</label>
+              <input type="text" id="mapSearch" placeholder="e.g. docs, blog, pricing" oninput="updateSnippets()">
+            </div>
+            <div class="form-group">
+              <label for="mapMaxUrls">Max URLs Returned (1 to 500)</label>
+              <input type="number" id="mapMaxUrls" min="1" max="500" value="200" style="width: 100%; background: #0f172a; color: #fff; border: 1px solid var(--card-border); border-radius: 6px; padding: 8px;" oninput="updateSnippets()">
+            </div>
+            <div class="form-group checkbox-group">
+              <input type="checkbox" id="mapIncludeSubdomains" onchange="updateSnippets()">
+              <label for="mapIncludeSubdomains" style="margin-bottom: 0; cursor: pointer;">Include Subdomains (include_subdomains: true)</label>
+            </div>
+          </div>
+
           <details id="advancedOptions" style="margin-top: 8px; margin-bottom: 14px; background: rgba(15, 23, 42, 0.55); border: 1px solid var(--card-border); border-radius: 8px; padding: 10px 12px;">
             <summary style="cursor: pointer; font-size: 0.85rem; font-weight: 600; color: var(--text-muted); user-select: none;">Advanced options</summary>
             <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 10px;">
@@ -379,6 +397,7 @@ https://quotes.toscrape.com/js/</textarea>
             <button class="tab" onclick="switchOutputTab('screenshot')">Screenshot</button>
             <button class="tab" onclick="switchOutputTab('inspect')">Site Intelligence</button>
             <button class="tab" onclick="switchOutputTab('batch')">Batch Results</button>
+            <button class="tab" onclick="switchOutputTab('map')">Mapped URLs</button>
             <button class="tab" onclick="switchOutputTab('meta')">Metadata &amp; JSON</button>
           </div>
 
@@ -441,6 +460,18 @@ https://quotes.toscrape.com/js/</textarea>
             <div id="batchMetrics" style="margin-bottom: 8px; color: var(--text-muted); font-size: 0.85rem;"></div>
             <div id="batchPlaceholder" style="color: var(--text-muted); padding: 40px; text-align: center;">Execute a batch fetch request to view multiple retrieved pages.</div>
             <div id="batchCards" style="display: none; display: flex; flex-direction: column; gap: 14px;"></div>
+          </div>
+
+          <div id="tabMap" class="tab-content">
+            <div id="mapMetrics" style="margin-bottom: 8px; color: var(--text-muted); font-size: 0.85rem;"></div>
+            <div id="mapPlaceholder" style="color: var(--text-muted); padding: 40px; text-align: center;">Execute a Map Website request to discover internal URLs from sitemaps and page links.</div>
+            <div id="mapData" style="display: none; flex-direction: column; gap: 12px;">
+              <div>
+                <button class="btn-secondary" style="padding: 6px 14px; font-size: 0.82rem;" onclick="copyMappedUrls()">&#128203; Copy All URLs</button>
+              </div>
+              <pre id="mapUrlsText" style="max-height: 260px; overflow: auto;"></pre>
+              <div id="mapLinksList" style="background: rgba(255,255,255,0.03); border: 1px solid var(--card-border); border-radius: 8px; padding: 12px; max-height: 300px; overflow: auto; font-size: 0.84rem; line-height: 1.7;"></div>
+            </div>
           </div>
 
           <div id="tabMeta" class="tab-content">
@@ -592,6 +623,7 @@ https://quotes.toscrape.com/js/</textarea>
     if (mode === 'screenshot') action = 'Screenshot ($0.01 USDC)';
     else if (mode === 'inspect') action = 'Inspect ($0.005 USDC)';
     else if (mode === 'batch_fetch') action = 'Batch Fetch ($0.015 USDC)';
+    else if (mode === 'map') action = 'Map Website ($0.005 USDC)';
     document.getElementById('paidBtn').innerHTML = `&#9889; ${prefix}${action}`;
   }
 
@@ -602,6 +634,8 @@ https://quotes.toscrape.com/js/</textarea>
     document.getElementById('screenshotOptions').style.display = mode === 'screenshot' ? 'block' : 'none';
     document.getElementById('inspectOptions').style.display = mode === 'inspect' ? 'block' : 'none';
     document.getElementById('batchFetchOptions').style.display = mode === 'batch_fetch' ? 'block' : 'none';
+    const mapOpts = document.getElementById('mapOptions');
+    if (mapOpts) mapOpts.style.display = mode === 'map' ? 'block' : 'none';
     const includeHtmlRow = document.getElementById('includeHtmlRow');
     if (includeHtmlRow) includeHtmlRow.style.display = mode === 'fetch' ? 'flex' : 'none';
     updatePaidBtnText();
@@ -727,6 +761,11 @@ https://quotes.toscrape.com/js/</textarea>
         probeBody = { urls: getBatchUrls(), max_chars_per_url: getBatchMaxChars(), render_mode: document.getElementById('batchRenderMode').value };
         expectedAmount = '15000';
         opName = 'Batch Fetch';
+      } else if (mode === 'map') {
+        endpoint = `${gateway}/map`;
+        probeBody = { url: target, max_urls: parseInt(document.getElementById('mapMaxUrls').value || '200', 10) };
+        expectedAmount = '5000';
+        opName = 'Map Website';
       }
 
       const fetchResp = await fetch(endpoint, {
@@ -1225,6 +1264,9 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     } else if (mode === 'batch_fetch') {
       renderBatchOutput(respData);
       switchOutputTab('batch');
+    } else if (mode === 'map') {
+      renderMapOutput(respData);
+      switchOutputTab('map');
     } else {
       document.getElementById('markdownOutput').textContent = respData.markdown || respData.content || "No Markdown returned.";
       document.getElementById('textOutput').textContent = respData.content || "";
@@ -1288,6 +1330,10 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
         endpoint = `${gateway}/batch-fetch`;
         expectedAmount = '15000';
         opName = "SmartFetch Batch Fetcher";
+      } else if (mode === 'map') {
+        endpoint = `${gateway}/map`;
+        expectedAmount = '5000';
+        opName = "SmartFetch Website Mapper";
       }
       const priceLabel = mode === 'screenshot' ? '$0.01' : (mode === 'batch_fetch' ? '$0.015' : '$0.005');
 
@@ -1379,6 +1425,15 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
           render_mode: document.getElementById('batchRenderMode').value,
           no_cache: noCacheCheckbox.checked
         };
+      } else if (mode === 'map') {
+        const searchVal = document.getElementById('mapSearch').value.trim();
+        reqBody = {
+          url: target,
+          max_urls: Math.max(1, Math.min(500, parseInt(document.getElementById('mapMaxUrls').value || '200', 10))),
+          include_subdomains: document.getElementById('mapIncludeSubdomains').checked,
+          no_cache: noCacheCheckbox.checked
+        };
+        if (searchVal) reqBody.search = searchVal;
       } else {
         reqBody = {
           url: target,
@@ -1502,6 +1557,10 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
         endpoint = `${gateway}/batch-fetch`;
         expectedAmount = '15000';
         opName = "SmartFetch Batch Fetcher";
+      } else if (mode === 'map') {
+        endpoint = `${gateway}/map`;
+        expectedAmount = '5000';
+        opName = "SmartFetch Website Mapper";
       }
       const priceLabel = mode === 'screenshot' ? '$0.01' : (mode === 'batch_fetch' ? '$0.015' : '$0.005');
 
@@ -1626,6 +1685,15 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
           render_mode: document.getElementById('batchRenderMode').value,
           no_cache: noCacheCheckbox.checked
         };
+      } else if (mode === 'map') {
+        const searchVal = document.getElementById('mapSearch').value.trim();
+        reqBody = {
+          url: target,
+          max_urls: Math.max(1, Math.min(500, parseInt(document.getElementById('mapMaxUrls').value || '200', 10))),
+          include_subdomains: document.getElementById('mapIncludeSubdomains').checked,
+          no_cache: noCacheCheckbox.checked
+        };
+        if (searchVal) reqBody.search = searchVal;
       } else {
         reqBody = {
           url: target,
@@ -1767,6 +1835,26 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     container.innerHTML = html;
   }
 
+  function renderMapOutput(data) {
+    document.getElementById('mapPlaceholder').style.display = 'none';
+    document.getElementById('mapData').style.display = 'flex';
+    const urls = data.urls || [];
+    const src = data.sources || {};
+    document.getElementById('mapMetrics').textContent =
+      `Returned: ${data.returned_count || urls.length} / ${data.total_discovered || urls.length} discovered | Domain: ${data.base_domain || ''} | Sitemap URLs: ${src.sitemap_urls_found || 0} | Page Links: ${src.page_links_found || 0} | Elapsed: ${data.elapsed_ms || 0}ms`;
+    document.getElementById('mapUrlsText').textContent = urls.join('\n');
+    document.getElementById('mapLinksList').innerHTML = urls.length
+      ? urls.map((u, idx) => `<div><span style="color:var(--text-muted);margin-right:8px;">${idx + 1}.</span><a href="${escapeHtml(u)}" target="_blank">${escapeHtml(u)}</a></div>`).join('')
+      : '<div style="color:var(--text-muted);">No matching URLs discovered.</div>';
+  }
+
+  function copyMappedUrls() {
+    const txt = document.getElementById('mapUrlsText').textContent || '';
+    if (txt && navigator.clipboard) {
+      navigator.clipboard.writeText(txt);
+    }
+  }
+
   function downloadScreenshot() {
     if (!currentScreenshotBase64) return;
     const a = document.createElement('a');
@@ -1784,7 +1872,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
 
   // Tab Switching
   function switchOutputTab(name) {
-    const tabs = ['markdown', 'text', 'html', 'screenshot', 'inspect', 'batch', 'meta'];
+    const tabs = ['markdown', 'text', 'html', 'screenshot', 'inspect', 'batch', 'map', 'meta'];
     tabs.forEach(t => {
       const btn = document.querySelector(`#outputTabs button[onclick*="${t}"]`);
       if (btn) btn.classList.toggle('active', t === name);
@@ -1979,6 +2067,59 @@ import { base } from 'viem/chains';
 const client = createWalletClient({ chain: base, transport: custom(window.ethereum) });
 // 1. Fetch challenge from ${gateway}/batch-fetch ($0.015 USDC)
 // 2. Sign EIP-712 TransferWithAuthorization (amount: 15000 atomic units)
+// 3. Retry with PAYMENT-SIGNATURE: <base64_payload>`;
+
+    } else if (mode === 'map') {
+      const searchVal = (document.getElementById('mapSearch') && document.getElementById('mapSearch').value.trim()) || '';
+      const maxUrls = parseInt((document.getElementById('mapMaxUrls') && document.getElementById('mapMaxUrls').value) || '200', 10);
+      const includeSubs = Boolean(document.getElementById('mapIncludeSubdomains') && document.getElementById('mapIncludeSubdomains').checked);
+
+      document.getElementById('snippetCurl').textContent =
+`curl -X POST "${gateway}/map" \\
+  -H "Content-Type: application/json" \\
+  -H "PAYMENT-SIGNATURE: <BASE64_X402_ENVELOPE>" \\
+  -d '{
+    "url": "${target}",
+    "search": ${searchVal ? JSON.stringify(searchVal) : 'null'},
+    "include_subdomains": ${includeSubs},
+    "max_urls": ${maxUrls},
+    "no_cache": ${noCache}
+  }'`;
+
+      document.getElementById('snippetPython').textContent =
+`import httpx
+from x402 import x402Client
+# Supports Base Mainnet (eip155:8453) and Solana Mainnet (solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp)
+
+client = x402Client()
+response = client.post(
+    "${gateway}/map",
+    json={
+        "url": "${target}",
+        "search": ${searchVal ? JSON.stringify(searchVal) : 'None'},
+        "include_subdomains": ${includeSubs ? 'True' : 'False'},
+        "max_urls": ${maxUrls},
+        "no_cache": ${noCache ? 'True' : 'False'}
+    }
+)
+data = response.json()
+print("Discovered:", data.get("returned_count"), "URLs:", data.get("urls")[:10])`;
+
+      document.getElementById('snippetTypescript').textContent = isSolana
+? `// Solana Mainnet (SVM) Micropayment ($0.005 USDC)
+import { VersionedTransaction, TransactionMessage } from '@solana/web3.js';
+// 1. Fetch 402 challenge from ${gateway}/map
+// 2. Build ComputeBudget + TransferChecked (amount: 5000)
+// 3. Compile MessageV0 with feePayer: BENrLoUbndxoNMUS5JXApGMtNykLjFXXixMtpDwDR9SP
+// 4. Sign with wallet.features['solana:signTransaction']
+// 5. Retry POST with PAYMENT-SIGNATURE: <base64_x402_envelope>`
+: `// Base Mainnet (EVM) Micropayment ($0.005 USDC)
+import { createWalletClient, custom } from 'viem';
+import { base } from 'viem/chains';
+
+const client = createWalletClient({ chain: base, transport: custom(window.ethereum) });
+// 1. Fetch challenge from ${gateway}/map ($0.005 USDC)
+// 2. Sign EIP-712 TransferWithAuthorization (amount: 5000 atomic units)
 // 3. Retry with PAYMENT-SIGNATURE: <base64_payload>`;
 
     } else {

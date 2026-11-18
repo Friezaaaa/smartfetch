@@ -25,10 +25,12 @@ Prefer traditional cloud billing (credit/debit cards, PayPal, or prepaid Apify c
 
 - **Public Apify Store Actor**: [https://apify.com/smartfetch.dev/smartfetch](https://apify.com/smartfetch.dev/smartfetch)
 - **Standby MCP Endpoint**: `https://smartfetch-dev--smartfetch.apify.actor/mcp` (pass `Authorization: Bearer <APIFY_API_TOKEN>`)
+- **Bulk B2B Lead & Tech-Stack Enrichment (`bulk_inspect`)**: Supply up to 50 bare domains or URLs (`["stripe.com", "linear.app", ...]`) to concurrently extract flat, CSV/Excel-ready rows containing `domain`, `url`, `title`, `description`, `emails`, `phones`, `github`, `linkedin`, `x_twitter`, `tech_stack`, `https`, `has_hsts`, and `has_csp`.
+- **Site URL Discovery (`map` / `map_website`)**: Discover up to 500 internal URLs on any website via `robots.txt` (`Sitemap:`), `/sitemap.xml` (including nested `<sitemapindex>`), and internal `<a href>` links with optional keyword filtering.
 - **Pay-Per-Event Pricing**:
   - `actor-start`: `$0.00` (no startup fee; `$0.00001` platform minimum)
-  - `page-fetched`: **`$0.01`** per successfully retrieved webpage or PDF (`fetch` & `batch_fetch`)
-  - `site-inspected`: **`$0.01`** per successful structured site intelligence inspection (`inspect`)
+  - `page-fetched`: **`$0.01`** per successfully retrieved webpage, PDF, or site map (`fetch`, `batch_fetch`, & `map`)
+  - `site-inspected`: **`$0.01`** per successful structured site intelligence or B2B lead enrichment (`inspect` & `bulk_inspect`)
   - `screenshot-captured`: **`$0.02`** per successful headless Chromium screenshot (`screenshot`)
   - Zero charge on failed requests.
 
@@ -59,7 +61,7 @@ SmartFetch separates the public API/MCP interface from headless browser executio
 - **Supported Networks**:
   - **Base Mainnet** (`eip155:8453`) — Native USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`)
   - **Solana Mainnet** (`solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`) — Native SPL USDC (`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`)
-- **Price**: $0.005 USDC (5000 atomic units) for webpage retrieval and site inspection (`POST /fetch`, `POST /inspect`, retrieval tools, and `inspect_webpage`); $0.01 USDC (10000 atomic units) for screenshot capture (`POST /screenshot` and `screenshot_webpage`); $0.015 USDC (15000 atomic units) for parallel batch retrieval (`POST /batch-fetch` and `batch_fetch_webpages`)
+- **Price**: $0.005 USDC (5000 atomic units) for webpage retrieval, site inspection, and site URL mapping (`POST /fetch`, `POST /inspect`, `POST /map`, retrieval tools, `inspect_webpage`, and `map_website`); $0.01 USDC (10000 atomic units) for screenshot capture (`POST /screenshot` and `screenshot_webpage`); $0.015 USDC (15000 atomic units) for parallel batch retrieval (`POST /batch-fetch` and `batch_fetch_webpages`)
 - **Seller Treasury (`payTo`)**:
   - **Base (EVM)**: `0xE29Fcb6ef1534d5F138E48a8A71370BE7770A786`
   - **Solana (SVM)**: `88hE4EB4yZwb4F2arPXcG7efwQyU5FDN26DuVpVKVk2W`
@@ -71,11 +73,13 @@ SmartFetch separates the public API/MCP interface from headless browser executio
   - `screenshot_webpage` ($0.01 USDC)
   - `inspect_webpage` ($0.005 USDC)
   - `batch_fetch_webpages` ($0.015 USDC)
+  - `map_website` ($0.005 USDC)
 - **REST Endpoints**:
   - `POST /fetch` ($0.005 USDC)
   - `POST /screenshot` ($0.01 USDC)
   - `POST /inspect` ($0.005 USDC)
   - `POST /batch-fetch` ($0.015 USDC)
+  - `POST /map` ($0.005 USDC)
 
 ---
 
