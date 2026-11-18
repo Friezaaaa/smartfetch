@@ -199,6 +199,7 @@ def create_smartfetch_mcp(
         url: Annotated[str, Field(description="Public HTTP or HTTPS URL of a webpage or PDF to retrieve.")],
         max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS, description="Maximum characters returned for content and Markdown.")] = MCP_DEFAULT_MAX_CHARS,
         force_browser: Annotated[bool, Field(description="Start with browser rendering instead of fast HTTP retrieval.")] = False,
+        only_main_content: Annotated[bool, Field(description="Extract only main article/content (strips nav, footer, aside).")] = True,
         wait_ms: Annotated[int, Field(ge=0, le=5000, description="Optional extra wait in milliseconds (0-5000) after page load.")] = 0,
         wait_for_selector: Annotated[Optional[str], Field(max_length=256, description="Optional CSS selector to wait for before extraction.")] = None,
         scroll: Annotated[bool, Field(description="Scroll down to trigger lazy-loaded content before extraction.")] = False,
@@ -207,6 +208,8 @@ def create_smartfetch_mcp(
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string")
         extra_kwargs: dict[str, Any] = {}
+        if not only_main_content:
+            extra_kwargs["only_main_content"] = False
         if wait_ms or wait_for_selector is not None or scroll or not dismiss_cookies:
             extra_kwargs.update({
                 "wait_ms": wait_ms,
@@ -220,10 +223,14 @@ def create_smartfetch_mcp(
         url: Annotated[str, Field(description="Public HTTP or HTTPS URL of a webpage or PDF to retrieve as Markdown.")],
         max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS, description="Maximum characters returned for Markdown.")] = MCP_DEFAULT_MAX_CHARS,
         force_browser: Annotated[bool, Field(description="Start with browser rendering instead of fast HTTP retrieval.")] = False,
+        only_main_content: Annotated[bool, Field(description="Extract only main article/content (strips nav, footer, aside).")] = True,
     ) -> dict[str, Any]:
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string")
-        result = await fetch_handler(url.strip(), force_browser, max_chars)
+        extra_kwargs: dict[str, Any] = {}
+        if not only_main_content:
+            extra_kwargs["only_main_content"] = False
+        result = await fetch_handler(url.strip(), force_browser, max_chars, **extra_kwargs)
         md_text = result.get("markdown", "") or result.get("content", "")
         payload: dict[str, Any] = {
             "success": bool(result.get("success", True)),
@@ -248,10 +255,14 @@ def create_smartfetch_mcp(
         url: Annotated[str, Field(description="Public HTTP or HTTPS URL of a webpage or PDF to extract plain text from.")],
         max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS, description="Maximum characters returned for content.")] = MCP_DEFAULT_MAX_CHARS,
         force_browser: Annotated[bool, Field(description="Start with browser rendering instead of fast HTTP retrieval.")] = False,
+        only_main_content: Annotated[bool, Field(description="Extract only main article/content (strips nav, footer, aside).")] = True,
     ) -> dict[str, Any]:
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string")
-        result = await fetch_handler(url.strip(), force_browser, max_chars)
+        extra_kwargs: dict[str, Any] = {}
+        if not only_main_content:
+            extra_kwargs["only_main_content"] = False
+        result = await fetch_handler(url.strip(), force_browser, max_chars, **extra_kwargs)
         text_content = result.get("content", "")
         payload: dict[str, Any] = {
             "success": bool(result.get("success", True)),
@@ -275,6 +286,7 @@ def create_smartfetch_mcp(
     async def render_webpage(
         url: Annotated[str, Field(description="Public HTTP or HTTPS webpage URL for forced headless browser rendering.")],
         max_chars: Annotated[int, Field(ge=MCP_MIN_CHARS, le=MCP_MAX_CHARS, description="Maximum characters returned for content, Markdown, and HTML.")] = MCP_DEFAULT_MAX_CHARS,
+        only_main_content: Annotated[bool, Field(description="Extract only main article/content (strips nav, footer, aside).")] = True,
         wait_ms: Annotated[int, Field(ge=0, le=5000, description="Optional extra wait in milliseconds (0-5000) after page load.")] = 0,
         wait_for_selector: Annotated[Optional[str], Field(max_length=256, description="Optional CSS selector to wait for before extraction.")] = None,
         scroll: Annotated[bool, Field(description="Scroll down to trigger lazy-loaded content before extraction.")] = False,
@@ -283,6 +295,8 @@ def create_smartfetch_mcp(
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string")
         extra_kwargs: dict[str, Any] = {}
+        if not only_main_content:
+            extra_kwargs["only_main_content"] = False
         if wait_ms or wait_for_selector is not None or scroll or not dismiss_cookies:
             extra_kwargs.update({
                 "wait_ms": wait_ms,

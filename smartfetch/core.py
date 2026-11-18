@@ -61,6 +61,7 @@ def smart_fetch(
     render_mode: str = "auto",
     no_cache: bool = False,
     include_html: bool = False,
+    only_main_content: bool = True,
     wait_ms: int = 0,
     wait_for_selector: str | None = None,
     scroll: bool = False,
@@ -88,6 +89,7 @@ def smart_fetch(
         format=format,
         render_mode=resolved_render_mode,
         include_html=include_html,
+        only_main_content=only_main_content,
     )
 
     # 1. Cache lookup
@@ -226,7 +228,10 @@ def smart_fetch(
                 return shape_output(payload, max_chars)
 
             try:
-                extracted = extract_content(page['html'], page['final_url'])
+                if only_main_content:
+                    extracted = extract_content(page['html'], page['final_url'])
+                else:
+                    extracted = extract_content(page['html'], page['final_url'], only_main_content=False)
             except Exception as error:
                 annotated = attach_diagnostics(error, make_diagnostics(
                     url,
@@ -347,7 +352,10 @@ def smart_fetch(
         obs.browser_latency_ms = round((time.perf_counter() - browser_start) * 1000, 2)
         obs.retrieval_tier = "browser"
         try:
-            extracted = extract_content(page['html'], page['final_url'])
+            if only_main_content:
+                extracted = extract_content(page['html'], page['final_url'])
+            else:
+                extracted = extract_content(page['html'], page['final_url'], only_main_content=False)
             if not extracted['content']:
                 error = RuntimeError(
                     'Browser rendered page but no useful text was extracted'

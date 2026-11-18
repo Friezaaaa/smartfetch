@@ -116,6 +116,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         render_mode: str = "auto",
         no_cache: bool = False,
         include_html: bool = False,
+        only_main_content: bool = True,
         wait_ms: int = 0,
         wait_for_selector: str | None = None,
         scroll: bool = False,
@@ -124,6 +125,8 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         loop = asyncio.get_running_loop()
         should_force = force_browser
         extra_kwargs: dict[str, Any] = {}
+        if not only_main_content:
+            extra_kwargs["only_main_content"] = False
         if wait_ms or wait_for_selector is not None or scroll or not dismiss_cookies:
             extra_kwargs.update({
                 "wait_ms": wait_ms,
@@ -319,6 +322,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         render_mode = str(body.get("render_mode", "auto"))
         fmt = str(body.get("format", "markdown"))
         no_cache = bool(body.get("no_cache", False)) or request.headers.get("cache-control") == "no-cache"
+        only_main_content = bool(body.get("only_main_content", True))
         max_chars = int(body.get("max_chars", 20000))
         max_chars = max(1000, min(50000, max_chars))
         from .browser_pool import normalize_capture_options
@@ -330,6 +334,8 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         )
         try:
             extra_kwargs: dict[str, Any] = {}
+            if not only_main_content:
+                extra_kwargs["only_main_content"] = False
             if wait_ms or wait_for_selector is not None or scroll or not dismiss_cookies:
                 extra_kwargs.update({
                     "wait_ms": wait_ms,

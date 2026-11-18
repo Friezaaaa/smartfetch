@@ -47,6 +47,7 @@ def build_cache_key(
     format: str = "markdown",
     render_mode: str = "auto",
     include_html: bool = False,
+    only_main_content: bool = True,
 ) -> str:
     """Builds a normalized SHA-256 cache key scoped by URL, format, and render mode."""
     canonical_url = normalize_cache_url(url)
@@ -55,7 +56,9 @@ def build_cache_key(
     mode = (render_mode or "auto").lower()
     base = f"sf:{url_digest}:{fmt}:{mode}"
     if include_html:
-        return f"{base}:html"
+        base = f"{base}:html"
+    if not only_main_content:
+        base = f"{base}:full"
     return base
 
 

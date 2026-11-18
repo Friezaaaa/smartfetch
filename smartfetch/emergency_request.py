@@ -42,6 +42,7 @@ FREE_MCP_METHODS = (
     "resources/templates/list",
 )
 _CAPTURE_OPTION_PROPERTIES = {
+    "only_main_content": {"type": "boolean"},
     "wait_ms": {"type": "integer", "minimum": 0, "maximum": 5000},
     "wait_for_selector": {"type": ["string", "null"], "maxLength": 256},
     "scroll": {"type": "boolean"},
