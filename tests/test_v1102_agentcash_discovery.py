@@ -184,7 +184,7 @@ class CurrentVersionAndRegistryTests(unittest.TestCase):
         self.assertEqual(manifest['version'], '1.14.0')
         self.assertEqual(
             manifest['description'],
-            'Public web retrieval with zero-trust browser isolation and x402 payment enforcement on Base Mainnet.',
+            'HTML/PDF/Markdown, browser render, screenshots, site intel, URL map & batch via Base/Solana x402.',
         )
         self.assertEqual(MCP_TOOLS, (
             'fetch_webpage',

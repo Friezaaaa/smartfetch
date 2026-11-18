@@ -653,7 +653,7 @@ class V19RegistryManifestTests(unittest.TestCase):
             'name': 'io.github.Friezaaaa/smartfetch',
             'title': 'SmartFetch',
             'description': (
-                'Public web retrieval with zero-trust browser isolation and x402 payment enforcement on Base Mainnet.'
+                'HTML/PDF/Markdown, browser render, screenshots, site intel, URL map & batch via Base/Solana x402.'
             ),
             'version': '1.14.0',
             'repository': {

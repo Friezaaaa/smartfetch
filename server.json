@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Friezaaaa/smartfetch",
   "title": "SmartFetch",
-  "description": "Public web retrieval with zero-trust browser isolation and x402 payment enforcement on Base Mainnet.",
+  "description": "HTML/PDF/Markdown, browser render, screenshots, site intel, URL map & batch via Base/Solana x402.",
   "version": "1.14.0",
   "repository": {
     "url": "https://github.com/Friezaaaa/smartfetch",
