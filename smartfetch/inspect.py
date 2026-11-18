@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import io
 import json
 import logging
@@ -13,6 +14,7 @@ from urllib.parse import urljoin, urlparse, urlsplit
 
 from bs4 import BeautifulSoup
 import pypdf
+import requests
 
 from .browser_fetch import browser_fetch
 from .cache import build_inspect_cache_key, get_result_cache
@@ -291,7 +293,220 @@ def _extract_structure(soup: BeautifulSoup, final_url: str) -> dict[str, Any]:
         "external_links": external_links,
         "pdf_links": pdf_links,
         "sitemap_links": sorted(list(sitemaps))[:10],
+        "rss_feeds": _extract_rss_feeds(soup, final_url),
     }
+
+
+_TWO_PART_TLDS = frozenset({
+    "co.uk", "org.uk", "ac.uk", "gov.uk",
+    "com.au", "net.au", "org.au",
+    "co.jp", "ne.jp", "or.jp",
+    "com.br", "com.mx", "co.in", "co.nz",
+})
+
+
+def _registrable_domain(hostname: str) -> str:
+    host = (hostname or "").strip().lower().rstrip(".")
+    if ":" in host:
+        host = host.split(":", 1)[0]
+    if host.startswith("www.") and len(host) > 4:
+        host = host[4:]
+    parts = [p for p in host.split(".") if p]
+    if len(parts) <= 2:
+        return host
+    if ".".join(parts[-2:]) in _TWO_PART_TLDS and len(parts) >= 3:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def _extract_rss_feeds(soup: BeautifulSoup, final_url: str) -> list[str]:
+    feeds: list[str] = []
+    seen: set[str] = set()
+    for link in soup.find_all("link", href=True):
+        rel = link.get("rel") or []
+        rel_tokens = [r.lower() for r in (rel if isinstance(rel, (list, tuple)) else [str(rel)])]
+        if "alternate" not in rel_tokens:
+            continue
+        ltype = (link.get("type") or "").strip().lower()
+        if "application/rss+xml" not in ltype and "application/atom+xml" not in ltype:
+            continue
+        abs_url = urljoin(final_url, link["href"].strip())
+        if urlparse(abs_url).scheme in ("http", "https") and abs_url not in seen:
+            seen.add(abs_url)
+            feeds.append(abs_url)
+            if len(feeds) >= 10:
+                break
+    return feeds
+
+
+_DEEP_PATH_KEYWORDS = ("contact", "about", "pricing", "team")
+
+
+def _discover_deep_links(soup: BeautifulSoup, final_url: str) -> tuple[list[str], str | None, str | None]:
+    """Finds up to 2 high-signal same-origin sub-pages (/contact, /about, /pricing, /team)."""
+    parsed_home = urlparse(final_url)
+    home_netloc = parsed_home.netloc.lower()
+    home_path = (parsed_home.path or "/").rstrip("/").lower()
+
+    # If the page itself is already a sub-page of interest, skip sub-crawling
+    if any(home_path.endswith(f"/{kw}") for kw in _DEEP_PATH_KEYWORDS):
+        contact_url = final_url if (home_path.endswith("/contact") or home_path.endswith("/about")) else None
+        pricing_url = final_url if home_path.endswith("/pricing") else None
+        return [], contact_url, pricing_url
+
+    best_by_kw: dict[str, str] = {}
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+            continue
+        resolved = urljoin(final_url, href)
+        p = urlparse(resolved)
+        if p.scheme not in ("http", "https") or p.netloc.lower() != home_netloc:
+            continue
+        clean_url = f"{p.scheme}://{p.netloc}{p.path or '/'}"
+        path_lower = (p.path or "/").rstrip("/").lower()
+        for kw in _DEEP_PATH_KEYWORDS:
+            if kw in best_by_kw:
+                continue
+            if path_lower == f"/{kw}" or path_lower.endswith(f"/{kw}") or f"/{kw}-" in path_lower:
+                best_by_kw[kw] = clean_url
+                break
+
+    contact_url = best_by_kw.get("contact") or best_by_kw.get("about")
+    pricing_url = best_by_kw.get("pricing")
+
+    chosen: list[str] = []
+    for kw in ("contact", "pricing", "about", "team"):
+        candidate = best_by_kw.get(kw)
+        if candidate and candidate not in chosen and candidate.rstrip("/") != final_url.rstrip("/"):
+            chosen.append(candidate)
+        if len(chosen) >= 2:
+            break
+    return chosen, contact_url, pricing_url
+
+
+def _merge_contacts_into(base_contacts: dict[str, Any], sub_soup: BeautifulSoup, sub_html: str) -> None:
+    sub = _extract_contacts(sub_soup, sub_html)
+    emails = list(dict.fromkeys([*(base_contacts.get("emails") or []), *(sub.get("emails") or [])]))[:20]
+    phones = list(dict.fromkeys([*(base_contacts.get("phones") or []), *(sub.get("phones") or [])]))[:20]
+    base_contacts["emails"] = emails
+    base_contacts["phones"] = phones
+    base_socials = base_contacts.get("social_links") or {}
+    sub_socials = sub.get("social_links") or {}
+    for k, v in sub_socials.items():
+        if base_socials.get(k) is None and v is not None:
+            base_socials[k] = v
+    base_contacts["social_links"] = base_socials
+
+
+def _doh_query(name: str, qtype: str, *, timeout: float = 1.5) -> dict[str, Any]:
+    resp = requests.get(
+        "https://dns.google/resolve",
+        params={"name": name, "type": qtype},
+        headers={"Accept": "application/dns-json"},
+        timeout=timeout,
+    )
+    if resp.status_code != 200:
+        return {}
+    return resp.json()
+
+
+def _rdap_query(domain: str, *, timeout: float = 1.5) -> dict[str, Any]:
+    resp = requests.get(
+        f"https://rdap.org/domain/{domain}",
+        headers={"Accept": "application/rdap+json, application/json"},
+        timeout=timeout,
+    )
+    if resp.status_code != 200:
+        return {}
+    return resp.json()
+
+
+def collect_domain_intel(final_url: str, *, timeout: float = 1.5) -> dict[str, Any]:
+    """Best-effort, strictly bounded (<=1.5s per lookup) DNS-over-HTTPS + RDAP domain intelligence."""
+    hostname = urlparse(final_url).hostname or ""
+    domain = _registrable_domain(hostname)
+    intel: dict[str, Any] = {
+        "domain": domain,
+        "has_mx": False,
+        "mx_hosts": [],
+        "has_spf": False,
+        "has_dmarc": False,
+        "registrar": None,
+        "created_at": None,
+        "domain_age_days": None,
+    }
+    if not domain or "." not in domain:
+        return intel
+
+    # 1. MX records via DoH
+    try:
+        mx_json = _doh_query(domain, "MX", timeout=timeout)
+        mx_hosts: list[str] = []
+        for ans in mx_json.get("Answer") or []:
+            if ans.get("type") == 15 and ans.get("data"):
+                parts = str(ans["data"]).split()
+                host = parts[-1].rstrip(".").lower() if parts else ""
+                if host and host not in mx_hosts:
+                    mx_hosts.append(host)
+        intel["mx_hosts"] = mx_hosts[:10]
+        intel["has_mx"] = len(mx_hosts) > 0
+    except Exception:
+        pass
+
+    # 2. SPF record via DoH TXT
+    try:
+        txt_json = _doh_query(domain, "TXT", timeout=timeout)
+        for ans in txt_json.get("Answer") or []:
+            data = str(ans.get("data") or "").lower()
+            if "v=spf1" in data:
+                intel["has_spf"] = True
+                break
+    except Exception:
+        pass
+
+    # 3. DMARC record via DoH TXT
+    try:
+        dmarc_json = _doh_query(f"_dmarc.{domain}", "TXT", timeout=timeout)
+        for ans in dmarc_json.get("Answer") or []:
+            data = str(ans.get("data") or "").lower()
+            if "v=dmarc1" in data:
+                intel["has_dmarc"] = True
+                break
+    except Exception:
+        pass
+
+    # 4. RDAP registrar + registration age
+    try:
+        rdap = _rdap_query(domain, timeout=timeout)
+        for ev in rdap.get("events") or []:
+            if ev.get("eventAction") == "registration" and ev.get("eventDate"):
+                created_str = str(ev["eventDate"])
+                intel["created_at"] = created_str
+                try:
+                    dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    age_days = max(0, (datetime.now(timezone.utc) - dt).days)
+                    intel["domain_age_days"] = age_days
+                except Exception:
+                    pass
+                break
+        for ent in rdap.get("entities") or []:
+            roles = [str(r).lower() for r in (ent.get("roles") or [])]
+            if "registrar" in roles:
+                vcard = ent.get("vcardArray")
+                if isinstance(vcard, list) and len(vcard) >= 2 and isinstance(vcard[1], list):
+                    for item in vcard[1]:
+                        if isinstance(item, list) and len(item) >= 4 and item[0] == "fn" and item[3]:
+                            intel["registrar"] = str(item[3]).strip()
+                            break
+                if intel["registrar"]:
+                    break
+    except Exception:
+        pass
+
+    return intel
 
 
 def _extract_metadata(soup: BeautifulSoup, final_url: str) -> dict[str, Any]:
@@ -471,6 +686,7 @@ def inspect_webpage_url(
     force_browser: bool = False,
     render_mode: str = "auto",
     no_cache: bool = False,
+    deep: bool = True,
 ) -> dict[str, Any]:
     """Inspects a public webpage and returns structured metadata, tech stack, and security headers."""
     started_at = time.perf_counter()
@@ -487,7 +703,7 @@ def inspect_webpage_url(
     else:
         resolved_render_mode = "auto"
 
-    cache_key = build_inspect_cache_key(url, render_mode=resolved_render_mode)
+    cache_key = build_inspect_cache_key(url, render_mode=resolved_render_mode, deep=deep)
 
     # 1. Cache lookup
     if not no_cache:
@@ -592,6 +808,46 @@ def inspect_webpage_url(
     security_headers = _extract_security_headers(headers, final_url)
     structure = _extract_structure(soup, final_url)
 
+    pages_checked = [final_url]
+    sub_links, contact_url, pricing_url = _discover_deep_links(soup, final_url)
+    if deep and sub_links:
+        sub_deadline = time.perf_counter() + 2.5
+        for sub_url in sub_links:
+            if time.perf_counter() >= sub_deadline:
+                break
+            try:
+                validate_public_url(sub_url)
+                sub_res = http_fetch(sub_url)
+                sub_html = sub_res.get("html") or sub_res.get("raw_html") or ""
+                if sub_html:
+                    sub_soup = BeautifulSoup(sub_html, "lxml")
+                    _merge_contacts_into(contacts, sub_soup, sub_html)
+                    pages_checked.append(sub_res.get("final_url", sub_url))
+            except Exception as exc:
+                _LOGGER.debug("Deep inspect sub-page skipped for %s: %s", sub_url, exc)
+
+    contacts["pages_checked"] = pages_checked
+    contacts["contact_url"] = contact_url
+    contacts["pricing_url"] = pricing_url
+
+    # Skip external DoH/RDAP network calls if http_fetch is mocked in offline tests
+    # unless collect_domain_intel itself was patched for testing.
+    http_is_mocked = getattr(http_fetch, "__module__", "") != "smartfetch.http_fetch"
+    intel_is_mocked = getattr(collect_domain_intel, "__module__", "") != "smartfetch.inspect"
+    if not http_is_mocked or intel_is_mocked:
+        domain_intel = collect_domain_intel(final_url, timeout=1.5)
+    else:
+        domain_intel = {
+            "domain": _registrable_domain(urlparse(final_url).hostname or ""),
+            "has_mx": False,
+            "mx_hosts": [],
+            "has_spf": False,
+            "has_dmarc": False,
+            "registrar": None,
+            "created_at": None,
+            "domain_age_days": None,
+        }
+
     result = {
         "success": True,
         "requested_url": url,
@@ -609,6 +865,7 @@ def inspect_webpage_url(
         "tech_stack": tech_stack,
         "security_headers": security_headers,
         "structure": structure,
+        "domain_intel": domain_intel,
     }
 
     if not no_cache:

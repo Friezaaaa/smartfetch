@@ -99,6 +99,12 @@ def _flatten_inspect_row(target_url: str, res: dict[str, Any] | None, error: str
             "https": target_url.lower().startswith("https://"),
             "has_hsts": False,
             "has_csp": False,
+            "contact_url": "",
+            "pricing_url": "",
+            "has_mx": False,
+            "has_spf": False,
+            "has_dmarc": False,
+            "domain_age_days": 0,
             "render_method": str(res.get("render_method") or "http") if isinstance(res, dict) else "http",
             "elapsed_ms": int(res.get("elapsed_ms") or 0) if isinstance(res, dict) else 0,
             "error": str(err_msg) if err_msg else "Inspection failed",
@@ -112,6 +118,7 @@ def _flatten_inspect_row(target_url: str, res: dict[str, Any] | None, error: str
     contacts = res.get("contacts") or {}
     social = contacts.get("social_links") or {}
     sec = res.get("security_headers") or {}
+    intel = res.get("domain_intel") or {}
     emails_list = contacts.get("emails") or []
     phones_list = contacts.get("phones") or []
     tech_list = res.get("tech_stack") or []
@@ -135,6 +142,12 @@ def _flatten_inspect_row(target_url: str, res: dict[str, Any] | None, error: str
         "https": bool(sec.get("https", final_url.lower().startswith("https://"))),
         "has_hsts": bool(sec.get("strict_transport_security")),
         "has_csp": bool(sec.get("content_security_policy")),
+        "contact_url": str(contacts.get("contact_url") or ""),
+        "pricing_url": str(contacts.get("pricing_url") or ""),
+        "has_mx": bool(intel.get("has_mx", False)),
+        "has_spf": bool(intel.get("has_spf", False)),
+        "has_dmarc": bool(intel.get("has_dmarc", False)),
+        "domain_age_days": int(intel.get("domain_age_days") or 0),
         "render_method": str(res.get("render_method") or "http"),
         "elapsed_ms": int(res.get("elapsed_ms") or 0),
         "error": "",

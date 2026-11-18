@@ -376,18 +376,22 @@ def create_smartfetch_mcp(
         url: Annotated[str, Field(description="Public HTTP or HTTPS URL of a webpage to inspect.")],
         render_mode: Annotated[str, Field(description="Rendering strategy: 'auto' (HTTP with browser escalation on SPA shell), 'http_only', or 'browser'.")] = "auto",
         force_browser: Annotated[bool, Field(description="Force browser rendering bypassing HTTP tier.")] = False,
+        deep: Annotated[bool, Field(description="Sub-crawl /contact, /about, /pricing and gather DoH/RDAP domain intel.")] = True,
     ) -> dict[str, Any]:
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string")
         if render_mode not in ("auto", "http_only", "browser"):
             raise ValueError("render_mode must be 'auto', 'http_only', or 'browser'")
+        extra_kwargs: dict[str, Any] = {}
+        if not deep:
+            extra_kwargs["deep"] = False
         if inspect_handler is not None:
-            return await inspect_handler(url.strip(), force_browser=force_browser, render_mode=render_mode)
+            return await inspect_handler(url.strip(), force_browser=force_browser, render_mode=render_mode, **extra_kwargs)
         import asyncio
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
-            lambda: inspect_webpage_url(url.strip(), force_browser=force_browser, render_mode=render_mode),
+            lambda: inspect_webpage_url(url.strip(), force_browser=force_browser, render_mode=render_mode, **extra_kwargs),
         )
 
     async def batch_fetch_webpages(

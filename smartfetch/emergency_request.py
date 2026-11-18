@@ -80,6 +80,7 @@ INSPECT_INPUT_SCHEMA = {
         "render_mode": {"type": "string", "enum": ["auto", "http_only", "browser"]},
         "force_browser": {"type": "boolean"},
         "no_cache": {"type": "boolean"},
+        "deep": {"type": "boolean"},
     },
     "required": ["url"],
 }
@@ -152,6 +153,7 @@ MCP_INSPECT_ARGUMENT_SCHEMA = {
         "render_mode": {"type": "string", "enum": ["auto", "http_only", "browser"]},
         "force_browser": {"type": "boolean"},
         "no_cache": {"type": "boolean"},
+        "deep": {"type": "boolean"},
     },
     "required": ["url"],
 }

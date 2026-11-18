@@ -80,12 +80,16 @@ def build_screenshot_cache_key(
 def build_inspect_cache_key(
     url: str,
     render_mode: str = "auto",
+    deep: bool = True,
 ) -> str:
-    """Builds a normalized SHA-256 cache key scoped by URL and render mode for inspect."""
+    """Builds a normalized SHA-256 cache key scoped by URL, render mode, and deep flag for inspect."""
     canonical_url = normalize_cache_url(url)
     url_digest = hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()[:24]
     mode = (render_mode or "auto").lower()
-    return f"sf:inspect:{url_digest}:{mode}"
+    base = f"sf:inspect:{url_digest}:{mode}"
+    if not deep:
+        return f"{base}:nodeep"
+    return base
 
 
 def build_map_cache_key(

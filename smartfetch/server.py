@@ -193,16 +193,19 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         force_browser: bool = False,
         render_mode: str = "auto",
         no_cache: bool = False,
+        deep: bool = True,
     ) -> dict:
         loop = asyncio.get_running_loop()
+        inspect_kwargs: dict[str, Any] = {
+            "force_browser": force_browser,
+            "render_mode": render_mode,
+            "no_cache": no_cache,
+        }
+        if not deep:
+            inspect_kwargs["deep"] = False
         result = await loop.run_in_executor(
             None,
-            lambda: inspect_webpage_url(
-                url,
-                force_browser=force_browser,
-                render_mode=render_mode,
-                no_cache=no_cache,
-            ),
+            lambda: inspect_webpage_url(url, **inspect_kwargs),
         )
         result["request_id"] = secrets.token_hex(8)
         result["service_version"] = SERVICE_VERSION
@@ -433,13 +436,16 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_render_mode", "error": "render_mode must be 'auto', 'http_only', or 'browser'"})
         force_browser = bool(body.get("force_browser", False))
         no_cache = bool(body.get("no_cache", False)) or request.headers.get("cache-control") == "no-cache"
+        deep = bool(body.get("deep", True))
         try:
-            result = await _run_inspect(
-                url.strip(),
-                force_browser=force_browser,
-                render_mode=render_mode,
-                no_cache=no_cache,
-            )
+            inspect_kwargs: dict[str, Any] = {
+                "force_browser": force_browser,
+                "render_mode": render_mode,
+                "no_cache": no_cache,
+            }
+            if not deep:
+                inspect_kwargs["deep"] = False
+            result = await _run_inspect(url.strip(), **inspect_kwargs)
             return JSONResponse(status_code=200, content=result)
         except Exception as exc:
             return JSONResponse(status_code=502, content={"success": False, "error_code": "inspect_failed", "error": str(exc)})
