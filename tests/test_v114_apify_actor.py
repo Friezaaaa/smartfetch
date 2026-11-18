@@ -336,6 +336,12 @@ class ApifyStandardRunTests(unittest.TestCase):
         self.assertFalse(failed["success"])
         self.assertIn("DNS failed", failed["error"])
 
+        # Validate every pushed row against .actor/dataset_schema.json
+        import jsonschema
+        dataset_schema = json.loads((REPO_ROOT / ".actor" / "dataset_schema.json").read_text(encoding="utf-8"))
+        for row in fake_actor.pushed_items:
+            jsonschema.validate(instance=row, schema=dataset_schema["fields"])
+
     def test_standard_run_bulk_inspect_free_plan_caps_to_5_urls(self):
         domains = [f"company{i}.com" for i in range(8)]
         fake_actor = FakeApifyActor({"action": "bulk_inspect", "urls": domains})
