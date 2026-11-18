@@ -5,6 +5,12 @@
     "properties": {
       "action": { "type": "string", "title": "Action" },
       "success": { "type": "boolean", "title": "Success" },
+      "business_name": { "type": "string", "title": "Business Name" },
+      "category": { "type": "string", "title": "Category" },
+      "rating": { "type": ["number", "null"], "title": "Rating" },
+      "reviews_count": { "type": ["integer", "null"], "title": "Reviews Count" },
+      "address": { "type": "string", "title": "Address" },
+      "maps_phone": { "type": "string", "title": "Maps Phone" },
       "domain": { "type": "string", "title": "Domain" },
       "url": { "type": "string", "title": "URL" },
       "requested_url": { "type": "string", "title": "Requested URL" },

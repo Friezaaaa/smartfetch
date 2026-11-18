@@ -124,7 +124,7 @@ class V18MCPBazaarMetadataTests(unittest.TestCase):
         output = declaration['info']['output']
         self.assertEqual(output['type'], 'json')
         self.assertTrue(output['example']['success'])
-        self.assertEqual(output['example']['service_version'], '1.14.0')
+        self.assertEqual(output['example']['service_version'], '1.15.0')
         output_schema = declaration['schema']['properties']['output'][
             'properties'
         ]['example']
@@ -222,7 +222,7 @@ class V18RegistryManifestTests(unittest.TestCase):
             'description': (
                 'HTML/PDF/Markdown, browser render, screenshots, site intel, URL map & batch via Base/Solana x402.'
             ),
-            'version': '1.14.0',
+            'version': '1.15.0',
             'repository': {
                 'url': 'https://github.com/Friezaaaa/smartfetch',
                 'source': 'github',

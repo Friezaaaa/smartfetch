@@ -1021,3 +1021,306 @@ def map_mcp_discovery_extension():
         output_example=MAP_OUTPUT_EXAMPLE,
     )
 
+
+SEARCH_DESCRIPTION = (
+    "Live web, news, and places search powered by Serper (with Exa fallback for web). "
+    "Returns structured titles, URLs, snippets, and metadata."
+)
+SEARCH_TAGS = ["search", "web-search", "serper", "exa", "agents"]
+SEARCH_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "minLength": 1, "maxLength": 500, "description": "Search query string."},
+        "provider": {"type": "string", "enum": ["auto", "serper", "exa"], "default": "auto"},
+        "search_type": {"type": "string", "enum": ["web", "news", "places"], "default": "web"},
+        "num_results": {"type": "integer", "minimum": 1, "maximum": 10, "default": 10},
+        "country": {"type": "string", "default": "us"},
+        "language": {"type": "string", "default": "en"},
+        "no_cache": {"type": "boolean", "default": False},
+    },
+    "required": ["query"],
+}
+SEARCH_INPUT_EXAMPLE = {
+    "query": "x402 protocol micropayments",
+    "provider": "auto",
+    "search_type": "web",
+    "num_results": 5,
+}
+SEARCH_OUTPUT_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "success": {"type": "boolean"},
+        "query": {"type": "string"},
+        "provider_used": {"type": "string"},
+        "search_type": {"type": "string"},
+        "num_results": {"type": "integer"},
+        "results": {"type": "array", "items": {"type": "object"}},
+        "cached": {"type": "boolean"},
+        "elapsed_ms": {"type": "integer"},
+        "service_version": {"type": "string"},
+    },
+    "required": ["success", "query", "provider_used", "search_type", "num_results", "results", "cached", "elapsed_ms", "service_version"],
+}
+SEARCH_OUTPUT_EXAMPLE = {
+    "success": True,
+    "query": "x402 protocol micropayments",
+    "provider_used": "serper",
+    "search_type": "web",
+    "num_results": 1,
+    "results": [{"position": 1, "title": "x402", "url": "https://x402.org", "snippet": "Internet-native payments", "published_date": ""}],
+    "cached": False,
+    "elapsed_ms": 180,
+    "service_version": SERVICE_VERSION,
+}
+
+
+def search_discovery_extension():
+    from x402.extensions.bazaar import OutputConfig, declare_discovery_extension
+
+    extension = declare_discovery_extension(
+        input=SEARCH_INPUT_EXAMPLE,
+        input_schema=SEARCH_INPUT_SCHEMA,
+        body_type="json",
+        output=OutputConfig(example=SEARCH_OUTPUT_EXAMPLE, schema=SEARCH_OUTPUT_SCHEMA),
+    )
+    extension["bazaar"]["info"]["input"]["method"] = "POST"
+    return extension
+
+
+def search_mcp_discovery_extension():
+    return mcp_discovery_extension(
+        tool_name="search_web",
+        description=SEARCH_DESCRIPTION,
+        input_schema=SEARCH_INPUT_SCHEMA,
+        input_example=SEARCH_INPUT_EXAMPLE,
+        output_schema=SEARCH_OUTPUT_SCHEMA,
+        output_example=SEARCH_OUTPUT_EXAMPLE,
+    )
+
+
+SEARCH_AND_FETCH_DESCRIPTION = (
+    "Search the web and automatically fetch clean Markdown content for the top matching pages in one call."
+)
+SEARCH_AND_FETCH_TAGS = ["search", "rag", "markdown", "web-scraping", "agents"]
+SEARCH_AND_FETCH_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "minLength": 1, "maxLength": 500, "description": "Search query string."},
+        "num_results": {"type": "integer", "minimum": 1, "maximum": 5, "default": 3},
+        "max_chars_per_page": {"type": "integer", "minimum": 1000, "maximum": 15000, "default": 6000},
+        "provider": {"type": "string", "enum": ["auto", "serper", "exa"], "default": "auto"},
+        "render_mode": {"type": "string", "enum": ["auto", "http_only"], "default": "auto"},
+        "no_cache": {"type": "boolean", "default": False},
+    },
+    "required": ["query"],
+}
+SEARCH_AND_FETCH_INPUT_EXAMPLE = {
+    "query": "FastAPI x402 middleware",
+    "num_results": 3,
+    "max_chars_per_page": 6000,
+}
+SEARCH_AND_FETCH_OUTPUT_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "success": {"type": "boolean"},
+        "query": {"type": "string"},
+        "provider_used": {"type": "string"},
+        "requested_count": {"type": "integer"},
+        "succeeded_count": {"type": "integer"},
+        "failed_count": {"type": "integer"},
+        "results": {"type": "array", "items": {"type": "object"}},
+        "elapsed_ms": {"type": "integer"},
+        "service_version": {"type": "string"},
+    },
+    "required": ["success", "query", "provider_used", "requested_count", "succeeded_count", "failed_count", "results", "elapsed_ms", "service_version"],
+}
+SEARCH_AND_FETCH_OUTPUT_EXAMPLE = {
+    "success": True,
+    "query": "FastAPI x402 middleware",
+    "provider_used": "serper",
+    "requested_count": 1,
+    "succeeded_count": 1,
+    "failed_count": 0,
+    "results": [{"url": "https://x402.org", "success": True, "title": "x402", "markdown": "# x402"}],
+    "elapsed_ms": 620,
+    "service_version": SERVICE_VERSION,
+}
+
+
+def search_and_fetch_discovery_extension():
+    from x402.extensions.bazaar import OutputConfig, declare_discovery_extension
+
+    extension = declare_discovery_extension(
+        input=SEARCH_AND_FETCH_INPUT_EXAMPLE,
+        input_schema=SEARCH_AND_FETCH_INPUT_SCHEMA,
+        body_type="json",
+        output=OutputConfig(example=SEARCH_AND_FETCH_OUTPUT_EXAMPLE, schema=SEARCH_AND_FETCH_OUTPUT_SCHEMA),
+    )
+    extension["bazaar"]["info"]["input"]["method"] = "POST"
+    return extension
+
+
+def search_and_fetch_mcp_discovery_extension():
+    return mcp_discovery_extension(
+        tool_name="search_and_fetch",
+        description=SEARCH_AND_FETCH_DESCRIPTION,
+        input_schema=SEARCH_AND_FETCH_INPUT_SCHEMA,
+        input_example=SEARCH_AND_FETCH_INPUT_EXAMPLE,
+        output_schema=SEARCH_AND_FETCH_OUTPUT_SCHEMA,
+        output_example=SEARCH_AND_FETCH_OUTPUT_EXAMPLE,
+    )
+
+
+LEADS_DESCRIPTION = (
+    "B2B Enriched Lead Generator. Searches Google Maps or Web via Serper and enriches each company website "
+    "with emails, phones, social links, tech stack, and domain/MX intelligence."
+)
+LEADS_TAGS = ["leads", "b2b", "enrichment", "prospecting", "agents"]
+LEADS_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "minLength": 1, "maxLength": 500, "description": "Business/niche search query (e.g. 'dental clinics austin tx')."},
+        "source": {"type": "string", "enum": ["maps", "web"], "default": "maps"},
+        "max_leads": {"type": "integer", "minimum": 1, "maximum": 5, "default": 5},
+        "deep": {"type": "boolean", "default": True},
+        "country": {"type": "string", "default": "us"},
+        "language": {"type": "string", "default": "en"},
+        "no_cache": {"type": "boolean", "default": False},
+    },
+    "required": ["query"],
+}
+LEADS_INPUT_EXAMPLE = {
+    "query": "dental clinics austin tx",
+    "source": "maps",
+    "max_leads": 5,
+    "deep": True,
+}
+LEADS_OUTPUT_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "success": {"type": "boolean"},
+        "query": {"type": "string"},
+        "source": {"type": "string"},
+        "total_leads": {"type": "integer"},
+        "inspected_count": {"type": "integer"},
+        "leads": {"type": "array", "items": {"type": "object"}},
+        "cached": {"type": "boolean"},
+        "elapsed_ms": {"type": "integer"},
+        "service_version": {"type": "string"},
+    },
+    "required": ["success", "query", "source", "total_leads", "inspected_count", "leads", "cached", "elapsed_ms", "service_version"],
+}
+LEADS_OUTPUT_EXAMPLE = {
+    "success": True,
+    "query": "dental clinics austin tx",
+    "source": "maps",
+    "total_leads": 1,
+    "inspected_count": 1,
+    "leads": [{"business_name": "Austin Dental", "website": "https://example.com", "inspected": True, "emails": ["info@example.com"]}],
+    "cached": False,
+    "elapsed_ms": 950,
+    "service_version": SERVICE_VERSION,
+}
+
+
+def leads_discovery_extension():
+    from x402.extensions.bazaar import OutputConfig, declare_discovery_extension
+
+    extension = declare_discovery_extension(
+        input=LEADS_INPUT_EXAMPLE,
+        input_schema=LEADS_INPUT_SCHEMA,
+        body_type="json",
+        output=OutputConfig(example=LEADS_OUTPUT_EXAMPLE, schema=LEADS_OUTPUT_SCHEMA),
+    )
+    extension["bazaar"]["info"]["input"]["method"] = "POST"
+    return extension
+
+
+def leads_mcp_discovery_extension():
+    return mcp_discovery_extension(
+        tool_name="search_leads",
+        description=LEADS_DESCRIPTION,
+        input_schema=LEADS_INPUT_SCHEMA,
+        input_example=LEADS_INPUT_EXAMPLE,
+        output_schema=LEADS_OUTPUT_SCHEMA,
+        output_example=LEADS_OUTPUT_EXAMPLE,
+    )
+
+
+X_SEARCH_DESCRIPTION = (
+    "Live X/Twitter post search returning normalized posts, engagement metrics, author details, and pagination cursor."
+)
+X_SEARCH_TAGS = ["twitter", "x", "social-search", "news", "agents"]
+X_SEARCH_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "minLength": 1, "maxLength": 500, "description": "X/Twitter advanced search query."},
+        "query_type": {"type": "string", "enum": ["Latest", "Top"], "default": "Latest"},
+        "max_tweets": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
+        "cursor": {"type": ["string", "null"], "default": None},
+        "no_cache": {"type": "boolean", "default": False},
+    },
+    "required": ["query"],
+}
+X_SEARCH_INPUT_EXAMPLE = {
+    "query": "x402 OR smartfetch",
+    "query_type": "Latest",
+    "max_tweets": 10,
+}
+X_SEARCH_OUTPUT_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "success": {"type": "boolean"},
+        "query": {"type": "string"},
+        "query_type": {"type": "string"},
+        "count": {"type": "integer"},
+        "tweets": {"type": "array", "items": {"type": "object"}},
+        "next_cursor": {"type": ["string", "null"]},
+        "has_next_page": {"type": "boolean"},
+        "cached": {"type": "boolean"},
+        "elapsed_ms": {"type": "integer"},
+        "service_version": {"type": "string"},
+    },
+    "required": ["success", "query", "query_type", "count", "tweets", "has_next_page", "cached", "elapsed_ms", "service_version"],
+}
+X_SEARCH_OUTPUT_EXAMPLE = {
+    "success": True,
+    "query": "x402",
+    "query_type": "Latest",
+    "count": 1,
+    "tweets": [{"tweet_id": "123", "url": "https://x.com/i/status/123", "text": "x402 live", "author_username": "dev"}],
+    "next_cursor": None,
+    "has_next_page": False,
+    "cached": False,
+    "elapsed_ms": 240,
+    "service_version": SERVICE_VERSION,
+}
+
+
+def x_search_discovery_extension():
+    from x402.extensions.bazaar import OutputConfig, declare_discovery_extension
+
+    extension = declare_discovery_extension(
+        input=X_SEARCH_INPUT_EXAMPLE,
+        input_schema=X_SEARCH_INPUT_SCHEMA,
+        body_type="json",
+        output=OutputConfig(example=X_SEARCH_OUTPUT_EXAMPLE, schema=X_SEARCH_OUTPUT_SCHEMA),
+    )
+    extension["bazaar"]["info"]["input"]["method"] = "POST"
+    return extension
+
+
+def x_search_mcp_discovery_extension():
+    return mcp_discovery_extension(
+        tool_name="search_x_posts",
+        description=X_SEARCH_DESCRIPTION,
+        input_schema=X_SEARCH_INPUT_SCHEMA,
+        input_example=X_SEARCH_INPUT_EXAMPLE,
+        output_schema=X_SEARCH_OUTPUT_SCHEMA,
+        output_example=X_SEARCH_OUTPUT_EXAMPLE,
+    )
+

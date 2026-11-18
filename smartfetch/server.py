@@ -16,24 +16,39 @@ from .bazaar import (
     FETCH_DESCRIPTION,
     INSPECT_DESCRIPTION,
     INSPECT_TAGS,
+    LEADS_DESCRIPTION,
+    LEADS_TAGS,
     MAP_DESCRIPTION,
     MAP_TAGS,
     MARKDOWN_DESCRIPTION,
     RENDER_DESCRIPTION,
     SCREENSHOT_DESCRIPTION,
     SCREENSHOT_TAGS,
+    SEARCH_AND_FETCH_DESCRIPTION,
+    SEARCH_AND_FETCH_TAGS,
+    SEARCH_DESCRIPTION,
+    SEARCH_TAGS,
     TEXT_DESCRIPTION,
+    X_SEARCH_DESCRIPTION,
+    X_SEARCH_TAGS,
     batch_fetch_discovery_extension,
     inspect_discovery_extension,
+    leads_discovery_extension,
     map_discovery_extension,
     screenshot_discovery_extension,
+    search_and_fetch_discovery_extension,
+    search_discovery_extension,
+    x_search_discovery_extension,
 )
 from .browser_fetch import browser_screenshot
 from .config import HOST, PORT, SERVICE_NAME, SERVICE_VERSION
 from .core import smart_fetch
 from .diagnostics import RetrievalFailure
 from .inspect import inspect_webpage_url
+from .leads import leads_configured, search_leads_query
 from .mapper import map_website_urls
+from .search_tools import search_and_fetch_query, search_configured, search_web_query
+from .social import search_x_posts_query, x_search_configured
 from .discovery import (
     agent_card_document,
     docs_html,
@@ -51,7 +66,7 @@ from .discovery import (
     x402_manifest,
 )
 from .emergency_dispatch import EmergencyDispatch
-from .mcp_server import MCP_PATH, MCP_TOOL, MCP_TOOLS, MCP_TRANSPORT, create_smartfetch_mcp, create_emergency_mcp
+from .mcp_server import MCP_PATH, MCP_TOOL, MCP_TOOLS, MCP_TRANSPORT, create_smartfetch_mcp, create_emergency_mcp, get_enabled_mcp_tools
 from .payments import install_x402, load_x402_settings
 from .remote_browser import RemoteBrowserConfig
 from .request_bounds import BoundedRequestMiddleware
@@ -533,6 +548,193 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         except Exception as exc:
             return JSONResponse(status_code=502, content={"success": False, "error_code": "map_failed", "error": str(exc)})
 
+    @application.post("/search")
+    async def search_endpoint(request: Request):
+        if not search_configured():
+            return JSONResponse(
+                status_code=503,
+                content={"success": False, "error_code": "provider_unavailable", "error": "Optional provider API key is not configured"},
+                headers={"Retry-After": "3600", "Cache-Control": "no-store"},
+            )
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
+        if not isinstance(body, dict):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_request", "error": "Invalid request"})
+        query = body.get("query")
+        if not isinstance(query, str) or not (1 <= len(query.strip()) <= 500):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_query", "error": "query must be a string between 1 and 500 characters"})
+        provider = str(body.get("provider", "auto"))
+        search_type = str(body.get("search_type", "web"))
+        try:
+            num_results = max(1, min(10, int(body.get("num_results", 10))))
+        except (ValueError, TypeError):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_num_results", "error": "num_results must be an integer"})
+        country = str(body.get("country", "us"))
+        language = str(body.get("language", "en"))
+        no_cache = bool(body.get("no_cache", False)) or request.headers.get("cache-control") == "no-cache"
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: search_web_query(
+                    query.strip(),
+                    provider=provider,
+                    search_type=search_type,
+                    num_results=num_results,
+                    country=country,
+                    language=language,
+                    no_cache=no_cache,
+                ),
+            )
+            return JSONResponse(status_code=200, content=result)
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_request", "error": str(exc)})
+        except Exception as exc:
+            return JSONResponse(status_code=502, content={"success": False, "error_code": "search_failed", "error": str(exc)})
+
+    @application.post("/search-and-fetch")
+    async def search_and_fetch_endpoint(request: Request):
+        if not search_configured():
+            return JSONResponse(
+                status_code=503,
+                content={"success": False, "error_code": "provider_unavailable", "error": "Optional provider API key is not configured"},
+                headers={"Retry-After": "3600", "Cache-Control": "no-store"},
+            )
+        remote_cfg = RemoteBrowserConfig.from_env()
+        if not remote_cfg.is_configured:
+            return JSONResponse(
+                status_code=503,
+                content={"success": False, "error_code": "retrieval_unavailable", "error": "Retrieval is temporarily unavailable"},
+                headers={"Retry-After": "3600", "Cache-Control": "no-store"},
+            )
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
+        if not isinstance(body, dict):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_request", "error": "Invalid request"})
+        query = body.get("query")
+        if not isinstance(query, str) or not (1 <= len(query.strip()) <= 500):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_query", "error": "query must be a string between 1 and 500 characters"})
+        try:
+            num_results = max(1, min(5, int(body.get("num_results", 3))))
+            max_chars_per_page = max(1000, min(15000, int(body.get("max_chars_per_page", 6000))))
+        except (ValueError, TypeError):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_request", "error": "Invalid numeric parameter"})
+        provider = str(body.get("provider", "auto"))
+        render_mode = str(body.get("render_mode", "auto"))
+        no_cache = bool(body.get("no_cache", False)) or request.headers.get("cache-control") == "no-cache"
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: search_and_fetch_query(
+                    query.strip(),
+                    num_results=num_results,
+                    max_chars_per_page=max_chars_per_page,
+                    provider=provider,
+                    render_mode=render_mode,
+                    no_cache=no_cache,
+                ),
+            )
+            return JSONResponse(status_code=200, content=result)
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_request", "error": str(exc)})
+        except Exception as exc:
+            return JSONResponse(status_code=502, content={"success": False, "error_code": "search_and_fetch_failed", "error": str(exc)})
+
+    @application.post("/leads")
+    async def leads_endpoint(request: Request):
+        if not leads_configured():
+            return JSONResponse(
+                status_code=503,
+                content={"success": False, "error_code": "provider_unavailable", "error": "Optional provider API key is not configured"},
+                headers={"Retry-After": "3600", "Cache-Control": "no-store"},
+            )
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
+        if not isinstance(body, dict):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_request", "error": "Invalid request"})
+        query = body.get("query")
+        if not isinstance(query, str) or not (1 <= len(query.strip()) <= 500):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_query", "error": "query must be a string between 1 and 500 characters"})
+        source = str(body.get("source", "maps"))
+        try:
+            max_leads = max(1, min(5, int(body.get("max_leads", 5))))
+        except (ValueError, TypeError):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_max_leads", "error": "max_leads must be an integer"})
+        deep = bool(body.get("deep", True))
+        country = str(body.get("country", "us"))
+        language = str(body.get("language", "en"))
+        no_cache = bool(body.get("no_cache", False)) or request.headers.get("cache-control") == "no-cache"
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: search_leads_query(
+                    query.strip(),
+                    source=source,
+                    max_leads=max_leads,
+                    deep=deep,
+                    country=country,
+                    language=language,
+                    no_cache=no_cache,
+                ),
+            )
+            return JSONResponse(status_code=200, content=result)
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_request", "error": str(exc)})
+        except Exception as exc:
+            return JSONResponse(status_code=502, content={"success": False, "error_code": "leads_failed", "error": str(exc)})
+
+    @application.post("/x-search")
+    async def x_search_endpoint(request: Request):
+        if not x_search_configured():
+            return JSONResponse(
+                status_code=503,
+                content={"success": False, "error_code": "provider_unavailable", "error": "Optional provider API key is not configured"},
+                headers={"Retry-After": "3600", "Cache-Control": "no-store"},
+            )
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
+        if not isinstance(body, dict):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_request", "error": "Invalid request"})
+        query = body.get("query")
+        if not isinstance(query, str) or not (1 <= len(query.strip()) <= 500):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_query", "error": "query must be a string between 1 and 500 characters"})
+        query_type = str(body.get("query_type", "Latest"))
+        try:
+            max_tweets = max(1, min(20, int(body.get("max_tweets", 10))))
+        except (ValueError, TypeError):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_max_tweets", "error": "max_tweets must be an integer"})
+        cursor = body.get("cursor")
+        if cursor is not None and not isinstance(cursor, str):
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_cursor", "error": "cursor must be a string or null"})
+        no_cache = bool(body.get("no_cache", False)) or request.headers.get("cache-control") == "no-cache"
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: search_x_posts_query(
+                    query.strip(),
+                    query_type=query_type,
+                    max_tweets=max_tweets,
+                    cursor=cursor,
+                    no_cache=no_cache,
+                ),
+            )
+            return JSONResponse(status_code=200, content=result)
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_request", "error": str(exc)})
+        except Exception as exc:
+            return JSONResponse(status_code=502, content={"success": False, "error_code": "x_search_failed", "error": str(exc)})
+
     @application.get("/", response_class=HTMLResponse)
     async def root(request: Request):
         remote_cfg = RemoteBrowserConfig.from_env()
@@ -581,10 +783,46 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                     "payment_challenge_enabled": settings.enabled,
                     "price": "$0.005",
                 },
+                **({
+                    "search": {
+                        "url": urls["search"],
+                        "availability": "available",
+                        "payment_challenge_enabled": settings.enabled,
+                        "price": "$0.01",
+                    },
+                    "search_and_fetch": {
+                        "url": urls["search_and_fetch"],
+                        "availability": "available",
+                        "payment_challenge_enabled": settings.enabled,
+                        "price": "$0.02",
+                    },
+                } if search_configured() else {}),
+                **({
+                    "leads": {
+                        "url": urls["leads"],
+                        "availability": "available",
+                        "payment_challenge_enabled": settings.enabled,
+                        "price": "$0.03",
+                    },
+                } if leads_configured() else {}),
+                **({
+                    "x_search": {
+                        "url": urls["x_search"],
+                        "availability": "available",
+                        "payment_challenge_enabled": settings.enabled,
+                        "price": "$0.008",
+                    },
+                } if x_search_configured() else {}),
+                "enabled_features": {
+                    "search": search_configured(),
+                    "search_and_fetch": search_configured(),
+                    "leads": leads_configured(),
+                    "x_search": x_search_configured(),
+                },
                 "mcp": {
                     "url": urls["mcp"],
                     "transport": "streamable-http",
-                    "tools": list(MCP_TOOLS),
+                    "tools": list(get_enabled_mcp_tools()),
                 },
                 "discovery": {
                     "x402": urls["x402"],
@@ -599,7 +837,15 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                         "name": name,
                         "availability": "available",
                         "payment_challenge_enabled": settings.enabled,
-                        "price": "$0.015" if name == "batch_fetch_webpages" else ("$0.01" if name == "screenshot_webpage" else ("$0.005" if name == "inspect_webpage" else settings.price)),
+                        "price": (
+                            "$0.03" if name == "search_leads"
+                            else "$0.02" if name == "search_and_fetch"
+                            else "$0.015" if name == "batch_fetch_webpages"
+                            else "$0.01" if name in ("screenshot_webpage", "search_web")
+                            else "$0.008" if name == "search_x_posts"
+                            else "$0.005" if name in ("inspect_webpage", "map_website")
+                            else settings.price
+                        ),
                         "network": settings.network,
                         "asset": "USDC",
                         **({
@@ -607,7 +853,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                             "networks": [settings.network, settings.solana_network],
                         } if settings.solana_pay_to and settings.solana_network else {}),
                     }
-                    for name in MCP_TOOLS
+                    for name in get_enabled_mcp_tools()
                 ],
                 **({
                     "solana_network": settings.solana_network,
@@ -642,6 +888,16 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 {"name": "inspect_webpage", "description": INSPECT_DESCRIPTION},
                 {"name": "batch_fetch_webpages", "description": BATCH_FETCH_DESCRIPTION},
                 {"name": "map_website", "description": MAP_DESCRIPTION},
+                *([
+                    {"name": "search_web", "description": SEARCH_DESCRIPTION},
+                    {"name": "search_and_fetch", "description": SEARCH_AND_FETCH_DESCRIPTION},
+                ] if search_configured() else []),
+                *([
+                    {"name": "search_leads", "description": LEADS_DESCRIPTION},
+                ] if leads_configured() else []),
+                *([
+                    {"name": "search_x_posts", "description": X_SEARCH_DESCRIPTION},
+                ] if x_search_configured() else []),
             ],
         }
 
@@ -767,6 +1023,45 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
                 extensions=map_discovery_extension(),
             ),
         }
+        if search_configured():
+            search_options = build_payment_options(settings, "$0.01")
+            search_and_fetch_options = build_payment_options(settings, "$0.02")
+            extra_routes["POST /search"] = RouteConfig(
+                accepts=search_options if len(search_options) > 1 else search_options[0],
+                description=SEARCH_DESCRIPTION,
+                mime_type="application/json",
+                service_name="SmartFetch",
+                tags=SEARCH_TAGS,
+                extensions=search_discovery_extension(),
+            )
+            extra_routes["POST /search-and-fetch"] = RouteConfig(
+                accepts=search_and_fetch_options if len(search_and_fetch_options) > 1 else search_and_fetch_options[0],
+                description=SEARCH_AND_FETCH_DESCRIPTION,
+                mime_type="application/json",
+                service_name="SmartFetch",
+                tags=SEARCH_AND_FETCH_TAGS,
+                extensions=search_and_fetch_discovery_extension(),
+            )
+        if leads_configured():
+            leads_options = build_payment_options(settings, "$0.03")
+            extra_routes["POST /leads"] = RouteConfig(
+                accepts=leads_options if len(leads_options) > 1 else leads_options[0],
+                description=LEADS_DESCRIPTION,
+                mime_type="application/json",
+                service_name="SmartFetch",
+                tags=LEADS_TAGS,
+                extensions=leads_discovery_extension(),
+            )
+        if x_search_configured():
+            x_search_options = build_payment_options(settings, "$0.008")
+            extra_routes["POST /x-search"] = RouteConfig(
+                accepts=x_search_options if len(x_search_options) > 1 else x_search_options[0],
+                description=X_SEARCH_DESCRIPTION,
+                mime_type="application/json",
+                service_name="SmartFetch",
+                tags=X_SEARCH_TAGS,
+                extensions=x_search_discovery_extension(),
+            )
         install_x402(application, settings, additional_routes=extra_routes)
 
     cors_wrapped = SmartFetchCORSMiddleware(

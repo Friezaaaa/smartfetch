@@ -180,8 +180,8 @@ class CurrentVersionAndRegistryTests(unittest.TestCase):
             (REPO_ROOT / 'server.json').read_text(encoding='utf-8')
         )
 
-        self.assertEqual(SERVICE_VERSION, '1.14.0')
-        self.assertEqual(manifest['version'], '1.14.0')
+        self.assertEqual(SERVICE_VERSION, '1.15.0')
+        self.assertEqual(manifest['version'], '1.15.0')
         self.assertEqual(
             manifest['description'],
             'HTML/PDF/Markdown, browser render, screenshots, site intel, URL map & batch via Base/Solana x402.',

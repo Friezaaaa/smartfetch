@@ -10,9 +10,13 @@ from .emergency_request import (
     classify_batch_fetch,
     classify_fetch,
     classify_inspect,
+    classify_leads,
     classify_map,
     classify_mcp,
     classify_screenshot,
+    classify_search,
+    classify_search_and_fetch,
+    classify_x_search,
 )
 from .request_bounds import BoundedRequest
 
@@ -21,6 +25,7 @@ _UNAVAILABLE = {
     "retrieval_unavailable": b'{"success":false,"error_code":"retrieval_unavailable","error":"Retrieval is temporarily unavailable"}',
     "browser_unavailable": b'{"success":false,"error_code":"browser_unavailable","error":"Browser rendering is temporarily unavailable"}',
     "service_unhealthy": b'{"success":false,"error_code":"service_unhealthy","error":"Service temporarily unavailable"}',
+    "provider_unavailable": b'{"success":false,"error_code":"provider_unavailable","error":"Optional provider API key is not configured"}',
 }
 _ERRORS = {
     "invalid_request": b'{"success":false,"error_code":"invalid_request","error":"Invalid request"}',
@@ -107,7 +112,18 @@ class EmergencyDispatch:
             and scope.get("path") != "/health"
             and getattr(self.app.state, "terminal_unhealthy", False)
         )
-        if scope.get("type") != "http" or scope.get("path") not in ("/fetch", "/mcp", "/screenshot", "/inspect", "/batch-fetch", "/map"):
+        if scope.get("type") != "http" or scope.get("path") not in (
+            "/fetch",
+            "/mcp",
+            "/screenshot",
+            "/inspect",
+            "/batch-fetch",
+            "/map",
+            "/search",
+            "/search-and-fetch",
+            "/leads",
+            "/x-search",
+        ):
             if terminal_unhealthy:
                 await _send_json(send, 503, _UNAVAILABLE["service_unhealthy"], unavailable=True)
                 return
@@ -297,6 +313,51 @@ class EmergencyDispatch:
                 )
             except Exception:
                 pass
+            return
+        if path in ("/search", "/search-and-fetch", "/leads", "/x-search"):
+            from .leads import leads_configured
+            from .remote_browser import RemoteBrowserConfig
+            from .search_tools import search_configured
+            from .social import x_search_configured
+
+            provider_ready = (
+                search_configured()
+                if path in ("/search", "/search-and-fetch")
+                else (leads_configured() if path == "/leads" else x_search_configured())
+            )
+            if terminal_unhealthy:
+                await _send_json(send, 503, _UNAVAILABLE["service_unhealthy"], unavailable=True)
+                return
+            if not provider_ready:
+                await _send_json(send, 503, _UNAVAILABLE["provider_unavailable"], unavailable=True)
+                return
+            remote_cfg = RemoteBrowserConfig.from_env()
+            if path == "/search-and-fetch" and not remote_cfg.is_configured:
+                await _send_json(send, 503, _UNAVAILABLE["retrieval_unavailable"], unavailable=True)
+                return
+            has_payment = any(
+                h[0].lower() in (b"payment-signature", b"x-payment")
+                for h in bounded.headers
+            )
+            classifier = (
+                classify_search
+                if path == "/search"
+                else (
+                    classify_search_and_fetch
+                    if path == "/search-and-fetch"
+                    else (classify_leads if path == "/leads" else classify_x_search)
+                )
+            )
+            try:
+                classifier(
+                    bounded.body,
+                    bounded.headers,
+                    allow_unpaid_probe=not has_payment,
+                )
+            except EmergencyRequestError as exc:
+                await _send_json(send, exc.status, _ERRORS[exc.code])
+                return
+            await self.app(scope, receive, send)
             return
         from .remote_browser import RemoteBrowserConfig
         remote_cfg = RemoteBrowserConfig.from_env()

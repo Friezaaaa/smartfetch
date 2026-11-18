@@ -7,14 +7,15 @@
       "title": "Action",
       "type": "string",
       "description": "Operation to perform: fetch (Markdown/text extraction), screenshot (headless Chromium image), inspect (structured SEO & site intelligence), batch_fetch (parallel multi-URL retrieval), bulk_inspect (B2B Lead & Tech-Stack Enrichment across up to 50 domains), or map (discover internal URLs from sitemaps & links).",
-      "enum": ["fetch", "screenshot", "inspect", "batch_fetch", "bulk_inspect", "map"],
+      "enum": ["fetch", "screenshot", "inspect", "batch_fetch", "bulk_inspect", "map", "search_leads"],
       "enumTitles": [
         "Fetch Webpage / PDF",
         "Capture Screenshot",
         "Inspect Site Intelligence",
         "Batch Fetch URLs",
         "Bulk B2B Lead & Tech-Stack Enrichment",
-        "Map Website URLs"
+        "Map Website URLs",
+        "Search & Enrich B2B Leads"
       ],
       "default": "fetch",
       "editor": "select"
@@ -53,6 +54,29 @@
       "minimum": 1,
       "maximum": 500,
       "default": 200
+    },
+    "query": {
+      "title": "Lead Search Query",
+      "type": "string",
+      "description": "Business or niche search query when action is 'search_leads' (e.g. 'dental clinics austin tx').",
+      "default": "",
+      "editor": "textfield"
+    },
+    "lead_source": {
+      "title": "Lead Source",
+      "type": "string",
+      "description": "Lead discovery source when action is 'search_leads': 'maps' (Google Places) or 'web'.",
+      "enum": ["maps", "web"],
+      "default": "maps",
+      "editor": "select"
+    },
+    "max_leads": {
+      "title": "Maximum Enriched Leads",
+      "type": "integer",
+      "description": "Maximum number of leads to enrich when action is 'search_leads' (up to 25 paying, 5 free).",
+      "minimum": 1,
+      "maximum": 25,
+      "default": 5
     },
     "max_chars": {
       "title": "Maximum Characters",

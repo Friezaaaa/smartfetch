@@ -478,6 +478,118 @@ async def execute_action(
             "results": rows,
         }
 
+    if action == "search_leads":
+        from urllib.parse import urlparse
+        from .leads import leads_configured, search_leads_query
+
+        if not leads_configured():
+            err_item = {
+                "action": "search_leads",
+                "success": False,
+                "error_code": "provider_unavailable",
+                "error": "SERPER_API_KEY is not configured",
+            }
+            if actor is not None:
+                await actor.push_data(err_item)
+            return err_item
+
+        query = str(actor_input.get("query") or "").strip()
+        if not query:
+            err_item = {
+                "action": "search_leads",
+                "success": False,
+                "error_code": "invalid_query",
+                "error": "query must be a non-empty string",
+            }
+            if actor is not None:
+                await actor.push_data(err_item)
+            return err_item
+
+        lead_source = str(actor_input.get("lead_source") or "maps").strip().lower()
+        if lead_source not in ("maps", "web"):
+            lead_source = "maps"
+        paying = is_user_paying(environ)
+        max_allowed = 25 if paying else 5
+        try:
+            requested_max = int(actor_input.get("max_leads") or 5)
+        except (ValueError, TypeError):
+            requested_max = 5
+        max_leads = max(1, min(max_allowed, requested_max))
+
+        try:
+            res = await loop.run_in_executor(
+                None,
+                lambda: search_leads_query(
+                    query,
+                    source=lead_source,
+                    max_leads=max_leads,
+                    deep=True,
+                    no_cache=no_cache,
+                    _max_allowed=max_allowed,
+                ),
+            )
+            rows: list[dict[str, Any]] = []
+            for lead in res.get("leads") or []:
+                website = str(lead.get("website") or "")
+                domain = urlparse(website).netloc.lower() if website else ""
+                social = lead.get("social_links") or {}
+                rows.append({
+                    "action": "search_leads",
+                    "success": True,
+                    "business_name": str(lead.get("business_name") or ""),
+                    "category": str(lead.get("category") or ""),
+                    "rating": lead.get("rating"),
+                    "reviews_count": lead.get("reviews_count"),
+                    "address": str(lead.get("address") or ""),
+                    "maps_phone": str(lead.get("maps_phone") or ""),
+                    "domain": domain,
+                    "url": website,
+                    "requested_url": website,
+                    "final_url": website,
+                    "title": str(lead.get("title") or ""),
+                    "description": str(lead.get("description") or ""),
+                    "emails": ", ".join(str(e) for e in (lead.get("emails") or [])),
+                    "phones": ", ".join(str(p) for p in (lead.get("phones") or [])),
+                    "github": str(social.get("github") or ""),
+                    "linkedin": str(social.get("linkedin") or ""),
+                    "x_twitter": str(social.get("x_twitter") or ""),
+                    "tech_stack": ", ".join(str(t) for t in (lead.get("tech_stack") or [])),
+                    "contact_url": str(lead.get("contact_url") or ""),
+                    "pricing_url": str(lead.get("pricing_url") or ""),
+                    "has_mx": bool(lead.get("has_mx", False)),
+                    "has_spf": bool(lead.get("has_spf", False)),
+                    "has_dmarc": bool(lead.get("has_dmarc", False)),
+                    "domain_age_days": int(lead.get("domain_age_days") or 0),
+                    "render_method": "http" if lead.get("inspected") else "maps_only",
+                    "elapsed_ms": int(res.get("elapsed_ms") or 0),
+                    "error": "",
+                })
+            if actor is not None:
+                for row in rows:
+                    await actor.push_data(row)
+            if rows:
+                await _charge_event(actor, EVENT_SITE_INSPECTED, count=len(rows))
+            return {
+                "action": "search_leads",
+                "success": True,
+                "query": query,
+                "source": lead_source,
+                "total_leads": len(rows),
+                "max_leads_allowed": max_allowed,
+                "leads": rows,
+            }
+        except Exception as exc:
+            err_item = {
+                "action": "search_leads",
+                "success": False,
+                "query": query,
+                "error_code": "search_leads_failed",
+                "error": str(exc),
+            }
+            if actor is not None:
+                await actor.push_data(err_item)
+            return err_item
+
     if action == "map":
         norm_url = _normalize_url_or_domain(url)
         if not norm_url:

@@ -167,7 +167,7 @@ class V17MCPDiscoveryTests(unittest.TestCase):
         ))) as client:
             meta = client.get('/meta').json()
 
-        self.assertEqual(meta['version'], '1.14.0')
+        self.assertEqual(meta['version'], '1.15.0')
         self.assertEqual(meta['mcp']['url'], 'http://testserver/mcp')
         self.assertEqual([tool['name'] for tool in meta['tools']], [
             'fetch_webpage', 'webpage_to_markdown',

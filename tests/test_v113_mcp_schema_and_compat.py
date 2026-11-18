@@ -51,7 +51,7 @@ class TestMCPSchemaAndCompat(unittest.IsolatedAsyncioTestCase):
             "links_returned": 1,
             "max_chars": 20000,
             "request_id": "req-12345678",
-            "service_version": "1.14.0",
+            "service_version": "1.15.0",
         }
         self.mcp = create_smartfetch_mcp(FREE_SETTINGS, self.mock_fetch_handler)
 

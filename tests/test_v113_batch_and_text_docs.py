@@ -49,7 +49,7 @@ def test_extract_plain_document_markdown():
 
 
 def test_extract_plain_document_json():
-    raw_json = '{"name": "SmartFetch", "version": "1.14.0", "active": true}'
+    raw_json = '{"name": "SmartFetch", "version": "1.15.0", "active": true}'
     url = "https://example.com/api/data.json"
     extracted = extract_plain_document(raw_json, url, "application/json")
 

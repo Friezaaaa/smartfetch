@@ -31,6 +31,9 @@ LEGACY_TOOLS = (
     "batch_fetch_webpages",
     "map_website",
 )
+OPTIN_SEARCH_TOOLS = ("search_web", "search_and_fetch")
+OPTIN_LEADS_TOOLS = ("search_leads",)
+OPTIN_X_TOOLS = ("search_x_posts",)
 FREE_MCP_METHODS = (
     "initialize",
     "notifications/initialized",
@@ -189,6 +192,60 @@ _MCP_SCREENSHOT_VALIDATOR = Draft202012Validator(MCP_SCREENSHOT_ARGUMENT_SCHEMA)
 _MCP_INSPECT_VALIDATOR = Draft202012Validator(MCP_INSPECT_ARGUMENT_SCHEMA)
 _MCP_BATCH_FETCH_VALIDATOR = Draft202012Validator(MCP_BATCH_FETCH_ARGUMENT_SCHEMA)
 _MCP_MAP_VALIDATOR = Draft202012Validator(MCP_MAP_ARGUMENT_SCHEMA)
+
+SEARCH_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "minLength": 1, "maxLength": 500},
+        "provider": {"type": "string", "enum": ["auto", "serper", "exa"]},
+        "search_type": {"type": "string", "enum": ["web", "news", "places"]},
+        "num_results": {"type": "integer", "minimum": 1, "maximum": 10},
+        "country": {"type": "string"},
+        "language": {"type": "string"},
+        "no_cache": {"type": "boolean"},
+    },
+    "required": ["query"],
+}
+SEARCH_AND_FETCH_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "minLength": 1, "maxLength": 500},
+        "num_results": {"type": "integer", "minimum": 1, "maximum": 5},
+        "max_chars_per_page": {"type": "integer", "minimum": 1000, "maximum": 15000},
+        "provider": {"type": "string", "enum": ["auto", "serper", "exa"]},
+        "render_mode": {"type": "string", "enum": ["auto", "http_only"]},
+        "no_cache": {"type": "boolean"},
+    },
+    "required": ["query"],
+}
+LEADS_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "minLength": 1, "maxLength": 500},
+        "source": {"type": "string", "enum": ["maps", "web"]},
+        "max_leads": {"type": "integer", "minimum": 1, "maximum": 5},
+        "deep": {"type": "boolean"},
+        "country": {"type": "string"},
+        "language": {"type": "string"},
+        "no_cache": {"type": "boolean"},
+    },
+    "required": ["query"],
+}
+X_SEARCH_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "minLength": 1, "maxLength": 500},
+        "query_type": {"type": "string", "enum": ["Latest", "Top"]},
+        "max_tweets": {"type": "integer", "minimum": 1, "maximum": 20},
+        "cursor": {"type": ["string", "null"]},
+        "no_cache": {"type": "boolean"},
+    },
+    "required": ["query"],
+}
+_SEARCH_VALIDATOR = Draft202012Validator(SEARCH_INPUT_SCHEMA)
+_SEARCH_AND_FETCH_VALIDATOR = Draft202012Validator(SEARCH_AND_FETCH_INPUT_SCHEMA)
+_LEADS_VALIDATOR = Draft202012Validator(LEADS_INPUT_SCHEMA)
+_X_SEARCH_VALIDATOR = Draft202012Validator(X_SEARCH_INPUT_SCHEMA)
 _FREE_MCP_MODELS = {
     "initialize": InitializeRequest,
     "notifications/initialized": InitializedNotification,
@@ -395,6 +452,84 @@ def classify_map(
     )
 
 
+def _classify_query_endpoint(
+    body: bytes,
+    headers: tuple[tuple[bytes, bytes], ...],
+    validator: Draft202012Validator,
+    tool_name: str,
+    *,
+    allow_unpaid_probe: bool = False,
+) -> ValidatedCall | None:
+    if allow_unpaid_probe:
+        try:
+            payload = _parse_json(body, headers)
+            if not payload or not payload.get("query"):
+                return None
+        except EmergencyRequestError:
+            return None
+    else:
+        payload = _parse_json(body, headers)
+    if not validator.is_valid(payload):
+        raise EmergencyRequestError(422, "invalid_request")
+    return ValidatedCall(
+        transport="http",
+        tool=tool_name,
+        browser=False,
+        jsonrpc_id=None,
+    )
+
+
+def classify_search(
+    body: bytes,
+    headers: tuple[tuple[bytes, bytes], ...],
+    *,
+    allow_unpaid_probe: bool = False,
+) -> ValidatedCall | None:
+    return _classify_query_endpoint(body, headers, _SEARCH_VALIDATOR, "search_web", allow_unpaid_probe=allow_unpaid_probe)
+
+
+def classify_search_and_fetch(
+    body: bytes,
+    headers: tuple[tuple[bytes, bytes], ...],
+    *,
+    allow_unpaid_probe: bool = False,
+) -> ValidatedCall | None:
+    return _classify_query_endpoint(body, headers, _SEARCH_AND_FETCH_VALIDATOR, "search_and_fetch", allow_unpaid_probe=allow_unpaid_probe)
+
+
+def classify_leads(
+    body: bytes,
+    headers: tuple[tuple[bytes, bytes], ...],
+    *,
+    allow_unpaid_probe: bool = False,
+) -> ValidatedCall | None:
+    return _classify_query_endpoint(body, headers, _LEADS_VALIDATOR, "search_leads", allow_unpaid_probe=allow_unpaid_probe)
+
+
+def classify_x_search(
+    body: bytes,
+    headers: tuple[tuple[bytes, bytes], ...],
+    *,
+    allow_unpaid_probe: bool = False,
+) -> ValidatedCall | None:
+    return _classify_query_endpoint(body, headers, _X_SEARCH_VALIDATOR, "search_x_posts", allow_unpaid_probe=allow_unpaid_probe)
+
+
+def _enabled_optin_tools() -> tuple[str, ...]:
+    from .leads import leads_configured
+    from .search_tools import search_configured
+    from .social import x_search_configured
+
+    tools: list[str] = []
+    if search_configured():
+        tools.extend(OPTIN_SEARCH_TOOLS)
+    if leads_configured():
+        tools.extend(OPTIN_LEADS_TOOLS)
+    if x_search_configured():
+        tools.extend(OPTIN_X_TOOLS)
+    return tuple(tools)
+
+
 def classify_mcp(
     body: bytes,
     headers: tuple[tuple[bytes, bytes], ...],
@@ -431,11 +566,28 @@ def classify_mcp(
     if type(params) is not dict:
         raise EmergencyRequestError(422, "invalid_request", request_id)
     tool = params.get("name")
-    if type(tool) is not str or tool not in LEGACY_TOOLS:
+    allowed_tools = LEGACY_TOOLS + _enabled_optin_tools()
+    if type(tool) is not str or tool not in allowed_tools:
         raise EmergencyRequestError(200, "unknown_tool", request_id)
     arguments = params.get("arguments", {})
     if type(arguments) is not dict:
         raise EmergencyRequestError(422, "invalid_request", request_id)
+    if tool == "search_web":
+        if not _SEARCH_VALIDATOR.is_valid(arguments):
+            raise EmergencyRequestError(422, "invalid_request", request_id)
+        return ValidatedCall(transport="mcp", tool=tool, browser=False, jsonrpc_id=request_id)
+    if tool == "search_and_fetch":
+        if not _SEARCH_AND_FETCH_VALIDATOR.is_valid(arguments):
+            raise EmergencyRequestError(422, "invalid_request", request_id)
+        return ValidatedCall(transport="mcp", tool=tool, browser=False, jsonrpc_id=request_id)
+    if tool == "search_leads":
+        if not _LEADS_VALIDATOR.is_valid(arguments):
+            raise EmergencyRequestError(422, "invalid_request", request_id)
+        return ValidatedCall(transport="mcp", tool=tool, browser=False, jsonrpc_id=request_id)
+    if tool == "search_x_posts":
+        if not _X_SEARCH_VALIDATOR.is_valid(arguments):
+            raise EmergencyRequestError(422, "invalid_request", request_id)
+        return ValidatedCall(transport="mcp", tool=tool, browser=False, jsonrpc_id=request_id)
     if tool == "screenshot_webpage":
         if not _MCP_SCREENSHOT_VALIDATOR.is_valid(arguments):
             raise EmergencyRequestError(422, "invalid_request", request_id)

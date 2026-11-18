@@ -206,6 +206,21 @@
               <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #fff;">
                 <input type="radio" name="operationMode" value="map" onchange="onModeChange()"> Map Website ($0.005)
               </label>
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #fff;">
+                <input type="radio" name="operationMode" value="search" onchange="onModeChange()"> Search ($0.010)
+              </label>
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #fff;">
+                <input type="radio" name="operationMode" value="search_and_fetch" onchange="onModeChange()"> Search &amp; Fetch ($0.020)
+              </label>
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #fff;">
+                <input type="radio" name="operationMode" value="leads" onchange="onModeChange()"> Leads ($0.030)
+              </label>
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #fff;">
+                <input type="radio" name="operationMode" value="x_search" onchange="onModeChange()"> X Search ($0.008)
+              </label>
+            </div>
+            <div id="optInProviderNote" style="display: none; margin-top: 8px; font-size: 0.78rem; color: #fbbf24; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 6px; padding: 6px 10px;">
+              Requires provider API key on server
             </div>
           </div>
 
@@ -343,6 +358,83 @@ https://quotes.toscrape.com/js/</textarea>
             </div>
           </div>
 
+          <div id="queryGroup" style="display: none;">
+            <div class="form-group">
+              <label for="queryInput">Search Query</label>
+              <input type="text" id="queryInput" value="x402 protocol micropayments" placeholder="Enter search query..." oninput="updateSnippets()">
+            </div>
+          </div>
+
+          <div id="searchOptions" style="display: none;">
+            <div class="form-group">
+              <label for="searchProvider">Provider</label>
+              <select id="searchProvider" onchange="updateSnippets()">
+                <option value="auto" selected>auto (Serper first, Exa fallback)</option>
+                <option value="serper">serper</option>
+                <option value="exa">exa (web only)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="searchType">Search Type</label>
+              <select id="searchType" onchange="updateSnippets()">
+                <option value="web" selected>web</option>
+                <option value="news">news</option>
+                <option value="places">places</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="searchNumResults">Results (1 to 10)</label>
+              <input type="number" id="searchNumResults" min="1" max="10" value="5" style="width: 100%; background: #0f172a; color: #fff; border: 1px solid var(--card-border); border-radius: 6px; padding: 8px;" oninput="updateSnippets()">
+            </div>
+          </div>
+
+          <div id="searchAndFetchOptions" style="display: none;">
+            <div class="form-group">
+              <label for="safNumResults">Top Pages to Fetch (1 to 5)</label>
+              <input type="number" id="safNumResults" min="1" max="5" value="3" style="width: 100%; background: #0f172a; color: #fff; border: 1px solid var(--card-border); border-radius: 6px; padding: 8px;" oninput="updateSnippets()">
+            </div>
+            <div class="form-group">
+              <label for="safMaxChars">Max Chars Per Page (1000 to 15000)</label>
+              <input type="number" id="safMaxChars" min="1000" max="15000" value="6000" style="width: 100%; background: #0f172a; color: #fff; border: 1px solid var(--card-border); border-radius: 6px; padding: 8px;" oninput="updateSnippets()">
+            </div>
+          </div>
+
+          <div id="leadsOptions" style="display: none;">
+            <div class="form-group">
+              <label for="leadsSource">Lead Source</label>
+              <select id="leadsSource" onchange="updateSnippets()">
+                <option value="maps" selected>Google Maps (Places)</option>
+                <option value="web">Google Web Search</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="leadsMaxLeads">Max Leads (1 to 5)</label>
+              <input type="number" id="leadsMaxLeads" min="1" max="5" value="5" style="width: 100%; background: #0f172a; color: #fff; border: 1px solid var(--card-border); border-radius: 6px; padding: 8px;" oninput="updateSnippets()">
+            </div>
+            <div class="form-group checkbox-group">
+              <input type="checkbox" id="leadsDeep" checked onchange="updateSnippets()">
+              <label for="leadsDeep" style="margin-bottom: 0; cursor: pointer;">Deep /inspect (/contact, /about, /pricing + MX/RDAP)</label>
+            </div>
+          </div>
+
+          <div id="xSearchOptions" style="display: none;">
+            <div class="form-group">
+              <label for="xQueryType">Sort Order</label>
+              <select id="xQueryType" onchange="updateSnippets()">
+                <option value="Latest" selected>Latest</option>
+                <option value="Top">Top</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="xMaxTweets">Max Posts (1 to 20)</label>
+              <input type="number" id="xMaxTweets" min="1" max="20" value="10" style="width: 100%; background: #0f172a; color: #fff; border: 1px solid var(--card-border); border-radius: 6px; padding: 8px;" oninput="updateSnippets()">
+            </div>
+            <div class="form-group">
+              <label for="xCursor">Pagination Cursor (Optional)</label>
+              <input type="text" id="xCursor" placeholder="Auto-filled on Load Next Page" oninput="updateSnippets()">
+            </div>
+          </div>
+
           <details id="advancedOptions" style="margin-top: 8px; margin-bottom: 14px; background: rgba(15, 23, 42, 0.55); border: 1px solid var(--card-border); border-radius: 8px; padding: 10px 12px;">
             <summary style="cursor: pointer; font-size: 0.85rem; font-weight: 600; color: var(--text-muted); user-select: none;">Advanced options</summary>
             <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 10px;">
@@ -407,6 +499,9 @@ https://quotes.toscrape.com/js/</textarea>
             <button class="tab" onclick="switchOutputTab('inspect')">Site Intelligence</button>
             <button class="tab" onclick="switchOutputTab('batch')">Batch Results</button>
             <button class="tab" onclick="switchOutputTab('map')">Mapped URLs</button>
+            <button class="tab" onclick="switchOutputTab('search')">Search</button>
+            <button class="tab" onclick="switchOutputTab('leads')">Leads</button>
+            <button class="tab" onclick="switchOutputTab('xsearch')">X Posts</button>
             <button class="tab" onclick="switchOutputTab('meta')">Metadata &amp; JSON</button>
           </div>
 
@@ -486,6 +581,44 @@ https://quotes.toscrape.com/js/</textarea>
           <div id="tabMeta" class="tab-content">
             <pre id="metaOutput">Execute a request to view full structured metadata and response JSON.</pre>
           </div>
+
+          <div id="tabSearch" class="tab-content">
+            <div id="searchMetrics" style="margin-bottom: 8px; color: var(--text-muted); font-size: 0.85rem;"></div>
+            <div id="searchPlaceholder" style="color: var(--text-muted); padding: 40px; text-align: center;">Execute a Web Search request to view ranked results.</div>
+            <div id="searchResultsList" style="display: none; flex-direction: column; gap: 10px;"></div>
+          </div>
+
+          <div id="tabLeads" class="tab-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+              <div id="leadsMetrics" style="color: var(--text-muted); font-size: 0.85rem;"></div>
+              <button id="downloadLeadsCsvBtn" class="btn-secondary" style="display: none; padding: 6px 14px; font-size: 0.82rem; width: auto;" onclick="downloadLeadsCsv()">&#11015; Download CSV</button>
+            </div>
+            <div id="leadsPlaceholder" style="color: var(--text-muted); padding: 40px; text-align: center;">Execute a B2B Leads request to view enriched business rows.</div>
+            <div id="leadsTableWrap" style="display: none; overflow-x: auto;">
+              <table style="width: 100%; border-collapse: collapse; font-size: 0.82rem;">
+                <thead>
+                  <tr style="border-bottom: 1px solid var(--card-border); text-align: left; color: var(--accent);">
+                    <th style="padding: 8px;">Business</th>
+                    <th style="padding: 8px;">Website</th>
+                    <th style="padding: 8px;">Emails</th>
+                    <th style="padding: 8px;">Phones</th>
+                    <th style="padding: 8px;">Tech Stack</th>
+                    <th style="padding: 8px;">MX/SPF</th>
+                  </tr>
+                </thead>
+                <tbody id="leadsTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="tabXsearch" class="tab-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+              <div id="xSearchMetrics" style="color: var(--text-muted); font-size: 0.85rem;"></div>
+              <button id="loadNextXPageBtn" class="btn-secondary" style="display: none; padding: 6px 14px; font-size: 0.82rem; width: auto;" onclick="loadNextXPage()">Load Next Page (cursor)</button>
+            </div>
+            <div id="xSearchPlaceholder" style="color: var(--text-muted); padding: 40px; text-align: center;">Execute an X Search request to view live posts.</div>
+            <div id="xSearchList" style="display: none; flex-direction: column; gap: 10px;"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -516,6 +649,9 @@ https://quotes.toscrape.com/js/</textarea>
   let cached402Challenge = null;
   let currentScreenshotBase64 = null;
   let currentScreenshotMime = null;
+  let lastLeadsRows = [];
+  let lastXNextCursor = null;
+  let serverEnabledFeatures = null;
 
   // Wallet Standard Discovery State
   const registeredWallets = new Map();
@@ -695,14 +831,152 @@ https://quotes.toscrape.com/js/</textarea>
     }
   }
 
+  const MODE_META = {
+    fetch: { path: '/fetch', price: '$0.005', atomic: '5000', opName: 'SmartFetch Web Reader', label: 'Fetch ($0.005 USDC)' },
+    screenshot: { path: '/screenshot', price: '$0.01', atomic: '10000', opName: 'SmartFetch Screenshot', label: 'Screenshot ($0.01 USDC)' },
+    inspect: { path: '/inspect', price: '$0.005', atomic: '5000', opName: 'SmartFetch Site Inspector', label: 'Inspect ($0.005 USDC)' },
+    batch_fetch: { path: '/batch-fetch', price: '$0.015', atomic: '15000', opName: 'SmartFetch Batch Fetcher', label: 'Batch Fetch ($0.015 USDC)' },
+    map: { path: '/map', price: '$0.005', atomic: '5000', opName: 'SmartFetch Website Mapper', label: 'Map Website ($0.005 USDC)' },
+    search: { path: '/search', price: '$0.010', atomic: '10000', opName: 'SmartFetch Web Search', label: 'Search ($0.010 USDC)' },
+    search_and_fetch: { path: '/search-and-fetch', price: '$0.020', atomic: '20000', opName: 'SmartFetch Search & Fetch', label: 'Search & Fetch ($0.020 USDC)' },
+    leads: { path: '/leads', price: '$0.030', atomic: '30000', opName: 'SmartFetch B2B Leads', label: 'Leads ($0.030 USDC)' },
+    x_search: { path: '/x-search', price: '$0.008', atomic: '8000', opName: 'SmartFetch X Search', label: 'X Search ($0.008 USDC)' },
+  };
+
+  function getModeMeta(mode) {
+    return MODE_META[mode] || MODE_META.fetch;
+  }
+
+  function isQueryMode(mode) {
+    return mode === 'search' || mode === 'search_and_fetch' || mode === 'leads' || mode === 'x_search';
+  }
+
+  function getQueryValue() {
+    const el = document.getElementById('queryInput');
+    return (el && el.value.trim()) || 'x402 protocol micropayments';
+  }
+
+  function buildModePayload(mode, target) {
+    const noCache = noCacheCheckbox.checked;
+    if (mode === 'screenshot') {
+      return {
+        url: target,
+        viewport: document.getElementById('screenshotViewport').value,
+        full_page: document.getElementById('screenshotFullPage').checked,
+        image_format: document.getElementById('screenshotFormat').value,
+        no_cache: noCache
+      };
+    }
+    if (mode === 'inspect') {
+      return {
+        url: target,
+        render_mode: document.getElementById('inspectRenderMode').value,
+        no_cache: noCache
+      };
+    }
+    if (mode === 'batch_fetch') {
+      return {
+        urls: getBatchUrls(),
+        max_chars_per_url: getBatchMaxChars(),
+        render_mode: document.getElementById('batchRenderMode').value,
+        no_cache: noCache
+      };
+    }
+    if (mode === 'map') {
+      const searchVal = document.getElementById('mapSearch').value.trim();
+      const body = {
+        url: target,
+        max_urls: Math.max(1, Math.min(500, parseInt(document.getElementById('mapMaxUrls').value || '200', 10))),
+        include_subdomains: document.getElementById('mapIncludeSubdomains').checked,
+        no_cache: noCache
+      };
+      if (searchVal) body.search = searchVal;
+      return body;
+    }
+    if (mode === 'search') {
+      return {
+        query: getQueryValue(),
+        provider: document.getElementById('searchProvider').value,
+        search_type: document.getElementById('searchType').value,
+        num_results: Math.max(1, Math.min(10, parseInt(document.getElementById('searchNumResults').value || '5', 10))),
+        no_cache: noCache
+      };
+    }
+    if (mode === 'search_and_fetch') {
+      return {
+        query: getQueryValue(),
+        num_results: Math.max(1, Math.min(5, parseInt(document.getElementById('safNumResults').value || '3', 10))),
+        max_chars_per_page: Math.max(1000, Math.min(15000, parseInt(document.getElementById('safMaxChars').value || '6000', 10))),
+        no_cache: noCache
+      };
+    }
+    if (mode === 'leads') {
+      return {
+        query: getQueryValue(),
+        source: document.getElementById('leadsSource').value,
+        max_leads: Math.max(1, Math.min(5, parseInt(document.getElementById('leadsMaxLeads').value || '5', 10))),
+        deep: document.getElementById('leadsDeep').checked,
+        no_cache: noCache
+      };
+    }
+    if (mode === 'x_search') {
+      const cursorVal = (document.getElementById('xCursor').value || '').trim();
+      const body = {
+        query: getQueryValue(),
+        query_type: document.getElementById('xQueryType').value,
+        max_tweets: Math.max(1, Math.min(20, parseInt(document.getElementById('xMaxTweets').value || '10', 10))),
+        no_cache: noCache
+      };
+      if (cursorVal) body.cursor = cursorVal;
+      return body;
+    }
+    const body = {
+      url: target,
+      max_chars: parseInt(maxCharsSlider.value, 10),
+      render_mode: renderModeSelect.value,
+      no_cache: noCache,
+      include_html: includeHtmlCheckbox.checked
+    };
+    if (renderModeSelect.value === 'browser') {
+      body.force_browser = true;
+    }
+    return body;
+  }
+
+  function updateOptInProviderNote() {
+    const mode = getOperationMode();
+    const note = document.getElementById('optInProviderNote');
+    if (!note) return;
+    if (!isQueryMode(mode)) {
+      note.style.display = 'none';
+      return;
+    }
+    if (serverEnabledFeatures && serverEnabledFeatures[mode] === true) {
+      note.style.display = 'none';
+      return;
+    }
+    note.textContent = 'Requires provider API key on server (returns 503 until configured on Railway)';
+    note.style.display = 'block';
+  }
+
+  async function refreshServerFeatures() {
+    const gateway = gatewayUrlInput ? gatewayUrlInput.value.trim().replace(/\/+$/, '') : '';
+    if (!gateway) return;
+    try {
+      const resp = await fetch(`${gateway}/meta`);
+      if (!resp.ok) return;
+      const meta = await resp.json();
+      if (meta && meta.enabled_features) {
+        serverEnabledFeatures = meta.enabled_features;
+        updateOptInProviderNote();
+      }
+    } catch (e) {}
+  }
+
   function updateActionButtonLabel() {
     const mode = getOperationMode();
     const prefix = isActiveChainConnected() ? 'Sign &amp; ' : 'Connect Wallet &amp; ';
-    let action = 'Fetch ($0.005 USDC)';
-    if (mode === 'screenshot') action = 'Screenshot ($0.01 USDC)';
-    else if (mode === 'inspect') action = 'Inspect ($0.005 USDC)';
-    else if (mode === 'batch_fetch') action = 'Batch Fetch ($0.015 USDC)';
-    else if (mode === 'map') action = 'Map Website ($0.005 USDC)';
+    const action = getModeMeta(mode).label;
     const paidBtn = document.getElementById('paidBtn');
     if (paidBtn) {
       paidBtn.innerHTML = `&#9889; ${prefix}${action}`;
@@ -774,15 +1048,26 @@ https://quotes.toscrape.com/js/</textarea>
 
   function onModeChange() {
     const mode = getOperationMode();
-    document.getElementById('singleUrlGroup').style.display = mode === 'batch_fetch' ? 'none' : 'block';
+    const queryMode = isQueryMode(mode);
+    document.getElementById('singleUrlGroup').style.display = (mode === 'batch_fetch' || queryMode) ? 'none' : 'block';
+    document.getElementById('queryGroup').style.display = queryMode ? 'block' : 'none';
     document.getElementById('fetchOptions').style.display = mode === 'fetch' ? 'block' : 'none';
     document.getElementById('screenshotOptions').style.display = mode === 'screenshot' ? 'block' : 'none';
     document.getElementById('inspectOptions').style.display = mode === 'inspect' ? 'block' : 'none';
     document.getElementById('batchFetchOptions').style.display = mode === 'batch_fetch' ? 'block' : 'none';
     const mapOpts = document.getElementById('mapOptions');
     if (mapOpts) mapOpts.style.display = mode === 'map' ? 'block' : 'none';
+    const searchOpts = document.getElementById('searchOptions');
+    if (searchOpts) searchOpts.style.display = mode === 'search' ? 'block' : 'none';
+    const safOpts = document.getElementById('searchAndFetchOptions');
+    if (safOpts) safOpts.style.display = mode === 'search_and_fetch' ? 'block' : 'none';
+    const leadsOpts = document.getElementById('leadsOptions');
+    if (leadsOpts) leadsOpts.style.display = mode === 'leads' ? 'block' : 'none';
+    const xOpts = document.getElementById('xSearchOptions');
+    if (xOpts) xOpts.style.display = mode === 'x_search' ? 'block' : 'none';
     const includeHtmlRow = document.getElementById('includeHtmlRow');
     if (includeHtmlRow) includeHtmlRow.style.display = mode === 'fetch' ? 'flex' : 'none';
+    updateOptInProviderNote();
     renderWalletStatusBar();
     updateActionButtonLabel();
     cached402Challenge = null;
@@ -883,31 +1168,11 @@ https://quotes.toscrape.com/js/</textarea>
       const hData = await hResp.json();
 
       // 2. Unauthenticated POST to capture 402
-      let endpoint = `${gateway}/fetch`;
-      let probeBody = { url: target, max_chars: parseInt(maxCharsSlider.value, 10) };
-      let expectedAmount = '5000';
-      let opName = 'Fetch Webpage';
-      if (mode === 'screenshot') {
-        endpoint = `${gateway}/screenshot`;
-        probeBody = { url: target, viewport: document.getElementById('screenshotViewport').value };
-        expectedAmount = '10000';
-        opName = 'Screenshot Webpage';
-      } else if (mode === 'inspect') {
-        endpoint = `${gateway}/inspect`;
-        probeBody = { url: target, render_mode: document.getElementById('inspectRenderMode').value };
-        expectedAmount = '5000';
-        opName = 'Inspect Site';
-      } else if (mode === 'batch_fetch') {
-        endpoint = `${gateway}/batch-fetch`;
-        probeBody = { urls: getBatchUrls(), max_chars_per_url: getBatchMaxChars(), render_mode: document.getElementById('batchRenderMode').value };
-        expectedAmount = '15000';
-        opName = 'Batch Fetch';
-      } else if (mode === 'map') {
-        endpoint = `${gateway}/map`;
-        probeBody = { url: target, max_urls: parseInt(document.getElementById('mapMaxUrls').value || '200', 10) };
-        expectedAmount = '5000';
-        opName = 'Map Website';
-      }
+      const modeMeta = getModeMeta(mode);
+      const endpoint = `${gateway}${modeMeta.path}`;
+      const probeBody = buildModePayload(mode, target);
+      const expectedAmount = modeMeta.atomic;
+      const opName = modeMeta.opName;
 
       const fetchResp = await fetch(endpoint, {
         method: 'POST',
@@ -1409,6 +1674,18 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     } else if (mode === 'map') {
       renderMapOutput(respData);
       switchOutputTab('map');
+    } else if (mode === 'search') {
+      renderSearchOutput(respData);
+      switchOutputTab('search');
+    } else if (mode === 'search_and_fetch') {
+      renderBatchOutput(respData);
+      switchOutputTab('batch');
+    } else if (mode === 'leads') {
+      renderLeadsOutput(respData);
+      switchOutputTab('leads');
+    } else if (mode === 'x_search') {
+      renderXSearchOutput(respData);
+      switchOutputTab('xsearch');
     } else {
       document.getElementById('markdownOutput').textContent = respData.markdown || respData.content || "No Markdown returned.";
       document.getElementById('textOutput').textContent = respData.content || "";
@@ -1459,33 +1736,17 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
       updateActionButtonLabel();
 
       // 1. Fetch challenge
-      let endpoint = `${gateway}/fetch`;
-      let expectedAmount = '5000';
-      let opName = "SmartFetch Web Reader";
-      if (mode === 'screenshot') {
-        endpoint = `${gateway}/screenshot`;
-        expectedAmount = '10000';
-        opName = "SmartFetch Screenshot";
-      } else if (mode === 'inspect') {
-        endpoint = `${gateway}/inspect`;
-        expectedAmount = '5000';
-        opName = "SmartFetch Site Inspector";
-      } else if (mode === 'batch_fetch') {
-        endpoint = `${gateway}/batch-fetch`;
-        expectedAmount = '15000';
-        opName = "SmartFetch Batch Fetcher";
-      } else if (mode === 'map') {
-        endpoint = `${gateway}/map`;
-        expectedAmount = '5000';
-        opName = "SmartFetch Website Mapper";
-      }
-      const priceLabel = mode === 'screenshot' ? '$0.01' : (mode === 'batch_fetch' ? '$0.015' : '$0.005');
+      const modeMeta = getModeMeta(mode);
+      const endpoint = `${gateway}${modeMeta.path}`;
+      const expectedAmount = modeMeta.atomic;
+      const opName = modeMeta.opName;
+      const priceLabel = modeMeta.price;
 
       showStatus("Obtaining live 402 payment requirements from gateway...", "info");
       const initialResp = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(mode === 'batch_fetch' ? { urls: getBatchUrls() } : { url: target })
+        body: JSON.stringify(buildModePayload(mode, target))
       });
 
       const reqHeader = initialResp.headers.get('payment-required') || initialResp.headers.get('PAYMENT-REQUIRED');
@@ -1547,49 +1808,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
 
       showStatus("<strong>Signature approved!</strong> Dispatching paid request to SmartFetch gateway &amp; isolated VPS worker...", "info");
 
-      let reqBody;
-      if (mode === 'screenshot') {
-        reqBody = {
-          url: target,
-          viewport: document.getElementById('screenshotViewport').value,
-          full_page: document.getElementById('screenshotFullPage').checked,
-          image_format: document.getElementById('screenshotFormat').value,
-          no_cache: noCacheCheckbox.checked
-        };
-      } else if (mode === 'inspect') {
-        reqBody = {
-          url: target,
-          render_mode: document.getElementById('inspectRenderMode').value,
-          no_cache: noCacheCheckbox.checked
-        };
-      } else if (mode === 'batch_fetch') {
-        reqBody = {
-          urls: getBatchUrls(),
-          max_chars_per_url: getBatchMaxChars(),
-          render_mode: document.getElementById('batchRenderMode').value,
-          no_cache: noCacheCheckbox.checked
-        };
-      } else if (mode === 'map') {
-        const searchVal = document.getElementById('mapSearch').value.trim();
-        reqBody = {
-          url: target,
-          max_urls: Math.max(1, Math.min(500, parseInt(document.getElementById('mapMaxUrls').value || '200', 10))),
-          include_subdomains: document.getElementById('mapIncludeSubdomains').checked,
-          no_cache: noCacheCheckbox.checked
-        };
-        if (searchVal) reqBody.search = searchVal;
-      } else {
-        reqBody = {
-          url: target,
-          max_chars: parseInt(maxCharsSlider.value, 10),
-          render_mode: renderModeSelect.value,
-          no_cache: noCacheCheckbox.checked,
-          include_html: includeHtmlCheckbox.checked
-        };
-        if (renderModeSelect.value === 'browser') {
-          reqBody.force_browser = true;
-        }
-      }
+      const reqBody = buildModePayload(mode, target);
 
       const paidResp = await fetch(endpoint, {
         method: 'POST',
@@ -1686,33 +1905,17 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
       }
 
       // 1. Fetch challenge
-      let endpoint = `${gateway}/fetch`;
-      let expectedAmount = '5000';
-      let opName = "SmartFetch Web Reader";
-      if (mode === 'screenshot') {
-        endpoint = `${gateway}/screenshot`;
-        expectedAmount = '10000';
-        opName = "SmartFetch Screenshot";
-      } else if (mode === 'inspect') {
-        endpoint = `${gateway}/inspect`;
-        expectedAmount = '5000';
-        opName = "SmartFetch Site Inspector";
-      } else if (mode === 'batch_fetch') {
-        endpoint = `${gateway}/batch-fetch`;
-        expectedAmount = '15000';
-        opName = "SmartFetch Batch Fetcher";
-      } else if (mode === 'map') {
-        endpoint = `${gateway}/map`;
-        expectedAmount = '5000';
-        opName = "SmartFetch Website Mapper";
-      }
-      const priceLabel = mode === 'screenshot' ? '$0.01' : (mode === 'batch_fetch' ? '$0.015' : '$0.005');
+      const modeMeta = getModeMeta(mode);
+      const endpoint = `${gateway}${modeMeta.path}`;
+      const expectedAmount = modeMeta.atomic;
+      const opName = modeMeta.opName;
+      const priceLabel = modeMeta.price;
 
       showStatus("Obtaining live 402 payment requirements from gateway...", "info");
       const initialResp = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(mode === 'batch_fetch' ? { urls: getBatchUrls() } : { url: target })
+        body: JSON.stringify(buildModePayload(mode, target))
       });
 
       const reqHeader = initialResp.headers.get('payment-required') || initialResp.headers.get('PAYMENT-REQUIRED');
@@ -1809,49 +2012,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
 
       showStatus("<strong>Signature approved!</strong> Dispatching paid request to SmartFetch gateway &amp; isolated VPS worker...", "info");
 
-      let reqBody;
-      if (mode === 'screenshot') {
-        reqBody = {
-          url: target,
-          viewport: document.getElementById('screenshotViewport').value,
-          full_page: document.getElementById('screenshotFullPage').checked,
-          image_format: document.getElementById('screenshotFormat').value,
-          no_cache: noCacheCheckbox.checked
-        };
-      } else if (mode === 'inspect') {
-        reqBody = {
-          url: target,
-          render_mode: document.getElementById('inspectRenderMode').value,
-          no_cache: noCacheCheckbox.checked
-        };
-      } else if (mode === 'batch_fetch') {
-        reqBody = {
-          urls: getBatchUrls(),
-          max_chars_per_url: getBatchMaxChars(),
-          render_mode: document.getElementById('batchRenderMode').value,
-          no_cache: noCacheCheckbox.checked
-        };
-      } else if (mode === 'map') {
-        const searchVal = document.getElementById('mapSearch').value.trim();
-        reqBody = {
-          url: target,
-          max_urls: Math.max(1, Math.min(500, parseInt(document.getElementById('mapMaxUrls').value || '200', 10))),
-          include_subdomains: document.getElementById('mapIncludeSubdomains').checked,
-          no_cache: noCacheCheckbox.checked
-        };
-        if (searchVal) reqBody.search = searchVal;
-      } else {
-        reqBody = {
-          url: target,
-          max_chars: parseInt(maxCharsSlider.value, 10),
-          render_mode: renderModeSelect.value,
-          no_cache: noCacheCheckbox.checked,
-          include_html: includeHtmlCheckbox.checked
-        };
-        if (renderModeSelect.value === 'browser') {
-          reqBody.force_browser = true;
-        }
-      }
+      const reqBody = buildModePayload(mode, target);
 
       const paidResp = await fetch(endpoint, {
         method: 'POST',
@@ -2016,9 +2177,106 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
+  function renderSearchOutput(data) {
+    document.getElementById('searchPlaceholder').style.display = 'none';
+    const listEl = document.getElementById('searchResultsList');
+    listEl.style.display = 'flex';
+    const results = data.results || [];
+    document.getElementById('searchMetrics').textContent =
+      `Provider: ${data.provider_used || 'auto'} | Type: ${data.search_type || 'web'} | Results: ${data.num_results || results.length} | Cached: ${Boolean(data.cached)} | Elapsed: ${data.elapsed_ms || 0}ms`;
+    listEl.innerHTML = results.length
+      ? results.map((r, idx) => `
+        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--card-border); border-radius: 8px; padding: 12px;">
+          <div style="font-weight: 600; color: #fff; margin-bottom: 4px;">${idx + 1}. <a href="${escapeHtml(r.url || '#')}" target="_blank" style="color: var(--accent);">${escapeHtml(r.title || r.url || 'Result')}</a></div>
+          <div style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 6px;">${escapeHtml(r.url || '')}${r.address ? ' | ' + escapeHtml(r.address) : ''}${r.phone ? ' | ' + escapeHtml(r.phone) : ''}</div>
+          <div style="font-size: 0.85rem; line-height: 1.5;">${escapeHtml(r.snippet || '')}</div>
+        </div>
+      `).join('')
+      : '<div style="color: var(--text-muted);">No results returned.</div>';
+  }
+
+  function renderLeadsOutput(data) {
+    document.getElementById('leadsPlaceholder').style.display = 'none';
+    document.getElementById('leadsTableWrap').style.display = 'block';
+    const leads = data.leads || [];
+    lastLeadsRows = leads;
+    document.getElementById('downloadLeadsCsvBtn').style.display = leads.length ? 'inline-block' : 'none';
+    document.getElementById('leadsMetrics').textContent =
+      `Source: ${data.source || 'maps'} | Total Leads: ${data.total_leads || leads.length} | Enriched: ${data.inspected_count || 0} | Elapsed: ${data.elapsed_ms || 0}ms`;
+    document.getElementById('leadsTableBody').innerHTML = leads.length
+      ? leads.map((lead) => `
+        <tr style="border-bottom: 1px solid rgba(255,255,255,0.06);">
+          <td style="padding: 8px;"><strong>${escapeHtml(lead.business_name || '')}</strong><br><span style="color: var(--text-muted); font-size: 0.75rem;">${escapeHtml(lead.category || '')}</span></td>
+          <td style="padding: 8px;">${lead.website ? `<a href="${escapeHtml(lead.website)}" target="_blank" style="color: var(--accent);">${escapeHtml(lead.website)}</a>` : '-'}</td>
+          <td style="padding: 8px;">${escapeHtml((lead.emails || []).join(', ') || '-')}</td>
+          <td style="padding: 8px;">${escapeHtml((lead.phones || []).join(', ') || lead.maps_phone || '-')}</td>
+          <td style="padding: 8px;">${escapeHtml((lead.tech_stack || []).join(', ') || '-')}</td>
+          <td style="padding: 8px;">${lead.has_mx ? 'MX ' : ''}${lead.has_spf ? 'SPF ' : ''}${lead.has_dmarc ? 'DMARC' : ''}</td>
+        </tr>
+      `).join('')
+      : '<tr><td colspan="6" style="padding: 16px; color: var(--text-muted);">No leads found.</td></tr>';
+  }
+
+  function downloadLeadsCsv() {
+    if (!lastLeadsRows || !lastLeadsRows.length) return;
+    const cols = ['business_name', 'category', 'rating', 'reviews_count', 'address', 'maps_phone', 'website', 'emails', 'phones', 'tech_stack', 'contact_url', 'pricing_url', 'has_mx', 'has_spf', 'has_dmarc'];
+    const esc = (v) => {
+      const s = Array.isArray(v) ? v.join('; ') : String(v ?? '');
+      return `"${s.replace(/"/g, '""')}"`;
+    };
+    const lines = [cols.join(',')].concat(lastLeadsRows.map(r => cols.map(c => esc(r[c])).join(',')));
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `smartfetch_leads_${Date.now()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function renderXSearchOutput(data) {
+    document.getElementById('xSearchPlaceholder').style.display = 'none';
+    const listEl = document.getElementById('xSearchList');
+    listEl.style.display = 'flex';
+    const tweets = data.tweets || [];
+    lastXNextCursor = data.next_cursor || null;
+    const nextBtn = document.getElementById('loadNextXPageBtn');
+    if (nextBtn) nextBtn.style.display = (data.has_next_page && lastXNextCursor) ? 'inline-block' : 'none';
+    document.getElementById('xSearchMetrics').textContent =
+      `Sort: ${data.query_type || 'Latest'} | Posts: ${data.count || tweets.length} | Has Next: ${Boolean(data.has_next_page)} | Elapsed: ${data.elapsed_ms || 0}ms`;
+    listEl.innerHTML = tweets.length
+      ? tweets.map((t) => `
+        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--card-border); border-radius: 8px; padding: 12px;">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 0.82rem;">
+            <strong>${escapeHtml(t.author_name || '')} <span style="color: var(--accent);">@${escapeHtml(t.author_username || '')}</span></strong>
+            <span style="color: var(--text-muted);">${escapeHtml(t.created_at || '')}</span>
+          </div>
+          <div style="font-size: 0.88rem; line-height: 1.5; margin-bottom: 8px; white-space: pre-wrap;">${escapeHtml(t.text || '')}</div>
+          <div style="font-size: 0.78rem; color: var(--text-muted); display: flex; gap: 14px; flex-wrap: wrap;">
+            <span>&#10084; ${t.likes || 0}</span>
+            <span>&#128257; ${t.retweets || 0}</span>
+            <span>&#128172; ${t.replies || 0}</span>
+            <span>&#128065; ${t.views || 0}</span>
+            ${t.url ? `<a href="${escapeHtml(t.url)}" target="_blank" style="color: var(--accent);">View Post</a>` : ''}
+          </div>
+        </div>
+      `).join('')
+      : '<div style="color: var(--text-muted);">No matching posts returned.</div>';
+  }
+
+  function loadNextXPage() {
+    if (!lastXNextCursor) return;
+    const cursorEl = document.getElementById('xCursor');
+    if (cursorEl) cursorEl.value = lastXNextCursor;
+    updateSnippets();
+    connectAndFetchPaid();
+  }
+
   // Tab Switching
   function switchOutputTab(name) {
-    const tabs = ['markdown', 'text', 'html', 'screenshot', 'inspect', 'batch', 'map', 'meta'];
+    const tabs = ['markdown', 'text', 'html', 'screenshot', 'inspect', 'batch', 'map', 'search', 'leads', 'xsearch', 'meta'];
     tabs.forEach(t => {
       const btn = document.querySelector(`#outputTabs button[onclick*="${t}"]`);
       if (btn) btn.classList.toggle('active', t === name);
@@ -2268,6 +2526,40 @@ const client = createWalletClient({ chain: base, transport: custom(window.ethere
 // 2. Sign EIP-712 TransferWithAuthorization (amount: 5000 atomic units)
 // 3. Retry with PAYMENT-SIGNATURE: <base64_payload>`;
 
+    } else if (isQueryMode(mode)) {
+      const modeMeta = getModeMeta(mode);
+      const payload = buildModePayload(mode, target);
+      const payloadStr = JSON.stringify(payload, null, 2);
+
+      document.getElementById('snippetCurl').textContent =
+`curl -X POST "${gateway}${modeMeta.path}" \\
+  -H "Content-Type: application/json" \\
+  -H "PAYMENT-SIGNATURE: <BASE64_X402_ENVELOPE>" \\
+  -d '${payloadStr}'`;
+
+      document.getElementById('snippetPython').textContent =
+`import httpx
+from x402 import x402Client
+# Dual-chain Base Mainnet (eip155:8453) & Solana Mainnet (solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp)
+
+client = x402Client()
+response = client.post(
+    "${gateway}${modeMeta.path}",
+    json=${payloadStr}
+)
+print(response.json())`;
+
+      document.getElementById('snippetTypescript').textContent = isSolana
+? `// Solana Mainnet (SVM) Micropayment (${modeMeta.price} USDC)
+// 1. Fetch 402 challenge from ${gateway}${modeMeta.path}
+// 2. Build ComputeBudget + TransferChecked (amount: ${modeMeta.atomic}) + Memo
+// 3. Sign with wallet.features['solana:signTransaction']
+// 4. Retry POST with PAYMENT-SIGNATURE: <base64_x402_envelope>`
+: `// Base Mainnet (EVM) Micropayment (${modeMeta.price} USDC)
+// 1. Fetch challenge from ${gateway}${modeMeta.path} (${modeMeta.price} USDC)
+// 2. Sign EIP-712 TransferWithAuthorization (amount: ${modeMeta.atomic} atomic units)
+// 3. Retry with PAYMENT-SIGNATURE: <base64_payload>`;
+
     } else {
       const maxChars = parseInt(maxCharsSlider.value, 10);
       const renderMode = renderModeSelect.value;
@@ -2369,8 +2661,10 @@ JSON.stringify({
   refreshSolanaWalletOptions();
   renderWalletStatusBar();
   updateActionButtonLabel();
+  updateOptInProviderNote();
   updateSnippets();
   initEvmWalletState();
+  refreshServerFeatures();
 </script>
 </body>
 </html>

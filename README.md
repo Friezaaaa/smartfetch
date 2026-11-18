@@ -1,4 +1,4 @@
-# SmartFetch V1.14.0 — Production Isolated Browser & x402 Payments
+# SmartFetch V1.15.0 — Production Isolated Browser & x402 Payments
 
 SmartFetch provides reliable, high-performance public webpage retrieval and rendering for AI agents and developer applications with zero-trust browser isolation and x402 micropayment protection.
 
@@ -56,7 +56,7 @@ SmartFetch separates the public API/MCP interface from headless browser executio
 
 ## Production Parameters
 
-- **Service Version**: `1.14.0`
+- **Service Version**: `1.15.0`
 - **Operating Mode**: `isolated_browser`
 - **Supported Networks**:
   - **Base Mainnet** (`eip155:8453`) — Native USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`)
@@ -73,6 +73,12 @@ SmartFetch separates the public API/MCP interface from headless browser executio
   - `screenshot_webpage` ($0.01 USDC)
   - `inspect_webpage` ($0.005 USDC)
   - `batch_fetch_webpages` ($0.015 USDC)
+  - `map_website` ($0.005 USDC)
+- **Opt-In Endpoints (enabled when provider keys are configured on server)**:
+  - `POST /search` / `search_web` ($0.010 USDC; requires `SERPER_API_KEY` or `EXA_API_KEY`)
+  - `POST /search-and-fetch` / `search_and_fetch` ($0.020 USDC; requires `SERPER_API_KEY` or `EXA_API_KEY`)
+  - `POST /leads` / `search_leads` ($0.030 USDC; requires `SERPER_API_KEY`; also available as `search_leads` on Apify)
+  - `POST /x-search` / `search_x_posts` ($0.008 USDC; requires `TWITTERAPI_KEY`)
   - `map_website` ($0.005 USDC)
 - **REST Endpoints**:
   - `POST /fetch` ($0.005 USDC)

@@ -28,6 +28,11 @@ from .bazaar import (
     INSPECT_OUTPUT_EXAMPLE,
     INSPECT_OUTPUT_SCHEMA,
     INSPECT_TAGS,
+    LEADS_DESCRIPTION,
+    LEADS_INPUT_EXAMPLE,
+    LEADS_INPUT_SCHEMA,
+    LEADS_OUTPUT_EXAMPLE,
+    LEADS_OUTPUT_SCHEMA,
     MAP_DESCRIPTION,
     MAP_INPUT_EXAMPLE,
     MAP_INPUT_SCHEMA,
@@ -42,7 +47,22 @@ from .bazaar import (
     SCREENSHOT_OUTPUT_EXAMPLE,
     SCREENSHOT_OUTPUT_SCHEMA,
     SCREENSHOT_TAGS,
+    SEARCH_AND_FETCH_DESCRIPTION,
+    SEARCH_AND_FETCH_INPUT_EXAMPLE,
+    SEARCH_AND_FETCH_INPUT_SCHEMA,
+    SEARCH_AND_FETCH_OUTPUT_EXAMPLE,
+    SEARCH_AND_FETCH_OUTPUT_SCHEMA,
+    SEARCH_DESCRIPTION,
+    SEARCH_INPUT_EXAMPLE,
+    SEARCH_INPUT_SCHEMA,
+    SEARCH_OUTPUT_EXAMPLE,
+    SEARCH_OUTPUT_SCHEMA,
     TEXT_DESCRIPTION,
+    X_SEARCH_DESCRIPTION,
+    X_SEARCH_INPUT_EXAMPLE,
+    X_SEARCH_INPUT_SCHEMA,
+    X_SEARCH_OUTPUT_EXAMPLE,
+    X_SEARCH_OUTPUT_SCHEMA,
     batch_fetch_discovery_extension,
     fetch_discovery_extension,
     inspect_discovery_extension,
@@ -50,7 +70,10 @@ from .bazaar import (
     screenshot_discovery_extension,
 )
 from .config import SERVICE_NAME, SERVICE_VERSION
+from .leads import leads_configured
 from .media import MEDIA_LIMITS
+from .search_tools import search_configured
+from .social import x_search_configured
 from .v111_contracts import (
     DirectExtractionRequest,
     FailureResponse,
@@ -110,7 +133,7 @@ def public_base_url(request):
 def public_urls(request):
     """Build all public links from the proxy-aware request URL."""
     base = public_base_url(request)
-    return {
+    urls = {
         "base": base,
         "x402": f"{base}/.well-known/x402",
         "docs": f"{base}/docs",
@@ -126,6 +149,14 @@ def public_urls(request):
         "map": f"{base}/map",
         "mcp": f"{base}/mcp",
     }
+    if search_configured():
+        urls["search"] = f"{base}/search"
+        urls["search_and_fetch"] = f"{base}/search-and-fetch"
+    if leads_configured():
+        urls["leads"] = f"{base}/leads"
+    if x_search_configured():
+        urls["x_search"] = f"{base}/x-search"
+    return urls
 
 
 def _v111_requirements(v111_accepts):
@@ -163,6 +194,10 @@ def x402_manifest(urls, settings, v111_accepts=None):
             + ([urls["inspect"]] if "inspect" in urls else [])
             + ([urls["batch_fetch"]] if "batch_fetch" in urls else [])
             + ([urls["map"]] if "map" in urls else [])
+            + ([urls["search"]] if "search" in urls else [])
+            + ([urls["search_and_fetch"]] if "search_and_fetch" in urls else [])
+            + ([urls["leads"]] if "leads" in urls else [])
+            + ([urls["x_search"]] if "x_search" in urls else [])
         ),
         "payment": {
             "protocol": "x402",
@@ -258,6 +293,10 @@ def agent_card_document(urls, settings=None):
                 "inspect": urls.get("inspect", f"{urls['base']}/inspect"),
                 "batch_fetch": urls.get("batch_fetch", f"{urls['base']}/batch-fetch"),
                 "map": urls.get("map", f"{urls['base']}/map"),
+                **({"search": urls["search"]} if "search" in urls else {}),
+                **({"search_and_fetch": urls["search_and_fetch"]} if "search_and_fetch" in urls else {}),
+                **({"leads": urls["leads"]} if "leads" in urls else {}),
+                **({"x_search": urls["x_search"]} if "x_search" in urls else {}),
                 "openapi": urls["openapi"],
             },
             "x402": {
@@ -326,6 +365,36 @@ def agent_card_document(urls, settings=None):
                 "description": MAP_DESCRIPTION,
                 "tags": ["sitemap", "crawler", "urls", "discovery"],
             },
+            *([
+                {
+                    "id": "search_web",
+                    "name": "Search Web",
+                    "description": SEARCH_DESCRIPTION,
+                    "tags": ["search", "web-search", "news", "places"],
+                },
+                {
+                    "id": "search_and_fetch",
+                    "name": "Search & Fetch",
+                    "description": SEARCH_AND_FETCH_DESCRIPTION,
+                    "tags": ["search", "rag", "markdown"],
+                },
+            ] if search_configured() else []),
+            *([
+                {
+                    "id": "search_leads",
+                    "name": "B2B Enriched Leads",
+                    "description": LEADS_DESCRIPTION,
+                    "tags": ["leads", "b2b", "enrichment"],
+                },
+            ] if leads_configured() else []),
+            *([
+                {
+                    "id": "search_x_posts",
+                    "name": "Search X/Twitter Posts",
+                    "description": X_SEARCH_DESCRIPTION,
+                    "tags": ["twitter", "x", "social-search"],
+                },
+            ] if x_search_configured() else []),
         ],
         "contact": {
             "email": "smartfetch.contact@gmail.com",
@@ -1027,6 +1096,142 @@ def openapi_document(
             },
         },
     }
+    def _optin_path_item(
+        operation_id: str,
+        summary: str,
+        description: str,
+        price_str: str,
+        req_schema: dict,
+        req_example: dict,
+        resp_schema: dict,
+        resp_example: dict,
+    ) -> dict:
+        return {
+            "post": {
+                "operationId": operation_id,
+                "summary": summary,
+                "description": f"{description} The configured price is {price_str} per execution using USDC on {network_desc}.",
+                "x-x402": {
+                    "x402Version": 2,
+                    "scheme": scheme,
+                    "network": network,
+                    "assetSymbol": "USDC",
+                    "price": price_str,
+                    "amount": _atomic_usdc_amount(price_str),
+                    **({"asset": asset} if asset is not None else {}),
+                    **({
+                        "solana": {
+                            "network": settings.solana_network,
+                            "assetSymbol": "USDC",
+                            "payTo": settings.solana_pay_to,
+                        },
+                        "networks": [network, settings.solana_network],
+                    } if solana_active else {}),
+                },
+                "x-payment-info": {
+                    "price": {
+                        "mode": "fixed",
+                        "currency": "USD",
+                        "amount": _agentcash_usd_amount(price_str),
+                    },
+                    "protocols": [{"x402": {}}],
+                    **({
+                        "networks": [network, settings.solana_network],
+                        "solana": {
+                            "network": settings.solana_network,
+                            "payTo": settings.solana_pay_to,
+                        },
+                    } if solana_active else {}),
+                },
+                "security": [],
+                "parameters": [
+                    {
+                        "name": "PAYMENT-SIGNATURE",
+                        "in": "header",
+                        "required": False,
+                        "description": "Base64-encoded x402 v2 PaymentPayload on the paid retry request.",
+                        "schema": {"type": "string"},
+                    },
+                ],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": req_schema,
+                            "example": req_example,
+                        },
+                    },
+                },
+                "responses": {
+                    "200": {
+                        "description": f"{summary} completed successfully.",
+                        "content": {
+                            "application/json": {
+                                "schema": resp_schema,
+                                "example": resp_example,
+                            },
+                        },
+                    },
+                    "400": _error_response("Invalid request payload"),
+                    "402": {
+                        "description": "Payment required. Sign the returned challenge.",
+                        "headers": {"PAYMENT-REQUIRED": payment_required_header},
+                        "content": {
+                            "application/json": {
+                                "schema": {"type": "object", "properties": {"detail": {"type": "string"}}},
+                            },
+                        },
+                    },
+                    "502": _error_response("Upstream provider failed without settlement"),
+                    "503": _error_response("Optional provider API key is not configured"),
+                },
+            }
+        }
+
+    if search_configured():
+        document["paths"]["/search"] = _optin_path_item(
+            "searchWeb",
+            "Live web, news, and places search",
+            SEARCH_DESCRIPTION,
+            "$0.01",
+            SEARCH_INPUT_SCHEMA,
+            SEARCH_INPUT_EXAMPLE,
+            SEARCH_OUTPUT_SCHEMA,
+            SEARCH_OUTPUT_EXAMPLE,
+        )
+        document["paths"]["/search-and-fetch"] = _optin_path_item(
+            "searchAndFetch",
+            "Search the web and fetch clean Markdown for top results",
+            SEARCH_AND_FETCH_DESCRIPTION,
+            "$0.02",
+            SEARCH_AND_FETCH_INPUT_SCHEMA,
+            SEARCH_AND_FETCH_INPUT_EXAMPLE,
+            SEARCH_AND_FETCH_OUTPUT_SCHEMA,
+            SEARCH_AND_FETCH_OUTPUT_EXAMPLE,
+        )
+    if leads_configured():
+        document["paths"]["/leads"] = _optin_path_item(
+            "searchLeads",
+            "B2B Enriched Lead Generator",
+            LEADS_DESCRIPTION,
+            "$0.03",
+            LEADS_INPUT_SCHEMA,
+            LEADS_INPUT_EXAMPLE,
+            LEADS_OUTPUT_SCHEMA,
+            LEADS_OUTPUT_EXAMPLE,
+        )
+    if x_search_configured():
+        document["paths"]["/x-search"] = _optin_path_item(
+            "searchXPosts",
+            "Live X/Twitter post search",
+            X_SEARCH_DESCRIPTION,
+            "$0.008",
+            X_SEARCH_INPUT_SCHEMA,
+            X_SEARCH_INPUT_EXAMPLE,
+            X_SEARCH_OUTPUT_SCHEMA,
+            X_SEARCH_OUTPUT_EXAMPLE,
+        )
+
     requirements = _v111_requirements(v111_accepts)
     if requirements:
         for definition in V111_VARIANTS:
@@ -1469,6 +1674,12 @@ Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['pric
 - [Paid HTTP site intelligence]({urls.get('inspect', urls['base'] + '/inspect')}): POST only ($0.005)
 - [Paid HTTP batch retrieval]({urls.get('batch_fetch', urls['base'] + '/batch-fetch')}): POST only ($0.015)
 - [Paid HTTP website URL mapper]({urls.get('map', urls['base'] + '/map')}): POST only ($0.005)
+{chr(10).join(filter(None, [
+    f"- [Paid HTTP web search]({urls['search']}): POST only ($0.01)" if "search" in urls else "",
+    f"- [Paid HTTP search & fetch]({urls['search_and_fetch']}): POST only ($0.02)" if "search_and_fetch" in urls else "",
+    f"- [Paid HTTP B2B enriched leads]({urls['leads']}): POST only ($0.03)" if "leads" in urls else "",
+    f"- [Paid HTTP X/Twitter search]({urls['x_search']}): POST only ($0.008)" if "x_search" in urls else "",
+]))}
 
 ## Agent Onboarding & Payment Guide
 - [Comprehensive Agent Payment Integration Guide]({GITHUB_URL}/blob/main/docs/agent-payment-guide.md)
@@ -1489,6 +1700,12 @@ Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['pric
 - inspect_webpage: structured site intelligence extracting metadata, OpenGraph, JSON-LD, contacts, tech stack, and security headers ($0.005)
 - batch_fetch_webpages: parallel batch retrieval of up to 5 URLs concurrently with fair settlement and VPS protection ($0.015)
 - map_website: website URL mapper discovering internal URLs from robots.txt, XML sitemaps, and HTML links ($0.005)
+{chr(10).join(filter(None, [
+    "- search_web: live web, news, and places search ($0.01)" if search_configured() else "",
+    "- search_and_fetch: web search + parallel Markdown fetch for top results ($0.02)" if search_configured() else "",
+    "- search_leads: B2B enriched leads from Google Maps/Web + Deep /inspect ($0.03)" if leads_configured() else "",
+    "- search_x_posts: live X/Twitter post search with pagination cursor ($0.008)" if x_search_configured() else "",
+]))}
 
 ## Paying MCP client examples
 - [Python MCP example]({PYTHON_EXAMPLE_URL})

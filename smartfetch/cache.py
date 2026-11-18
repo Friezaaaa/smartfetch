@@ -108,6 +108,65 @@ def build_map_cache_key(
     return f"sf:map:{digest}"
 
 
+def build_search_cache_key(
+    query: str,
+    provider: str = "auto",
+    search_type: str = "web",
+    num_results: int = 10,
+    country: str = "us",
+    language: str = "en",
+) -> str:
+    """Builds a normalized SHA-256 cache key for web search results."""
+    raw = "|".join([
+        (query or "").strip().lower(),
+        (provider or "auto").strip().lower(),
+        (search_type or "web").strip().lower(),
+        str(max(1, min(10, int(num_results or 10)))),
+        (country or "us").strip().lower(),
+        (language or "en").strip().lower(),
+    ])
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return f"sf:search:{digest}"
+
+
+def build_leads_cache_key(
+    query: str,
+    source: str = "maps",
+    max_leads: int = 5,
+    deep: bool = True,
+    country: str = "us",
+    language: str = "en",
+) -> str:
+    """Builds a normalized SHA-256 cache key for enriched B2B leads."""
+    raw = "|".join([
+        (query or "").strip().lower(),
+        (source or "maps").strip().lower(),
+        str(max(1, int(max_leads or 5))),
+        "deep" if deep else "shallow",
+        (country or "us").strip().lower(),
+        (language or "en").strip().lower(),
+    ])
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return f"sf:leads:{digest}"
+
+
+def build_x_search_cache_key(
+    query: str,
+    query_type: str = "Latest",
+    max_tweets: int = 10,
+    cursor: str | None = None,
+) -> str:
+    """Builds a normalized SHA-256 cache key for X/Twitter post searches."""
+    raw = "|".join([
+        (query or "").strip().lower(),
+        (query_type or "Latest").strip(),
+        str(max(1, min(20, int(max_tweets or 10)))),
+        (cursor or "").strip(),
+    ])
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return f"sf:xsearch:{digest}"
+
+
 class ResultCacheProvider(ABC):
     """Abstract protocol for retrieval result cache backends (In-memory, Redis, Valkey, etc.)."""
 

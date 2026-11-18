@@ -29,6 +29,11 @@ from .bazaar import (
     INSPECT_INPUT_SCHEMA,
     INSPECT_OUTPUT_EXAMPLE,
     INSPECT_OUTPUT_SCHEMA,
+    LEADS_DESCRIPTION,
+    LEADS_INPUT_EXAMPLE,
+    LEADS_INPUT_SCHEMA,
+    LEADS_OUTPUT_EXAMPLE,
+    LEADS_OUTPUT_SCHEMA,
     MAP_DESCRIPTION,
     MAP_INPUT_EXAMPLE,
     MAP_INPUT_SCHEMA,
@@ -47,9 +52,24 @@ from .bazaar import (
     SCREENSHOT_INPUT_SCHEMA,
     SCREENSHOT_OUTPUT_EXAMPLE,
     SCREENSHOT_OUTPUT_SCHEMA,
+    SEARCH_AND_FETCH_DESCRIPTION,
+    SEARCH_AND_FETCH_INPUT_EXAMPLE,
+    SEARCH_AND_FETCH_INPUT_SCHEMA,
+    SEARCH_AND_FETCH_OUTPUT_EXAMPLE,
+    SEARCH_AND_FETCH_OUTPUT_SCHEMA,
+    SEARCH_DESCRIPTION,
+    SEARCH_INPUT_EXAMPLE,
+    SEARCH_INPUT_SCHEMA,
+    SEARCH_OUTPUT_EXAMPLE,
+    SEARCH_OUTPUT_SCHEMA,
     TEXT_DESCRIPTION,
     TEXT_OUTPUT_EXAMPLE,
     TEXT_OUTPUT_SCHEMA,
+    X_SEARCH_DESCRIPTION,
+    X_SEARCH_INPUT_EXAMPLE,
+    X_SEARCH_INPUT_SCHEMA,
+    X_SEARCH_OUTPUT_EXAMPLE,
+    X_SEARCH_OUTPUT_SCHEMA,
     inspect_mcp_discovery_extension,
     mcp_discovery_extension,
     screenshot_mcp_discovery_extension,
@@ -58,10 +78,13 @@ from .batch import batch_fetch_urls
 from .browser_fetch import browser_screenshot
 from .config import HOST, MAX_REQUEST_BODY_BYTES, SERVICE_NAME, SERVICE_VERSION
 from .inspect import inspect_webpage_url
+from .leads import leads_configured, search_leads_query
 from .mapper import map_website_urls
 from .mcp_logging import configure_mcp_sdk_logging
 from .payments import X402Settings, create_x402_resource_server
 from .remote_browser import RemoteBrowserConfig
+from .search_tools import search_and_fetch_query, search_configured, search_web_query
+from .social import search_x_posts_query, x_search_configured
 
 
 MCP_PATH = "/mcp"
@@ -104,12 +127,28 @@ class SmartFetchMCP:
             yield
 
 
+def get_enabled_mcp_tools() -> tuple[str, ...]:
+    """Return core MCP_TOOLS plus any opt-in v1.15 tools whose provider keys are configured."""
+    tools = list(MCP_TOOLS)
+    if search_configured():
+        tools.extend(["search_web", "search_and_fetch"])
+    if leads_configured():
+        tools.append("search_leads")
+    if x_search_configured():
+        tools.append("search_x_posts")
+    return tuple(tools)
+
+
 def _initialize_payment(settings: X402Settings):
     initialization_failed = False
     resource_server = None
     accepts = []
     screenshot_accepts = []
     batch_fetch_accepts = []
+    search_accepts = []
+    search_and_fetch_accepts = []
+    leads_accepts = []
+    x_search_accepts = []
     try:
         from x402.server import ResourceConfig
 
@@ -118,50 +157,46 @@ def _initialize_payment(settings: X402Settings):
             register_bazaar=True,
         )
         resource_server.initialize()
-        accepts = list(resource_server.build_payment_requirements(ResourceConfig(
-            scheme="exact",
-            payTo=settings.pay_to,
-            price=settings.price,
-            network=settings.network,
-        )))
-        screenshot_accepts = list(resource_server.build_payment_requirements(ResourceConfig(
-            scheme="exact",
-            payTo=settings.pay_to,
-            price="$0.01",
-            network=settings.network,
-        )))
-        batch_fetch_accepts = list(resource_server.build_payment_requirements(ResourceConfig(
-            scheme="exact",
-            payTo=settings.pay_to,
-            price="$0.015",
-            network=settings.network,
-        )))
-        if settings.solana_pay_to and settings.solana_network:
-            accepts.extend(resource_server.build_payment_requirements(ResourceConfig(
+
+        def _build_for_price(price: str) -> list[Any]:
+            items = list(resource_server.build_payment_requirements(ResourceConfig(
                 scheme="exact",
-                payTo=settings.solana_pay_to,
-                price=settings.price,
-                network=settings.solana_network,
+                payTo=settings.pay_to,
+                price=price,
+                network=settings.network,
             )))
-            screenshot_accepts.extend(resource_server.build_payment_requirements(ResourceConfig(
-                scheme="exact",
-                payTo=settings.solana_pay_to,
-                price="$0.01",
-                network=settings.solana_network,
-            )))
-            batch_fetch_accepts.extend(resource_server.build_payment_requirements(ResourceConfig(
-                scheme="exact",
-                payTo=settings.solana_pay_to,
-                price="$0.015",
-                network=settings.solana_network,
-            )))
+            if settings.solana_pay_to and settings.solana_network:
+                items.extend(resource_server.build_payment_requirements(ResourceConfig(
+                    scheme="exact",
+                    payTo=settings.solana_pay_to,
+                    price=price,
+                    network=settings.solana_network,
+                )))
+            return items
+
+        accepts = _build_for_price(settings.price)
+        screenshot_accepts = _build_for_price("$0.01")
+        batch_fetch_accepts = _build_for_price("$0.015")
+        search_accepts = _build_for_price("$0.01")
+        search_and_fetch_accepts = _build_for_price("$0.02")
+        leads_accepts = _build_for_price("$0.03")
+        x_search_accepts = _build_for_price("$0.008")
     except Exception as exc:
         _LOGGER.error("Failed to initialize x402 MCP payment server: %s", exc)
         initialization_failed = True
 
     if initialization_failed:
         raise RuntimeError("x402 MCP initialization failed")
-    return resource_server, accepts, screenshot_accepts, batch_fetch_accepts
+    return (
+        resource_server,
+        accepts,
+        screenshot_accepts,
+        batch_fetch_accepts,
+        search_accepts,
+        search_and_fetch_accepts,
+        leads_accepts,
+        x_search_accepts,
+    )
 
 
 def create_smartfetch_mcp(
@@ -190,8 +225,21 @@ def create_smartfetch_mcp(
     accepts = []
     screenshot_accepts = []
     batch_fetch_accepts = []
+    search_accepts = []
+    search_and_fetch_accepts = []
+    leads_accepts = []
+    x_search_accepts = []
     if settings.enabled:
-        resource_server, accepts, screenshot_accepts, batch_fetch_accepts = _initialize_payment(settings)
+        (
+            resource_server,
+            accepts,
+            screenshot_accepts,
+            batch_fetch_accepts,
+            search_accepts,
+            search_and_fetch_accepts,
+            leads_accepts,
+            x_search_accepts,
+        ) = _initialize_payment(settings)
 
     # Handlers for each of the 4 tools: fetch_webpage is the flagship tool,
     # and the remaining three tools delegate internally to fetch_handler.
@@ -443,6 +491,96 @@ def create_smartfetch_mcp(
             ),
         )
 
+    async def search_web(
+        query: Annotated[str, Field(min_length=1, max_length=500, description="Search query string.")],
+        provider: Annotated[str, Field(description="Search provider: 'auto' (Serper first), 'serper', or 'exa'.")] = "auto",
+        search_type: Annotated[str, Field(description="Search type: 'web', 'news', or 'places'.")] = "web",
+        num_results: Annotated[int, Field(ge=1, le=10, description="Number of results (1-10).")] = 10,
+        country: Annotated[str, Field(description="Country code (default 'us').")] = "us",
+        language: Annotated[str, Field(description="Language code (default 'en').")] = "en",
+        no_cache: Annotated[bool, Field(description="Bypass cache lookup.")] = False,
+    ) -> dict[str, Any]:
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: search_web_query(
+                query,
+                provider=provider,
+                search_type=search_type,
+                num_results=num_results,
+                country=country,
+                language=language,
+                no_cache=no_cache,
+            ),
+        )
+
+    async def search_and_fetch(
+        query: Annotated[str, Field(min_length=1, max_length=500, description="Search query string.")],
+        num_results: Annotated[int, Field(ge=1, le=5, description="Number of top URLs to fetch (1-5).")] = 3,
+        max_chars_per_page: Annotated[int, Field(ge=1000, le=15000, description="Max characters per fetched page (1000-15000).")] = 6000,
+        provider: Annotated[str, Field(description="Search provider: 'auto', 'serper', or 'exa'.")] = "auto",
+        render_mode: Annotated[str, Field(description="Render mode: 'auto' or 'http_only'.")] = "auto",
+        no_cache: Annotated[bool, Field(description="Bypass cache lookup.")] = False,
+    ) -> dict[str, Any]:
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: search_and_fetch_query(
+                query,
+                num_results=num_results,
+                max_chars_per_page=max_chars_per_page,
+                provider=provider,
+                render_mode=render_mode,
+                no_cache=no_cache,
+            ),
+        )
+
+    async def search_leads(
+        query: Annotated[str, Field(min_length=1, max_length=500, description="B2B/local business search query.")],
+        source: Annotated[str, Field(description="Lead source: 'maps' or 'web'.")] = "maps",
+        max_leads: Annotated[int, Field(ge=1, le=5, description="Maximum leads to enrich (1-5).")] = 5,
+        deep: Annotated[bool, Field(description="Inspect /contact, /about, /pricing pages.")] = True,
+        country: Annotated[str, Field(description="Country code (default 'us').")] = "us",
+        language: Annotated[str, Field(description="Language code (default 'en').")] = "en",
+        no_cache: Annotated[bool, Field(description="Bypass cache lookup.")] = False,
+    ) -> dict[str, Any]:
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: search_leads_query(
+                query,
+                source=source,
+                max_leads=max_leads,
+                deep=deep,
+                country=country,
+                language=language,
+                no_cache=no_cache,
+            ),
+        )
+
+    async def search_x_posts(
+        query: Annotated[str, Field(min_length=1, max_length=500, description="X/Twitter advanced search query.")],
+        query_type: Annotated[str, Field(description="Sort order: 'Latest' or 'Top'.")] = "Latest",
+        max_tweets: Annotated[int, Field(ge=1, le=20, description="Maximum posts returned (1-20).")] = 10,
+        cursor: Annotated[Optional[str], Field(description="Optional pagination cursor from previous response.")] = None,
+        no_cache: Annotated[bool, Field(description="Bypass cache lookup.")] = False,
+    ) -> dict[str, Any]:
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: search_x_posts_query(
+                query,
+                query_type=query_type,
+                max_tweets=max_tweets,
+                cursor=cursor,
+                no_cache=no_cache,
+            ),
+        )
+
     def protect(
         name: str,
         description: str,
@@ -606,6 +744,57 @@ def create_smartfetch_mcp(
             settings.price,
         ),
     )
+    opt_in_tools = []
+    if search_configured():
+        opt_in_tools.extend([
+            (
+                "search_web",
+                SEARCH_DESCRIPTION,
+                search_web,
+                SEARCH_INPUT_SCHEMA,
+                SEARCH_INPUT_EXAMPLE,
+                SEARCH_OUTPUT_SCHEMA,
+                SEARCH_OUTPUT_EXAMPLE,
+                search_accepts,
+                "$0.01",
+            ),
+            (
+                "search_and_fetch",
+                SEARCH_AND_FETCH_DESCRIPTION,
+                search_and_fetch,
+                SEARCH_AND_FETCH_INPUT_SCHEMA,
+                SEARCH_AND_FETCH_INPUT_EXAMPLE,
+                SEARCH_AND_FETCH_OUTPUT_SCHEMA,
+                SEARCH_AND_FETCH_OUTPUT_EXAMPLE,
+                search_and_fetch_accepts,
+                "$0.02",
+            ),
+        ])
+    if leads_configured():
+        opt_in_tools.append((
+            "search_leads",
+            LEADS_DESCRIPTION,
+            search_leads,
+            LEADS_INPUT_SCHEMA,
+            LEADS_INPUT_EXAMPLE,
+            LEADS_OUTPUT_SCHEMA,
+            LEADS_OUTPUT_EXAMPLE,
+            leads_accepts,
+            "$0.03",
+        ))
+    if x_search_configured():
+        opt_in_tools.append((
+            "search_x_posts",
+            X_SEARCH_DESCRIPTION,
+            search_x_posts,
+            X_SEARCH_INPUT_SCHEMA,
+            X_SEARCH_INPUT_EXAMPLE,
+            X_SEARCH_OUTPUT_SCHEMA,
+            X_SEARCH_OUTPUT_EXAMPLE,
+            x_search_accepts,
+            "$0.008",
+        ))
+    tools = tools + tuple(opt_in_tools)
 
     remote_cfg = RemoteBrowserConfig.from_env()
     is_available = remote_cfg.is_configured

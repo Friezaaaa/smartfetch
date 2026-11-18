@@ -167,7 +167,7 @@ class ApifyPackagingAndSchemaTests(unittest.TestCase):
         self.assertIn("action", input_schema["properties"])
         self.assertEqual(
             input_schema["properties"]["action"]["enum"],
-            ["fetch", "screenshot", "inspect", "batch_fetch", "bulk_inspect", "map"],
+            ["fetch", "screenshot", "inspect", "batch_fetch", "bulk_inspect", "map", "search_leads"],
         )
 
         ppe = json.loads((REPO_ROOT / ".actor" / "pay_per_event.json").read_text(encoding="utf-8"))
