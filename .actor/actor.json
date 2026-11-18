@@ -2,12 +2,13 @@
   "actorSpecification": 1,
   "name": "smartfetch",
   "title": "SmartFetch — Web Reader, PDFs, Screenshots & Site Intel",
-  "description": "High-reliability web content retrieval, PDF extraction, headless Chromium screenshots, and structured site intelligence for AI agents. Supports both standard Actor runs and Standby MCP Server mode.",
+  "description": "Convert webpages & PDFs to clean Markdown (fetch), capture full-page screenshots (screenshot), inspect site tech stack/anti-bot/links (inspect), batch-fetch URLs (batch_fetch), or connect via Standby MCP Server (/mcp) with HTTP→TLS→Browser fallback.",
   "version": "1.14",
   "buildTag": "latest",
   "usesStandbyMode": true,
   "webServerMcpPath": "/mcp",
   "input": "./input_schema.json",
+  "output": "./output_schema.json",
   "dockerfile": "../deploy/apify/Dockerfile",
   "storages": {
     "dataset": "./dataset_schema.json"

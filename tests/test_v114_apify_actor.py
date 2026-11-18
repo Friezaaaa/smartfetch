@@ -156,7 +156,12 @@ class ApifyPackagingAndSchemaTests(unittest.TestCase):
         self.assertEqual(actor_json["name"], "smartfetch")
         self.assertTrue(actor_json["usesStandbyMode"])
         self.assertEqual(actor_json["webServerMcpPath"], "/mcp")
+        self.assertEqual(actor_json["output"], "./output_schema.json")
         self.assertEqual(actor_json["dockerfile"], "../deploy/apify/Dockerfile")
+
+        output_schema = json.loads((REPO_ROOT / ".actor" / "output_schema.json").read_text(encoding="utf-8"))
+        self.assertEqual(output_schema["actorOutputSchemaVersion"], 1)
+        self.assertIn("results", output_schema["properties"])
 
         input_schema = json.loads((REPO_ROOT / ".actor" / "input_schema.json").read_text(encoding="utf-8"))
         self.assertIn("action", input_schema["properties"])

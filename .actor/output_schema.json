@@ -1,0 +1,19 @@
+{
+  "actorOutputSchemaVersion": 1,
+  "title": "SmartFetch Output Schema",
+  "description": "Structured extraction results in the default Dataset and captured screenshot images in the default Key-Value Store.",
+  "properties": {
+    "results": {
+      "type": "string",
+      "title": "Results (Dataset)",
+      "description": "Extracted Markdown, plain text, site inspection metadata, or batch retrieval records.",
+      "template": "{{links.apiDefaultDatasetUrl}}/items"
+    },
+    "screenshots": {
+      "type": "string",
+      "title": "Screenshots (Key-Value Store)",
+      "description": "Captured screenshot image files (screenshot.jpg / screenshot.png) stored in the default Key-Value Store.",
+      "template": "{{links.apiDefaultKeyValueStoreUrl}}/keys"
+    }
+  }
+}
