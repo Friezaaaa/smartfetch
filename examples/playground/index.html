@@ -843,7 +843,7 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
     const tokenProg = new solanaWeb3.PublicKey(TOKEN_PROGRAM_ID_STR);
     const ataProg = new solanaWeb3.PublicKey(ATA_PROGRAM_ID_STR);
     const [ata] = solanaWeb3.PublicKey.findProgramAddressSync(
-      [ownerPubkey.toBuffer(), tokenProg.toBuffer(), mintPubkey.toBuffer()],
+      [ownerPubkey.toBytes(), tokenProg.toBytes(), mintPubkey.toBytes()],
       ataProg
     );
     return ata;
@@ -915,12 +915,27 @@ Inspect the full decoded challenge structure in the **Metadata & JSON** tab.`;
 
     const buyerAta = deriveAta(buyerPubkey.toBase58(), mint.toBase58());
     const sellerAta = deriveAta(seller.toBase58(), mint.toBase58());
+    const computeBudgetProg = new solanaWeb3.PublicKey(COMPUTE_BUDGET_PROGRAM_STR);
 
-    // 1. SetComputeUnitLimit instruction (20,000 units)
-    const cuLimitIx = solanaWeb3.ComputeBudgetProgram.setComputeUnitLimit({ units: 20000 });
+    // 1. SetComputeUnitLimit instruction (20,000 units): [2, u32le(20000)]
+    const cuLimitData = new Uint8Array(5);
+    cuLimitData[0] = 2;
+    new DataView(cuLimitData.buffer).setUint32(1, 20000, true);
+    const cuLimitIx = new solanaWeb3.TransactionInstruction({
+      programId: computeBudgetProg,
+      keys: [],
+      data: cuLimitData
+    });
 
-    // 2. SetComputeUnitPrice instruction (1 microLamport)
-    const cuPriceIx = solanaWeb3.ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1 });
+    // 2. SetComputeUnitPrice instruction (1 microLamport): [3, u64le(1)]
+    const cuPriceData = new Uint8Array(9);
+    cuPriceData[0] = 3;
+    new DataView(cuPriceData.buffer).setBigUint64(1, 1n, true);
+    const cuPriceIx = new solanaWeb3.TransactionInstruction({
+      programId: computeBudgetProg,
+      keys: [],
+      data: cuPriceData
+    });
 
     // 3. SPL TransferChecked instruction
     // Data: [12 (discriminator), u64 amount (little-endian), u8 decimals (6)]
