@@ -297,6 +297,83 @@ class TestV115OptInBehavior(unittest.TestCase):
                 self.assertTrue(set(pushed[0].keys()).issubset(allowed_props))
                 fake_actor.charge.assert_called_once_with(event_name="site-inspected", count=1)
 
+    def test_search_places_extracts_website_and_falls_back_to_maps(self):
+        places_with_website = MagicMock()
+        places_with_website.status_code = 200
+        places_with_website.json.return_value = {
+            "places": [
+                {"title": "Smile Austin", "website": "https://smileaustin.example.com", "phoneNumber": "512-555-0101", "address": "101 Congress Ave", "rating": 4.9, "ratingCount": 88, "category": "Dentist"}
+            ]
+        }
+        with patch.dict(os.environ, {"SERPER_API_KEY": "serper-test"}):
+            with patch("smartfetch.search_tools.requests.Session.post", return_value=places_with_website) as post_mock:
+                res = search_web_query("dentists austin", search_type="places", num_results=5, no_cache=True)
+                self.assertEqual(res["results"][0]["url"], "https://smileaustin.example.com")
+                self.assertEqual(res["results"][0]["phone"], "512-555-0101")
+                self.assertEqual(post_mock.call_count, 1)
+
+        places_no_website = MagicMock()
+        places_no_website.status_code = 200
+        places_no_website.json.return_value = {"places": [{"title": "Pin Only", "address": "200 Main"}]}
+        maps_with_website = MagicMock()
+        maps_with_website.status_code = 200
+        maps_with_website.json.return_value = {
+            "places": [{"title": "Maps Dental", "website": "https://mapsdental.example.com", "phone": "512-555-0202", "reviews": 19}]
+        }
+        with patch.dict(os.environ, {"SERPER_API_KEY": "serper-test"}):
+            with patch("smartfetch.search_tools.requests.Session.post", side_effect=[places_no_website, maps_with_website]) as post_mock:
+                res = search_web_query("dentists austin maps fallback", search_type="places", num_results=5, no_cache=True)
+                self.assertEqual(post_mock.call_count, 2)
+                self.assertIn("/maps", post_mock.call_args_list[1].args[0])
+                self.assertEqual(res["results"][0]["url"], "https://mapsdental.example.com")
+                self.assertEqual(res["results"][0]["reviews_count"], 19)
+
+    def test_leads_places_falls_back_to_web_and_preserves_pin_without_website(self):
+        empty_resp = MagicMock()
+        empty_resp.status_code = 200
+        empty_resp.json.return_value = {"places": []}
+        web_resp = MagicMock()
+        web_resp.status_code = 200
+        web_resp.json.return_value = {
+            "organic": [{"title": "SaaS Co", "link": "https://example.com", "snippet": "B2B SaaS"}]
+        }
+
+        def fake_inspect(url, **kwargs):
+            return {
+                "contacts": {"emails": ["sales@saas.example.com"], "phones": ["512-555-0303"], "contact_url": None, "pricing_url": None},
+                "social_links": {},
+                "tech_stack": ["Stripe"],
+                "domain_intel": {"has_mx": True, "has_spf": True, "has_dmarc": True, "domain_age_days": 900},
+                "meta": {"title": "SaaS Co", "description": "B2B"},
+            }
+
+        with patch.dict(os.environ, {"SERPER_API_KEY": "serper-test"}):
+            with patch("smartfetch.leads.requests.Session.post", side_effect=[empty_resp, empty_resp, web_resp]) as post_mock:
+                with patch("smartfetch.leads.inspect_webpage_url", side_effect=fake_inspect):
+                    res = search_leads_query("SaaS companies", source="places", max_leads=3, no_cache=True)
+                    self.assertEqual(post_mock.call_count, 3)
+                    self.assertTrue(res["success"])
+                    self.assertEqual(res["leads"][0]["emails"], ["sales@saas.example.com"])
+
+        # Preserves Maps pin without website alongside inspected lead with website
+        mixed_places = MagicMock()
+        mixed_places.status_code = 200
+        mixed_places.json.return_value = {
+            "places": [
+                {"title": "With Site", "website": "https://example.com", "phoneNumber": "512-555-0001", "address": "10 A St", "rating": 4.8},
+                {"title": "No Site Pin", "phoneNumber": "512-555-0002", "address": "20 B St", "rating": 4.6},
+            ]
+        }
+        with patch.dict(os.environ, {"SERPER_API_KEY": "serper-test"}):
+            with patch("smartfetch.leads.requests.Session.post", return_value=mixed_places):
+                with patch("smartfetch.leads.inspect_webpage_url", side_effect=fake_inspect):
+                    res = search_leads_query("dentists austin mixed", source="places", max_leads=5, no_cache=True)
+                    self.assertEqual(res["total_leads"], 2)
+                    self.assertEqual(res["inspected_count"], 1)
+                    self.assertEqual(res["leads"][1]["business_name"], "No Site Pin")
+                    self.assertEqual(res["leads"][1]["phones"], ["512-555-0002"])
+                    self.assertFalse(res["leads"][1]["inspected"])
+
 
 if __name__ == "__main__":
     unittest.main()

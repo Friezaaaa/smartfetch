@@ -79,19 +79,24 @@ def _normalize_serper_results(data: dict[str, Any], search_type: str, num_result
         return results
 
     if search_type == "places":
-        raw_items = data.get("places") or []
+        raw_items = data.get("places") or data.get("maps") or []
         for idx, item in enumerate(raw_items[:num_results], start=1):
             if not isinstance(item, dict):
                 continue
+            item_url = str(item.get("website") or item.get("link") or "").strip()
+            item_phone = str(item.get("phoneNumber") or item.get("phone") or "").strip()
+            item_reviews = item.get("ratingCount")
+            if item_reviews is None:
+                item_reviews = item.get("reviews")
             results.append({
                 "position": idx,
                 "title": str(item.get("title") or ""),
-                "url": str(item.get("website") or ""),
+                "url": item_url,
                 "snippet": str(item.get("category") or item.get("type") or ""),
                 "address": str(item.get("address") or ""),
-                "phone": str(item.get("phoneNumber") or ""),
+                "phone": item_phone,
                 "rating": item.get("rating"),
-                "reviews_count": item.get("ratingCount"),
+                "reviews_count": item_reviews,
                 "category": str(item.get("category") or item.get("type") or ""),
             })
         return results
@@ -200,17 +205,30 @@ def search_web_query(
 
     if selected_provider == "serper":
         endpoint = "search" if clean_type == "web" else clean_type
+        serper_payload = {
+            "q": clean_query,
+            "num": clamped_num,
+            "gl": clean_country,
+            "hl": clean_lang,
+        }
         raw = _safe_post_json(
             f"{_SERPER_BASE_URL}/{endpoint}",
             headers={"X-API-Key": serper_key or "", "Content-Type": "application/json"},
-            payload={
-                "q": clean_query,
-                "num": clamped_num,
-                "gl": clean_country,
-                "hl": clean_lang,
-            },
+            payload=serper_payload,
         )
         results = _normalize_serper_results(raw, clean_type, clamped_num)
+        if clean_type == "places" and (not results or not any(r.get("url") for r in results)):
+            try:
+                maps_raw = _safe_post_json(
+                    f"{_SERPER_BASE_URL}/maps",
+                    headers={"X-API-Key": serper_key or "", "Content-Type": "application/json"},
+                    payload=serper_payload,
+                )
+                maps_results = _normalize_serper_results(maps_raw, clean_type, clamped_num)
+                if maps_results and (any(r.get("url") for r in maps_results) or not results):
+                    results = maps_results
+            except Exception:
+                pass
     else:
         raw = _safe_post_json(
             _EXA_SEARCH_URL,

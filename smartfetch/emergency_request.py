@@ -222,7 +222,7 @@ LEADS_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "query": {"type": "string", "minLength": 1, "maxLength": 500},
-        "source": {"type": "string", "enum": ["maps", "web"]},
+        "source": {"type": "string", "enum": ["maps", "places", "web"]},
         "max_leads": {"type": "integer", "minimum": 1, "maximum": 5},
         "deep": {"type": "boolean"},
         "country": {"type": "string"},

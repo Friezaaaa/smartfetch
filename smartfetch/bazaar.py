@@ -1182,7 +1182,7 @@ LEADS_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "query": {"type": "string", "minLength": 1, "maxLength": 500, "description": "Business/niche search query (e.g. 'dental clinics austin tx')."},
-        "source": {"type": "string", "enum": ["maps", "web"], "default": "maps"},
+        "source": {"type": "string", "enum": ["maps", "places", "web"], "default": "maps"},
         "max_leads": {"type": "integer", "minimum": 1, "maximum": 5, "default": 5},
         "deep": {"type": "boolean", "default": True},
         "country": {"type": "string", "default": "us"},

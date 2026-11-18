@@ -23,6 +23,65 @@ _INSPECT_DEADLINE_SECONDS = 20.0
 __all__ = ["leads_configured", "search_leads_query"]
 
 
+def _serper_post(endpoint: str, serper_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+    session = requests.Session()
+    session.trust_env = False
+    try:
+        resp = session.post(
+            f"{_SERPER_BASE_URL}/{endpoint}",
+            headers={"X-API-Key": serper_key, "Content-Type": "application/json"},
+            json=payload,
+            timeout=_SERPER_TIMEOUT_SECONDS,
+        )
+        if resp.status_code >= 400:
+            raise RetrievalFailure(f"Serper lead query returned HTTP {resp.status_code}")
+        data = resp.json()
+        if not isinstance(data, dict):
+            raise RetrievalFailure("Serper lead query returned non-object JSON")
+        return data
+    except RetrievalFailure:
+        raise
+    except Exception as exc:
+        raise RetrievalFailure(f"Serper lead query failed: {exc}") from exc
+    finally:
+        session.close()
+
+
+def _normalize_lead_items(raw_items: list[Any], max_leads: int) -> list[dict[str, Any]]:
+    leads: list[dict[str, Any]] = []
+    for item in raw_items[:max_leads]:
+        if not isinstance(item, dict):
+            continue
+        website = str(item.get("website") or item.get("link") or "").strip()
+        maps_phone = str(item.get("phoneNumber") or item.get("phone") or "").strip()
+        reviews_count = item.get("ratingCount")
+        if reviews_count is None:
+            reviews_count = item.get("reviews")
+        leads.append({
+            "business_name": str(item.get("title") or item.get("name") or ""),
+            "category": str(item.get("category") or item.get("type") or ""),
+            "rating": item.get("rating"),
+            "reviews_count": reviews_count,
+            "address": str(item.get("address") or ""),
+            "maps_phone": maps_phone,
+            "website": website,
+            "inspected": False,
+            "emails": [],
+            "phones": [maps_phone] if maps_phone else [],
+            "contact_url": None,
+            "pricing_url": None,
+            "social_links": {},
+            "tech_stack": [],
+            "has_mx": False,
+            "has_spf": False,
+            "has_dmarc": False,
+            "domain_age_days": None,
+            "title": str(item.get("title") or item.get("name") or ""),
+            "description": str(item.get("snippet") or ""),
+        })
+    return leads
+
+
 def _fetch_serper_leads(
     query: str,
     *,
@@ -35,64 +94,36 @@ def _fetch_serper_leads(
     if not serper_key:
         raise RetrievalFailure("SERPER_API_KEY is not configured")
 
-    endpoint = "places" if source == "maps" else "search"
-    session = requests.Session()
-    session.trust_env = False
-    try:
-        resp = session.post(
-            f"{_SERPER_BASE_URL}/{endpoint}",
-            headers={"X-API-Key": serper_key, "Content-Type": "application/json"},
-            json={
-                "q": query,
-                "num": max(10, max_leads),
-                "gl": country,
-                "hl": language,
-            },
-            timeout=_SERPER_TIMEOUT_SECONDS,
-        )
-        if resp.status_code >= 400:
-            raise RetrievalFailure(f"Serper lead query returned HTTP {resp.status_code}")
-        data = resp.json()
-        if not isinstance(data, dict):
-            raise RetrievalFailure("Serper lead query returned non-object JSON")
-    except RetrievalFailure:
-        raise
-    except Exception as exc:
-        raise RetrievalFailure(f"Serper lead query failed: {exc}") from exc
-    finally:
-        session.close()
+    payload = {
+        "q": query,
+        "num": max(10, max_leads),
+        "gl": country,
+        "hl": language,
+    }
+    is_places = source in ("maps", "places")
+    if is_places:
+        data = _serper_post("places", serper_key, payload)
+        raw_items = data.get("places") or data.get("maps") or []
+        leads = _normalize_lead_items(raw_items if isinstance(raw_items, list) else [], max_leads)
 
-    raw_items = data.get("places") if source == "maps" else data.get("organic")
-    if not isinstance(raw_items, list) or not raw_items:
-        raise RetrievalFailure("No leads found for query")
+        if not leads or not any(lead.get("website") for lead in leads):
+            try:
+                maps_data = _serper_post("maps", serper_key, payload)
+                maps_raw = maps_data.get("places") or maps_data.get("maps") or []
+                maps_leads = _normalize_lead_items(maps_raw if isinstance(maps_raw, list) else [], max_leads)
+                if maps_leads and (any(lead.get("website") for lead in maps_leads) or not leads):
+                    leads = maps_leads
+            except Exception:
+                pass
 
-    leads: list[dict[str, Any]] = []
-    for item in raw_items[:max_leads]:
-        if not isinstance(item, dict):
-            continue
-        website = str(item.get("website") or item.get("link") or "").strip()
-        leads.append({
-            "business_name": str(item.get("title") or ""),
-            "category": str(item.get("category") or item.get("type") or ""),
-            "rating": item.get("rating"),
-            "reviews_count": item.get("ratingCount"),
-            "address": str(item.get("address") or ""),
-            "maps_phone": str(item.get("phoneNumber") or ""),
-            "website": website,
-            "inspected": False,
-            "emails": [],
-            "phones": [],
-            "contact_url": None,
-            "pricing_url": None,
-            "social_links": {},
-            "tech_stack": [],
-            "has_mx": False,
-            "has_spf": False,
-            "has_dmarc": False,
-            "domain_age_days": None,
-            "title": str(item.get("title") or ""),
-            "description": str(item.get("snippet") or ""),
-        })
+        if not leads:
+            web_data = _serper_post("search", serper_key, payload)
+            web_raw = web_data.get("organic") or []
+            leads = _normalize_lead_items(web_raw if isinstance(web_raw, list) else [], max_leads)
+    else:
+        data = _serper_post("search", serper_key, payload)
+        raw_items = data.get("organic") or []
+        leads = _normalize_lead_items(raw_items if isinstance(raw_items, list) else [], max_leads)
 
     if not leads:
         raise RetrievalFailure("No leads found for query")
@@ -124,11 +155,16 @@ def _enrich_lead_with_inspect(
     intel = res.get("domain_intel") or {}
     social = res.get("social_links") or {}
 
+    merged_phones = list(contacts.get("phones") or [])
+    maps_phone = str(lead.get("maps_phone") or "").strip()
+    if maps_phone and maps_phone not in merged_phones:
+        merged_phones.insert(0, maps_phone)
+
     enriched = dict(lead)
     enriched.update({
         "inspected": True,
         "emails": list(contacts.get("emails") or []),
-        "phones": list(contacts.get("phones") or []),
+        "phones": merged_phones,
         "contact_url": contacts.get("contact_url"),
         "pricing_url": contacts.get("pricing_url"),
         "social_links": dict(social),
@@ -161,8 +197,8 @@ def search_leads_query(
     clean_query = query.strip()
 
     clean_source = (source or "maps").strip().lower()
-    if clean_source not in ("maps", "web"):
-        raise ValueError("source must be 'maps' or 'web'")
+    if clean_source not in ("maps", "places", "web"):
+        raise ValueError("source must be 'maps', 'places', or 'web'")
 
     cap = max(1, int(_max_allowed))
     clamped_max = max(1, min(cap, int(max_leads)))
