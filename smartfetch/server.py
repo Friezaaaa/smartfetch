@@ -617,6 +617,7 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         return emergency_meta(urls)
 
     @application.get("/.well-known/x402")
+    @application.get("/.well-known/x402.json")
     async def x402_manifest_endpoint(request: Request):
         remote_cfg = RemoteBrowserConfig.from_env()
         urls = public_urls(request)

@@ -34,11 +34,23 @@ def test_agent_card_manifest_endpoint(client):
     assert response.status_code == 200
     data = response.json()
 
+    assert data["protocolVersion"] == "0.3.0"
     assert data["name"] == "SmartFetch"
     assert "version" in data
     assert "description" in data
+    assert data["provider"] == {
+        "organization": "SmartFetch",
+        "url": "https://smartfetch-playground.pages.dev",
+    }
+    assert data["capabilities"] == {
+        "streaming": False,
+        "pushNotifications": False,
+        "stateTransitionHistory": False,
+    }
+    assert data["defaultInputModes"] == ["application/json", "text/plain"]
+    assert data["defaultOutputModes"] == ["application/json", "text/markdown"]
     assert "protocols" in data
-    assert "capabilities" in data
+    assert "skills" in data
     assert "contact" in data
 
     # Verify protocols structure
@@ -57,14 +69,19 @@ def test_agent_card_manifest_endpoint(client):
     assert protocols["x402"]["price"] == "$0.005"
     assert protocols["x402"]["enabled"] is True
 
-    # Verify capabilities list all tools
-    cap_names = [c["name"] for c in data["capabilities"]]
-    assert "fetch_webpage" in cap_names
-    assert "webpage_to_markdown" in cap_names
-    assert "extract_webpage_text" in cap_names
-    assert "render_webpage" in cap_names
-    assert "screenshot_webpage" in cap_names
-    assert "inspect_webpage" in cap_names
+    # Verify skills list all 8 tools
+    skill_ids = [s["id"] for s in data["skills"]]
+    for expected in (
+        "fetch_webpage",
+        "webpage_to_markdown",
+        "extract_webpage_text",
+        "render_webpage",
+        "screenshot_webpage",
+        "inspect_webpage",
+        "batch_fetch_webpages",
+        "map_website",
+    ):
+        assert expected in skill_ids
 
     # Verify no secrets or internal infrastructure IPs are leaked
     body_str = response.text
@@ -94,11 +111,15 @@ def test_owners_manifest_endpoints(client):
 
 def test_existing_manifests_regression(client):
     """Verify existing discovery manifests remain fully functional without regression."""
-    # /.well-known/x402
+    # /.well-known/x402 and /.well-known/x402.json
     resp_x402 = client.get("/.well-known/x402")
     assert resp_x402.status_code == 200
     data_x402 = resp_x402.json()
     assert data_x402.get("name") == "SmartFetch" or data_x402.get("service") == "SmartFetch"
+
+    resp_x402_json = client.get("/.well-known/x402.json")
+    assert resp_x402_json.status_code == 200
+    assert resp_x402_json.json() == data_x402
 
     # /.well-known/mcp.json
     resp_mcp = client.get("/.well-known/mcp.json")

@@ -222,19 +222,31 @@ def x402_manifest(urls, settings, v111_accepts=None):
 
 
 def agent_card_document(urls, settings=None):
-    """Return an A2A agent card document without secrets."""
+    """Return an A2A v0.3.0 compliant agent card document without secrets."""
     network = settings.network if settings else "eip155:8453"
     price = settings.price if settings else "$0.005"
     pay_to = settings.pay_to if settings else ""
     enabled = settings.enabled if settings else True
     return {
+        "protocolVersion": "0.3.0",
         "name": SERVICE_NAME,
         "description": (
             "Production isolated headless browser retrieval engine with "
-            "x402 micropayments on Base Mainnet."
+            "x402 micropayments on Base Mainnet and Solana Mainnet."
         ),
         "version": SERVICE_VERSION,
         "url": urls["base"],
+        "provider": {
+            "organization": "SmartFetch",
+            "url": "https://smartfetch-playground.pages.dev",
+        },
+        "capabilities": {
+            "streaming": False,
+            "pushNotifications": False,
+            "stateTransitionHistory": False,
+        },
+        "defaultInputModes": ["application/json", "text/plain"],
+        "defaultOutputModes": ["application/json", "text/markdown"],
         "protocols": {
             "mcp": {
                 "transport": "streamable-http",
@@ -265,38 +277,54 @@ def agent_card_document(urls, settings=None):
                 } if settings and settings.solana_pay_to and settings.solana_network else {}),
             },
         },
-        "capabilities": [
+        "skills": [
             {
-                "name": "fetch_webpage",
+                "id": "fetch_webpage",
+                "name": "Fetch Webpage / PDF",
                 "description": FETCH_DESCRIPTION,
+                "tags": ["web", "scraping", "markdown", "pdf", "x402"],
             },
             {
-                "name": "webpage_to_markdown",
+                "id": "webpage_to_markdown",
+                "name": "Webpage to Markdown",
                 "description": MARKDOWN_DESCRIPTION,
+                "tags": ["markdown", "extraction", "llm"],
             },
             {
-                "name": "extract_webpage_text",
+                "id": "extract_webpage_text",
+                "name": "Extract Webpage Text",
                 "description": TEXT_DESCRIPTION,
+                "tags": ["text", "extraction", "html"],
             },
             {
-                "name": "render_webpage",
+                "id": "render_webpage",
+                "name": "Render Webpage",
                 "description": RENDER_DESCRIPTION,
+                "tags": ["browser", "chromium", "spa", "javascript"],
             },
             {
-                "name": "screenshot_webpage",
+                "id": "screenshot_webpage",
+                "name": "Screenshot Webpage",
                 "description": SCREENSHOT_DESCRIPTION,
+                "tags": ["screenshot", "image", "chromium"],
             },
             {
-                "name": "inspect_webpage",
+                "id": "inspect_webpage",
+                "name": "Inspect Webpage",
                 "description": INSPECT_DESCRIPTION,
+                "tags": ["seo", "tech-stack", "contacts", "rdap", "intelligence"],
             },
             {
-                "name": "batch_fetch_webpages",
+                "id": "batch_fetch_webpages",
+                "name": "Batch Fetch Webpages",
                 "description": BATCH_FETCH_DESCRIPTION,
+                "tags": ["batch", "parallel", "scraping"],
             },
             {
-                "name": "map_website",
+                "id": "map_website",
+                "name": "Map Website",
                 "description": MAP_DESCRIPTION,
+                "tags": ["sitemap", "crawler", "urls", "discovery"],
             },
         ],
         "contact": {
