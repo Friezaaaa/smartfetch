@@ -56,4 +56,10 @@ def shape_output(result: dict, max_chars: int) -> dict:
     shaped['returned_markdown_chars'] = len(markdown)
     shaped['links_returned'] = len(links)
     shaped['max_chars'] = max_chars
+    shaped.setdefault('og_metadata', {})
+    shaped.setdefault('json_ld', [])
+    if 'fenced_code_blocks' not in shaped:
+        from .extract import extract_fenced_code_blocks
+
+        shaped['fenced_code_blocks'] = extract_fenced_code_blocks(full_markdown)
     return shaped

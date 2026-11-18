@@ -6,46 +6,49 @@ from .config import SERVICE_VERSION
 
 
 FETCH_DESCRIPTION = (
-    "Primary webpage and PDF retrieval tool. Use by default to fetch any public "
-    "HTTP/HTTPS webpage or PDF and return clean text, Markdown, links, and metadata. "
-    "Uses fast HTTP first and automatically falls back to an isolated headless "
-    "browser for JavaScript-rendered pages. (Use webpage_to_markdown or "
-    "extract_webpage_text for token-saving single-format output, or render_webpage "
-    "when you need raw rendered HTML DOM.)"
+    "Primary webpage and PDF retrieval tool & document extraction (pdf, pdf-to-markdown, pdf text extraction, "
+    "pdf ocr alternative, whitepaper, rfc, academic paper). Extracts clean text, Markdown, "
+    "fenced code blocks, pricing tables, OpenGraph metadata, JSON-LD, and links from any public "
+    "HTTP/HTTPS webpage or PDF. Uses Chrome TLS fingerprint HTTP first and automatically escalates "
+    "to stealth Chromium dynamic rendering for JavaScript hydration, SPA shells, Cloudflare bypass, "
+    "WAF, and anti-bot pages. (Use webpage_to_markdown or extract_webpage_text for token-saving "
+    "single-format output, or render_webpage when you need raw rendered HTML DOM.)"
 )
 FETCH_TAGS = [
     "web-reader",
     "web-scraping",
+    "pdf-to-markdown",
+    "pdf-text-extraction",
+    "anti-bot",
+    "spa",
     "markdown",
     "browser",
     "agents",
 ]
 MARKDOWN_DESCRIPTION = (
-    "Token-efficient converter that returns ONLY clean Markdown and core metadata "
-    "from a public webpage or PDF (omits duplicate plain text, links array, and "
-    "raw HTML). Use when you only need Markdown."
+    "Token-efficient PDF & webpage converter returning clean Markdown, fenced code blocks, "
+    "pricing tables, and metadata from any public URL, PDF, whitepaper, RFC, or SPA."
 )
 TEXT_DESCRIPTION = (
-    "Token-efficient extractor that returns ONLY clean plain text and core metadata "
-    "from a public webpage or PDF (omits Markdown formatting, links array, and "
-    "raw HTML). Use when you only need plain readable text."
+    "Token-efficient PDF & webpage text extractor (pdf text extraction, pdf ocr alternative) "
+    "returning clean plain text and metadata from any public webpage, whitepaper, or PDF."
 )
 RENDER_DESCRIPTION = (
-    "Forced headless Chromium browser renderer for JavaScript-heavy SPAs and "
-    "dynamic webpages. Always executes Tier 3 isolated browser rendering and "
-    "returns the post-JS rendered HTML DOM alongside extracted text, Markdown, "
-    "links, and metadata. Do not use for PDFs or static pages (use fetch_webpage instead)."
+    "Forced stealth headless Chromium renderer for any public webpage URL (JavaScript hydration, SPAs, Cloudflare/WAF "
+    "anti-bot pages, and dynamic rendering). Returns post-JS rendered HTML DOM, Markdown, "
+    "fenced code blocks, OpenGraph metadata, JSON-LD, and links."
 )
 SCREENSHOT_DESCRIPTION = (
-    "Browser-based webpage screenshot capture tool. Captures high-resolution JPEG or "
-    "PNG screenshots of public webpages using isolated headless Chromium with "
-    "configurable desktop/mobile viewport and optional full-page capture."
+    "Desktop (1280x800) & mobile (390x844, mobile=true) responsive compliance screenshot, "
+    "visual audit, phishing verification, and full-page webpage URL capture tool using isolated stealth Chromium."
 )
 SCREENSHOT_TAGS = [
     "screenshot",
+    "mobile-responsive",
+    "visual-audit",
+    "phishing-verification",
     "webpage-capture",
     "browser",
-    "visual-ai",
     "agents",
 ]
 FETCH_INPUT_EXAMPLE = {
@@ -177,6 +180,16 @@ FETCH_OUTPUT_SCHEMA = {
         "service_version": {"type": "string"},
         "content_type": {"type": "string"},
         "page_count": {"type": "integer", "minimum": 1},
+        "og_metadata": {"type": "object", "description": "Extracted OpenGraph and Twitter meta tags."},
+        "json_ld": {"type": "array", "items": {"type": "object"}, "description": "Parsed JSON-LD structured data blocks."},
+        "fenced_code_blocks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"language": {"type": "string"}, "code": {"type": "string"}},
+            },
+            "description": "Extracted fenced code blocks from Markdown.",
+        },
     },
     "required": [
         "success",
@@ -357,6 +370,17 @@ SCREENSHOT_INPUT_SCHEMA = {
             "default": False,
             "description": "Capture the full scrollable page height up to 4000px.",
         },
+        "viewport": {
+            "type": "string",
+            "enum": ["desktop", "mobile"],
+            "default": "desktop",
+            "description": "Device viewport preset: desktop (1280x800) or mobile (390x844).",
+        },
+        "mobile": {
+            "type": "boolean",
+            "default": False,
+            "description": "Shortcut for mobile responsive compliance viewport (390x844).",
+        },
         "image_format": {
             "type": "string",
             "enum": ["jpeg", "png"],
@@ -465,19 +489,24 @@ def screenshot_mcp_discovery_extension():
 
 
 INSPECT_DESCRIPTION = (
-    "Structured webpage and site intelligence and SEO inspection tool for any public URL. "
-    "Extracts comprehensive metadata, OpenGraph, Twitter cards, JSON-LD schemas, contact details "
-    "(emails, phones, social links), tech stack detection, security headers, and document outline."
+    "Security audit, WHOIS, RDAP, DNS lookup (MX, SPF, DMARC), SSL/security headers "
+    "(HSTS, CSP, X-Frame-Options), tech stack (Wappalyzer-style), and B2B company enrichment "
+    "/ email finder for 1 to 5 URLs (url or urls). Supports deep=true sub-crawling of /contact, "
+    "/about, /pricing, and /team plus Google Workspace / Microsoft 365 detection."
 )
 INSPECT_TAGS = [
-    "inspection",
-    "metadata",
-    "seo",
-    "open-graph",
-    "json-ld",
+    "security-audit",
+    "whois",
+    "rdap",
+    "dns-lookup",
+    "mx-spf-dmarc",
+    "ssl",
+    "hsts",
+    "csp",
     "tech-stack",
-    "security",
-    "contacts",
+    "wappalyzer",
+    "b2b-company-enrichment",
+    "email-finder",
 ]
 INSPECT_INPUT_SCHEMA = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -488,6 +517,13 @@ INSPECT_INPUT_SCHEMA = {
             "format": "uri",
             "pattern": "^https?://",
             "description": "Public HTTP or HTTPS webpage URL to inspect.",
+        },
+        "urls": {
+            "type": "array",
+            "items": {"type": "string", "format": "uri", "pattern": "^https?://"},
+            "minItems": 1,
+            "maxItems": 5,
+            "description": "Optional list of 1 to 5 public URLs to inspect concurrently in one call.",
         },
         "render_mode": {
             "type": "string",
@@ -500,13 +536,18 @@ INSPECT_INPUT_SCHEMA = {
             "default": False,
             "description": "Force browser rendering bypassing HTTP tier.",
         },
+        "deep": {
+            "type": "boolean",
+            "default": True,
+            "description": "Deep sub-crawl (/contact, /about, /pricing, /team) plus DNS MX/SPF/DMARC and RDAP domain age.",
+        },
         "no_cache": {
             "type": "boolean",
             "default": False,
             "description": "Bypass in-memory result cache.",
         },
     },
-    "required": ["url"],
+    "anyOf": [{"required": ["url"]}, {"required": ["urls"]}],
 }
 INSPECT_INPUT_EXAMPLE = {
     "url": "https://example.com",
@@ -587,6 +628,24 @@ INSPECT_OUTPUT_SCHEMA = {
             },
             "required": ["h1", "h2", "total_links", "internal_links", "external_links", "pdf_links", "sitemap_links"],
         },
+        "domain_intel": {
+            "type": "object",
+            "description": "DNS MX/SPF/DMARC mail provider intel (dns_mail) and RDAP/WHOIS domain_age_days.",
+            "properties": {
+                "has_mx": {"type": "boolean"},
+                "has_spf": {"type": "boolean"},
+                "has_dmarc": {"type": "boolean"},
+                "mail_provider": {"type": ["string", "null"]},
+                "domain_age_days": {"type": ["integer", "null"]},
+                "registrar": {"type": ["string", "null"]},
+            },
+        },
+        "results": {
+            "type": "array",
+            "items": {"type": "object"},
+            "description": "Per-domain inspection results when multiple urls (1-5) are supplied.",
+        },
+        "count": {"type": "integer", "minimum": 1},
     },
     "required": [
         "success",
@@ -711,13 +770,17 @@ def inspect_mcp_discovery_extension():
 
 
 BATCH_FETCH_DESCRIPTION = (
-    "Parallel batch webpage and document retrieval tool. Fetches up to 5 public URLs "
-    "concurrently with fair settlement (returns 502 without settling if all fail), "
-    "VPS browser concurrency protection, and native Markdown/plain text output."
+    "Parallel batch webpage and PDF document extraction tool (pdf, pdf-to-markdown, "
+    "pdf text extraction, pdf ocr alternative, whitepaper, rfc, academic paper, spa, "
+    "anti-bot, stealth chromium). Fetches up to 5 public URLs concurrently with Markdown, "
+    "fenced code blocks, OpenGraph metadata, JSON-LD, pricing tables, and fair settlement (502 if all fail)."
 )
 BATCH_FETCH_TAGS = [
     "batch",
     "parallel",
+    "pdf-to-markdown",
+    "anti-bot",
+    "spa",
     "web-scraper",
     "markdown",
     "agents",
@@ -774,7 +837,19 @@ BATCH_FETCH_OUTPUT_SCHEMA = {
         "success": {"type": "boolean"},
         "results": {
             "type": "array",
-            "items": {"type": "object"},
+            "items": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "url": {"type": "string"},
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "markdown": {"type": "string"},
+                    "og_metadata": {"type": "object"},
+                    "json_ld": {"type": "array", "items": {"type": "object"}},
+                    "fenced_code_blocks": {"type": "array", "items": {"type": "object"}},
+                },
+            },
         },
         "total_urls": {"type": "integer", "minimum": 1, "maximum": 5},
         "succeeded_count": {"type": "integer", "minimum": 0, "maximum": 5},
@@ -861,12 +936,15 @@ def batch_fetch_mcp_discovery_extension():
 
 
 MAP_DESCRIPTION = (
-    "Website URL discovery and sitemap mapper. Discovers and maps internal URLs "
-    "across a website using robots.txt, XML sitemaps (including nested sitemap "
-    "indexes), and HTML links, with optional search filtering and subdomain support."
+    "Sitemap crawler, robots.txt parser, documentation URL mapper, and internal link discovery tool. "
+    "Discovers up to 500 internal URLs from robots.txt, XML sitemaps (including nested sitemap indexes), "
+    "and HTML links, with optional search filtering and subdomain support."
 )
 MAP_TAGS = [
-    "sitemap",
+    "sitemap-crawler",
+    "robots-txt",
+    "documentation-url-mapper",
+    "internal-link-discovery",
     "url-mapper",
     "crawler",
     "discovery",
@@ -1023,10 +1101,10 @@ def map_mcp_discovery_extension():
 
 
 SEARCH_DESCRIPTION = (
-    "Live web, news, and places search powered by Serper (with Exa fallback for web). "
-    "Returns structured titles, URLs, snippets, and metadata."
+    "Real-time web search, Google News, and Google Places SERP API powered by Serper (with Exa fallback). "
+    "Returns ranked titles, URLs, snippets, dates, and Places metadata to corroborate sources."
 )
-SEARCH_TAGS = ["search", "web-search", "serper", "exa", "agents"]
+SEARCH_TAGS = ["real-time-web-search", "google-news", "serp", "places", "serper", "exa", "agents"]
 SEARCH_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -1055,7 +1133,25 @@ SEARCH_OUTPUT_SCHEMA = {
         "provider_used": {"type": "string"},
         "search_type": {"type": "string"},
         "num_results": {"type": "integer"},
-        "results": {"type": "array", "items": {"type": "object"}},
+        "results": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "position": {"type": "integer"},
+                    "title": {"type": "string"},
+                    "url": {"type": "string"},
+                    "snippet": {"type": "string"},
+                    "published_date": {"type": "string"},
+                    "source": {"type": "string"},
+                    "address": {"type": "string"},
+                    "phone": {"type": "string"},
+                    "rating": {"type": ["number", "null"]},
+                    "reviews_count": {"type": ["integer", "null"]},
+                    "category": {"type": "string"},
+                },
+            },
+        },
         "cached": {"type": "boolean"},
         "elapsed_ms": {"type": "integer"},
         "service_version": {"type": "string"},
@@ -1100,9 +1196,10 @@ def search_mcp_discovery_extension():
 
 
 SEARCH_AND_FETCH_DESCRIPTION = (
-    "Search the web and automatically fetch clean Markdown content for the top matching pages in one call."
+    "End-to-end RAG pipeline: real-time web search (SERP) plus parallel scraping of full article Markdown, "
+    "fenced code blocks, OpenGraph metadata, and JSON-LD from top matching pages to corroborate sources."
 )
-SEARCH_AND_FETCH_TAGS = ["search", "rag", "markdown", "web-scraping", "agents"]
+SEARCH_AND_FETCH_TAGS = ["rag-pipeline", "real-time-web-search", "full-article-markdown", "serp", "agents"]
 SEARCH_AND_FETCH_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -1130,7 +1227,22 @@ SEARCH_AND_FETCH_OUTPUT_SCHEMA = {
         "requested_count": {"type": "integer"},
         "succeeded_count": {"type": "integer"},
         "failed_count": {"type": "integer"},
-        "results": {"type": "array", "items": {"type": "object"}},
+        "results": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "url": {"type": "string"},
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "markdown": {"type": "string"},
+                    "og_metadata": {"type": "object"},
+                    "json_ld": {"type": "array", "items": {"type": "object"}},
+                    "fenced_code_blocks": {"type": "array", "items": {"type": "object"}},
+                },
+            },
+        },
         "elapsed_ms": {"type": "integer"},
         "service_version": {"type": "string"},
     },
@@ -1174,10 +1286,12 @@ def search_and_fetch_mcp_discovery_extension():
 
 
 LEADS_DESCRIPTION = (
-    "B2B Enriched Lead Generator. Searches Google Maps or Web via Serper and enriches each company website "
-    "with emails, phones, social links, tech stack, and domain/MX intelligence."
+    "Local business leads & B2B outbound generator (Google Maps scraper, Google Places, med spa, "
+    "cosmetic dentist, contractors). Discovers businesses and runs concurrent Deep /inspect to extract "
+    "emails, phones, ratings, reviews, tech stack (WordPress, Shopify, HubSpot), and mail providers "
+    "(Google Workspace, Microsoft 365)."
 )
-LEADS_TAGS = ["leads", "b2b", "enrichment", "prospecting", "agents"]
+LEADS_TAGS = ["local-business-leads", "google-maps-scraper", "google-places", "b2b-outbound", "enrichment", "agents"]
 LEADS_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -1206,7 +1320,34 @@ LEADS_OUTPUT_SCHEMA = {
         "source": {"type": "string"},
         "total_leads": {"type": "integer"},
         "inspected_count": {"type": "integer"},
-        "leads": {"type": "array", "items": {"type": "object"}},
+        "leads": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "business_name": {"type": "string"},
+                    "category": {"type": "string"},
+                    "rating": {"type": ["number", "null"]},
+                    "reviews_count": {"type": ["integer", "null"]},
+                    "address": {"type": "string"},
+                    "maps_phone": {"type": "string"},
+                    "website": {"type": "string"},
+                    "inspected": {"type": "boolean"},
+                    "emails": {"type": "array", "items": {"type": "string"}},
+                    "phones": {"type": "array", "items": {"type": "string"}},
+                    "contact_url": {"type": ["string", "null"]},
+                    "pricing_url": {"type": ["string", "null"]},
+                    "social_links": {"type": "object"},
+                    "tech_stack": {"type": "array", "items": {"type": "string"}},
+                    "has_mx": {"type": "boolean"},
+                    "has_spf": {"type": "boolean"},
+                    "has_dmarc": {"type": "boolean"},
+                    "domain_age_days": {"type": ["integer", "null"]},
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                },
+            },
+        },
         "cached": {"type": "boolean"},
         "elapsed_ms": {"type": "integer"},
         "service_version": {"type": "string"},
@@ -1251,9 +1392,11 @@ def leads_mcp_discovery_extension():
 
 
 X_SEARCH_DESCRIPTION = (
-    "Live X/Twitter post search returning normalized posts, engagement metrics, author details, and pagination cursor."
+    "Live Twitter search & X posts API for social sentiment, developer sentiment, crypto alpha, "
+    "trending topics, micropayments, and latest tweets. Returns engagement metrics, author handles, "
+    "follower counts, and pagination cursor."
 )
-X_SEARCH_TAGS = ["twitter", "x", "social-search", "news", "agents"]
+X_SEARCH_TAGS = ["twitter-search", "x-posts", "social-sentiment", "developer-sentiment", "crypto-alpha", "trending", "agents"]
 X_SEARCH_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -1278,7 +1421,25 @@ X_SEARCH_OUTPUT_SCHEMA = {
         "query": {"type": "string"},
         "query_type": {"type": "string"},
         "count": {"type": "integer"},
-        "tweets": {"type": "array", "items": {"type": "object"}},
+        "tweets": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "tweet_id": {"type": "string"},
+                    "url": {"type": "string"},
+                    "text": {"type": "string"},
+                    "created_at": {"type": "string"},
+                    "author_username": {"type": "string"},
+                    "author_name": {"type": "string"},
+                    "author_followers": {"type": "integer"},
+                    "likes": {"type": "integer"},
+                    "retweets": {"type": "integer"},
+                    "replies": {"type": "integer"},
+                    "views": {"type": "integer"},
+                },
+            },
+        },
         "next_cursor": {"type": ["string", "null"]},
         "has_next_page": {"type": "boolean"},
         "cached": {"type": "boolean"},

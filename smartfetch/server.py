@@ -436,7 +436,10 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
         url = body.get("url")
         if not isinstance(url, str) or not url.strip():
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_url", "error": "URL must be a non-empty string"})
-        viewport = str(body.get("viewport", "desktop"))
+        mobile = bool(body.get("mobile", False))
+        viewport = str(body.get("viewport", "mobile" if mobile else "desktop"))
+        if mobile and "viewport" not in body:
+            viewport = "mobile"
         if viewport not in ("desktop", "mobile"):
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_viewport", "error": "Viewport must be 'desktop' or 'mobile'"})
         full_page = bool(body.get("full_page", False))
@@ -488,27 +491,58 @@ def create_app(payment_settings=None, *, v111_runtime=None, v111_environ=None):
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_json", "error": "Invalid JSON"})
         if not isinstance(body, dict):
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_request", "error": "Invalid request"})
+        raw_urls = body.get("urls")
         url = body.get("url")
-        if not isinstance(url, str) or not url.strip():
-            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_url", "error": "URL must be a non-empty string"})
+        target_urls: list[str] = []
+        if isinstance(raw_urls, (list, tuple)) and raw_urls:
+            seen_u: set[str] = set()
+            for item in raw_urls:
+                if isinstance(item, str) and item.strip() and item.strip() not in seen_u:
+                    seen_u.add(item.strip())
+                    target_urls.append(item.strip())
+                    if len(target_urls) >= 5:
+                        break
+        elif isinstance(url, str) and url.strip():
+            target_urls = [url.strip()]
+        if not target_urls:
+            return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_url", "error": "url or urls (1-5) must be provided"})
         render_mode = str(body.get("render_mode", "auto"))
         if render_mode not in ("auto", "http_only", "browser"):
             return JSONResponse(status_code=400, content={"success": False, "error_code": "invalid_render_mode", "error": "render_mode must be 'auto', 'http_only', or 'browser'"})
         force_browser = bool(body.get("force_browser", False))
         no_cache = bool(body.get("no_cache", False)) or request.headers.get("cache-control") == "no-cache"
         deep = bool(body.get("deep", True))
-        try:
-            inspect_kwargs: dict[str, Any] = {
-                "force_browser": force_browser,
-                "render_mode": render_mode,
-                "no_cache": no_cache,
-            }
-            if not deep:
-                inspect_kwargs["deep"] = False
-            result = await _run_inspect(url.strip(), **inspect_kwargs)
-            return JSONResponse(status_code=200, content=result)
-        except Exception as exc:
-            return JSONResponse(status_code=502, content={"success": False, "error_code": "inspect_failed", "error": str(exc)})
+        inspect_kwargs: dict[str, Any] = {
+            "force_browser": force_browser,
+            "render_mode": render_mode,
+            "no_cache": no_cache,
+        }
+        if not deep:
+            inspect_kwargs["deep"] = False
+        if len(target_urls) == 1 and not isinstance(raw_urls, (list, tuple)):
+            try:
+                result = await _run_inspect(target_urls[0], **inspect_kwargs)
+                return JSONResponse(status_code=200, content=result)
+            except Exception as exc:
+                return JSONResponse(status_code=502, content={"success": False, "error_code": "inspect_failed", "error": str(exc)})
+
+        async def _inspect_one(u: str) -> dict[str, Any]:
+            try:
+                return await _run_inspect(u, **inspect_kwargs)
+            except Exception as exc:
+                return {"success": False, "requested_url": u, "error": str(exc)}
+
+        results = list(await asyncio.gather(*(_inspect_one(u) for u in target_urls)))
+        succeeded = [r for r in results if r.get("success")]
+        if not succeeded:
+            return JSONResponse(
+                status_code=502,
+                content={"success": False, "error_code": "inspect_failed", "error": "All inspected URLs failed"},
+            )
+        combined = dict(succeeded[0])
+        combined["results"] = results
+        combined["count"] = len(results)
+        return JSONResponse(status_code=200, content=combined)
 
     @application.post("/batch-fetch")
     @application.get("/batch-fetch", include_in_schema=False)

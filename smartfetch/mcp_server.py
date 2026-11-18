@@ -390,6 +390,7 @@ def create_smartfetch_mcp(
     async def screenshot_webpage(
         url: Annotated[str, Field(description="Public HTTP or HTTPS URL of a webpage to capture as a screenshot.")],
         viewport: Annotated[str, Field(description="Device viewport preset ('desktop' for 1280x800, 'mobile' for 390x844).")] = "desktop",
+        mobile: Annotated[bool, Field(description="Shortcut to capture mobile 390x844 responsive compliance viewport.")] = False,
         full_page: Annotated[bool, Field(description="Capture the full scrollable page height up to 4000px.")] = False,
         image_format: Annotated[str, Field(description="Output image format ('jpeg' or 'png').")] = "jpeg",
         wait_ms: Annotated[int, Field(ge=0, le=5000, description="Optional extra wait in milliseconds (0-5000) before capture.")] = 0,
@@ -399,6 +400,8 @@ def create_smartfetch_mcp(
     ) -> dict[str, Any]:
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string")
+        if mobile and viewport == "desktop":
+            viewport = "mobile"
         if viewport not in ("desktop", "mobile"):
             raise ValueError("viewport must be 'desktop' or 'mobile'")
         if image_format not in ("jpeg", "png"):
@@ -421,26 +424,57 @@ def create_smartfetch_mcp(
         )
 
     async def inspect_webpage(
-        url: Annotated[str, Field(description="Public HTTP or HTTPS URL of a webpage to inspect.")],
+        url: Annotated[Optional[str], Field(description="Public HTTP or HTTPS URL of a webpage to inspect.")] = None,
+        urls: Annotated[Optional[list[str]], Field(min_length=1, max_length=5, description="Optional list of 1-5 public URLs to inspect concurrently.")] = None,
         render_mode: Annotated[str, Field(description="Rendering strategy: 'auto' (HTTP with browser escalation on SPA shell), 'http_only', or 'browser'.")] = "auto",
         force_browser: Annotated[bool, Field(description="Force browser rendering bypassing HTTP tier.")] = False,
         deep: Annotated[bool, Field(description="Sub-crawl /contact, /about, /pricing and gather DoH/RDAP domain intel.")] = True,
     ) -> dict[str, Any]:
-        if not isinstance(url, str) or not url.strip():
-            raise ValueError("url must be a non-empty string")
+        import asyncio
+
+        target_urls: list[str] = []
+        if isinstance(urls, list) and urls:
+            for item in urls:
+                if isinstance(item, str) and item.strip() and item.strip() not in target_urls:
+                    target_urls.append(item.strip())
+                    if len(target_urls) >= 5:
+                        break
+        elif isinstance(url, str) and url.strip():
+            target_urls = [url.strip()]
+        if not target_urls:
+            raise ValueError("url or urls must be provided")
         if render_mode not in ("auto", "http_only", "browser"):
             raise ValueError("render_mode must be 'auto', 'http_only', or 'browser'")
         extra_kwargs: dict[str, Any] = {}
         if not deep:
             extra_kwargs["deep"] = False
-        if inspect_handler is not None:
-            return await inspect_handler(url.strip(), force_browser=force_browser, render_mode=render_mode, **extra_kwargs)
-        import asyncio
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            None,
-            lambda: inspect_webpage_url(url.strip(), force_browser=force_browser, render_mode=render_mode, **extra_kwargs),
-        )
+
+        async def _one(u: str) -> dict[str, Any]:
+            if inspect_handler is not None:
+                return await inspect_handler(u, force_browser=force_browser, render_mode=render_mode, **extra_kwargs)
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                None,
+                lambda: inspect_webpage_url(u, force_browser=force_browser, render_mode=render_mode, **extra_kwargs),
+            )
+
+        if len(target_urls) == 1 and not (isinstance(urls, list) and urls):
+            return await _one(target_urls[0])
+
+        async def _safe_one(u: str) -> dict[str, Any]:
+            try:
+                return await _one(u)
+            except Exception as exc:
+                return {"success": False, "requested_url": u, "error": str(exc)}
+
+        results = list(await asyncio.gather(*(_safe_one(u) for u in target_urls)))
+        succeeded = [r for r in results if r.get("success")]
+        if not succeeded:
+            raise RuntimeError("All inspected URLs failed")
+        combined = dict(succeeded[0])
+        combined["results"] = results
+        combined["count"] = len(results)
+        return combined
 
     async def batch_fetch_webpages(
         urls: Annotated[list[str], Field(description="List of 1 to 5 public HTTP/HTTPS URLs to retrieve in parallel.")],

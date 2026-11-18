@@ -609,11 +609,14 @@ def openapi_document(
             "/fetch": {
                 "post": {
                     "operationId": "fetchWebpage",
-                    "summary": "Fetch a public webpage",
+                    "summary": "Fetch webpage, SPA, or PDF to clean Markdown (PDF OCR alternative)",
                     "description": (
-                        "Paid x402 exact retrieval of one public HTTP or HTTPS "
-                        f"URL. The configured price is {settings.price} per "
-                        f"execution using USDC on {network_desc}."
+                        "Paid x402 exact retrieval of one public HTTP or HTTPS URL (webpage or PDF). "
+                        "Supports pdf, pdf-to-markdown, pdf text extraction, pdf ocr alternative, whitepaper, "
+                        "rfc, academic paper, plus spa, javascript hydration, dynamic rendering, cloudflare bypass, "
+                        "waf, anti-bot, stealth chromium, and tls fingerprint fallback. Returns clean markdown, "
+                        "fenced code blocks, json-ld, opengraph metadata, and pricing tables. "
+                        f"The configured price is {settings.price} per execution using USDC on {network_desc}."
                     ),
                     "x-x402": x402_contract,
                     "x-payment-info": {
@@ -715,11 +718,11 @@ def openapi_document(
             "/screenshot": {
                 "post": {
                     "operationId": "screenshotWebpage",
-                    "summary": "Capture a webpage screenshot",
+                    "summary": "Desktop (1280x800) & mobile (390x844, mobile=true) responsive compliance screenshot",
                     "description": (
-                        "Paid x402 exact screenshot capture of one public HTTP or "
-                        "HTTPS URL rendered in an isolated browser. The configured "
-                        f"price is $0.01 per execution using USDC on {network_desc}."
+                        "Desktop (1280x800) & mobile (390x844, mobile=true) responsive compliance screenshot, "
+                        "visual audit, phishing verification, and full-page capture using isolated stealth Chromium. "
+                        f"The configured price is $0.01 per execution using USDC on {network_desc}."
                     ),
                     "x-x402": {
                         "x402Version": 2,
@@ -809,11 +812,13 @@ def openapi_document(
             "/inspect": {
                 "post": {
                     "operationId": "inspectWebpage",
-                    "summary": "Inspect structured site intelligence",
+                    "summary": "Security audit, WHOIS/RDAP, DNS MX/SPF/DMARC, tech stack & B2B enrichment (1-5 URLs)",
                     "description": (
-                        "Paid x402 exact site intelligence and SEO inspection of one public "
-                        "HTTP or HTTPS webpage. Extracts metadata, OpenGraph, Twitter cards, "
-                        "JSON-LD schemas, contacts, tech stack detection, and security headers. "
+                        "Security audit, whois, rdap, dns lookup (mx, spf, dmarc, Google Workspace / Microsoft 365), "
+                        "ssl, security headers (hsts, csp, x_frame_options), tech stack (wappalyzer), b2b company "
+                        "enrichment, and email finder for 1 to 5 URLs (url or urls, deep=true default). Returns "
+                        "domain_age_days, dns_mail/domain_intel, security_headers, emails, phones, socials, "
+                        "open_graph, and json_ld. "
                         f"The configured price is $0.005 per execution using USDC on {network_desc}."
                     ),
                     "x-x402": {
@@ -904,12 +909,12 @@ def openapi_document(
             "/batch-fetch": {
                 "post": {
                     "operationId": "batchFetchWebpages",
-                    "summary": "Batch retrieve multiple webpages in parallel",
+                    "summary": "Batch retrieve 1-5 webpages or PDFs in parallel to Markdown",
                     "description": (
-                        "Paid x402 exact parallel batch retrieval of up to 5 public HTTP or "
-                        "HTTPS webpages or documents. Fetches concurrently with VPS browser "
-                        "concurrency protection (capped at <= 2 browser renders per batch) and "
-                        "returns 502 without settling payment if all URLs fail. "
+                        "Paid x402 exact parallel batch retrieval of 1 to 5 public HTTP/HTTPS webpages or PDFs "
+                        "(pdf, pdf-to-markdown, pdf text extraction, pdf ocr alternative, spa, anti-bot, stealth "
+                        "chromium). Extracts clean markdown, fenced code blocks, json-ld, opengraph metadata, and "
+                        "returns 502 without settling if all URLs fail. "
                         f"The configured price is $0.015 per execution using USDC on {network_desc}."
                     ),
                     "x-x402": {
@@ -1001,12 +1006,11 @@ def openapi_document(
             "/map": {
                 "post": {
                     "operationId": "mapWebsite",
-                    "summary": "Map and discover URLs on a website",
+                    "summary": "Sitemap crawler, robots.txt, documentation URL mapper & link discovery",
                     "description": (
-                        "Paid x402 exact website URL mapper and sitemap discovery tool. "
-                        "Discovers internal URLs from robots.txt, XML sitemaps (including nested "
-                        "sitemap indexes), and HTML links, with optional search filtering and "
-                        f"subdomain support. The configured price is $0.005 per execution using USDC on {network_desc}."
+                        "Sitemap crawler, robots.txt, documentation url mapper, and internal link discovery "
+                        "(up to 500 URLs) across any public website. "
+                        f"The configured price is $0.005 per execution using USDC on {network_desc}."
                     ),
                     "x-x402": {
                         "x402Version": 2,
@@ -1676,15 +1680,15 @@ Payment: Legacy `POST /fetch` and the four existing MCP tools use {payment['pric
 - [OpenAPI 3.1]({urls['openapi']})
 - [Metadata]({urls['meta']})
 - [Remote MCP Streamable HTTP]({urls['mcp']})
-- [Paid HTTP retrieval]({urls['fetch']}): POST only ($0.005 USDC) — Stealth web/PDF/Markdown fetch: `{{"url": "https://example.com", "format": "markdown"}}`
-- [Paid HTTP screenshot]({urls.get('screenshot', urls['base'] + '/screenshot')}): POST only ($0.010 USDC) — Desktop/mobile/full-page screenshot: `{{"url": "https://example.com", "full_page": true}}`
-- [Paid HTTP site intelligence]({urls.get('inspect', urls['base'] + '/inspect')}): POST only ($0.005 USDC) — Deep site & B2B intelligence (emails, phones, socials, 30+ tech stack signatures, DNS MX/SPF/DMARC, RDAP domain age): `{{"url": "https://example.com", "deep": true}}`
-- [Paid HTTP batch retrieval]({urls.get('batch_fetch', urls['base'] + '/batch-fetch')}): POST only ($0.015 USDC) — Concurrent batch fetch 1–5 URLs: `{{"urls": ["https://example.com"]}}`
-- [Paid HTTP website URL mapper]({urls.get('map', urls['base'] + '/map')}): POST only ($0.005 USDC) — Sitemap / robots.txt / internal URL discovery up to 500 URLs: `{{"url": "https://example.com"}}`
-- [Paid HTTP web search]({urls.get('search', urls['base'] + '/search')}): POST only ($0.010 USDC) — Real-time web, news & Google Places search via Serper/Exa: `{{"query": "AI agents", "search_type": "web", "num_results": 5}}`
-- [Paid HTTP search & fetch]({urls.get('search_and_fetch', urls['base'] + '/search-and-fetch')}): POST only ($0.020 USDC) — Search the web and scrape clean Markdown from top 1–5 results in parallel: `{{"query": "x402 protocol specification", "num_results": 3}}`
-- [Paid HTTP B2B enriched leads]({urls.get('leads', urls['base'] + '/leads')}): POST only ($0.030 USDC) — B2B Lead Generation (Google Maps Places / Web + concurrent Deep /inspect for emails, phones, socials, ratings, address, DNS mail & tech stack): `{{"query": "dentists in Austin TX", "source": "places", "max_leads": 5}}`
-- [Paid HTTP X/Twitter search]({urls.get('x_search', urls['base'] + '/x-search')}): POST only ($0.008 USDC) — Live X/Twitter post search (<= 20 tweets per call) with cursor pagination: `{{"query": "x402", "query_type": "Latest", "max_tweets": 10}}`
+- [Paid HTTP retrieval]({urls['fetch']}): POST/GET ($0.005 USDC) — Stealth web/PDF-to-Markdown, PDF text extraction (PDF OCR alternative), SPA/JS hydration, Cloudflare/anti-bot bypass, fenced_code_blocks, og_metadata, json_ld: `{{"url": "https://example.com", "format": "markdown"}}`
+- [Paid HTTP screenshot]({urls.get('screenshot', urls['base'] + '/screenshot')}): POST/GET ($0.010 USDC) — Desktop (1280x800) & mobile (390x844, mobile=true) responsive compliance screenshot, visual audit, phishing verification, full-page capture: `{{"url": "https://example.com", "mobile": true, "full_page": true}}`
+- [Paid HTTP site intelligence]({urls.get('inspect', urls['base'] + '/inspect')}): POST/GET ($0.005 USDC) — Security audit, WHOIS/RDAP domain_age_days, DNS MX/SPF/DMARC (dns_mail), SSL/HSTS/CSP security_headers, Wappalyzer tech_stack, email finder for 1-5 urls (deep=true): `{{"url": "https://example.com", "deep": true}}`
+- [Paid HTTP batch retrieval]({urls.get('batch_fetch', urls['base'] + '/batch-fetch')}): POST/GET ($0.015 USDC) — Concurrent batch fetch 1–5 webpages or PDFs with fenced_code_blocks, og_metadata, json_ld: `{{"urls": ["https://example.com"]}}`
+- [Paid HTTP website URL mapper]({urls.get('map', urls['base'] + '/map')}): POST/GET ($0.005 USDC) — Sitemap crawler, robots.txt, documentation URL mapper & internal link discovery up to 500 URLs: `{{"url": "https://example.com"}}`
+- [Paid HTTP web search]({urls.get('search', urls['base'] + '/search')}): POST/GET ($0.010 USDC) — Real-time web search, Google News & Places SERP via Serper/Exa: `{{"query": "AI agents", "search_type": "web", "num_results": 5}}`
+- [Paid HTTP search & fetch]({urls.get('search_and_fetch', urls['base'] + '/search-and-fetch')}): POST/GET ($0.020 USDC) — RAG pipeline: search & scrape full article Markdown from top 1–5 results to corroborate sources: `{{"query": "x402 protocol specification", "num_results": 3}}`
+- [Paid HTTP B2B enriched leads]({urls.get('leads', urls['base'] + '/leads')}): POST/GET ($0.030 USDC) — Local business leads, Google Maps scraper & B2B outbound (med spa, cosmetic dentist, contractors) with emails, phones, ratings, reviews, Google Workspace/Microsoft 365, HubSpot, WordPress, Shopify: `{{"query": "dentists in Austin TX", "source": "places", "max_leads": 5}}`
+- [Paid HTTP X/Twitter search]({urls.get('x_search', urls['base'] + '/x-search')}): POST/GET ($0.008 USDC) — Live Twitter search & X posts (social sentiment, developer sentiment, crypto alpha, trending, latest tweets, engagement metrics) <= 20 tweets with cursor pagination: `{{"query": "x402", "query_type": "Latest", "max_tweets": 10}}`
 
 ## How to Pay
 - **x402 Autonomous Payment (USDC)**: Supported on Base Mainnet (`{payment['network']}`){solana_pay_line}. Send an unpaid POST request, decode `PAYMENT-REQUIRED`, sign, and retry with `PAYMENT-SIGNATURE`. Zero charge on `502` upstream errors (SmartFetch settles only after successful delivery).

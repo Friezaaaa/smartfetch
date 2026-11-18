@@ -324,9 +324,9 @@ class InspectMCPToolTests(unittest.TestCase):
 
         tool = tools["inspect_webpage"]
         schema = tool.parameters
-        self.assertEqual(schema["required"], ["url"])
         props = schema["properties"]
         self.assertIn("url", props)
+        self.assertIn("urls", props)
         self.assertIn("force_browser", props)
         self.assertIn("render_mode", props)
 

@@ -295,6 +295,62 @@ def _safe_decompose_matching(soup, selectors: list[str]) -> None:
             tag.decompose()
 
 
+_FENCED_CODE_RE = re.compile(r"```([A-Za-z0-9_+-]*)\n([\s\S]*?)```")
+
+
+def extract_og_metadata(soup: BeautifulSoup) -> dict[str, str]:
+    """Extract OpenGraph and Twitter meta tags from parsed HTML."""
+    og: dict[str, str] = {}
+    for meta in soup.find_all("meta"):
+        key = (meta.get("property") or meta.get("name") or "").strip().lower()
+        if not key or not (key.startswith("og:") or key.startswith("twitter:") or key.startswith("product:")):
+            continue
+        val = (meta.get("content") or "").strip()
+        if val and key not in og:
+            og[key] = val[:500]
+            if len(og) >= 30:
+                break
+    return og
+
+
+def extract_json_ld(soup: BeautifulSoup) -> list[dict]:
+    """Extract up to 5 parsed JSON-LD structured data objects from HTML."""
+    items: list[dict] = []
+    for script in soup.find_all("script", attrs={"type": re.compile(r"application/ld\+json", re.I)}):
+        raw = (script.string or script.get_text() or "").strip()
+        if not raw:
+            continue
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            items.append(parsed)
+        elif isinstance(parsed, list):
+            for entry in parsed:
+                if isinstance(entry, dict):
+                    items.append(entry)
+                    if len(items) >= 5:
+                        break
+        if len(items) >= 5:
+            break
+    return items[:5]
+
+
+def extract_fenced_code_blocks(markdown: str) -> list[dict[str, str]]:
+    """Extract up to 25 fenced code blocks from Markdown."""
+    if not markdown or "```" not in markdown:
+        return []
+    blocks: list[dict[str, str]] = []
+    for match in _FENCED_CODE_RE.finditer(markdown):
+        lang = (match.group(1) or "").strip()
+        code = match.group(2).rstrip("\n")
+        blocks.append({"language": lang, "code": code})
+        if len(blocks) >= 25:
+            break
+    return blocks
+
+
 def extract_content(html: str, page_url: str, *, only_main_content: bool = True) -> dict:
     original = BeautifulSoup(html, 'lxml')
 
@@ -345,6 +401,10 @@ def extract_content(html: str, page_url: str, *, only_main_content: bool = True)
     # Fall back only when content is truly tiny or looks like a JS placeholder.
     low_quality = len(text) < 80 or any(sig in lower for sig in js_signals if len(text) < 800)
 
+    og_metadata = extract_og_metadata(original)
+    json_ld = extract_json_ld(original)
+    fenced_code_blocks = extract_fenced_code_blocks(markdown)
+
     return {
         'title': title,
         'content': text,
@@ -353,6 +413,9 @@ def extract_content(html: str, page_url: str, *, only_main_content: bool = True)
         'word_count': len(text.split()),
         'content_hash': hashlib.sha256(text.encode('utf-8')).hexdigest(),
         'low_quality': low_quality,
+        'og_metadata': og_metadata,
+        'json_ld': json_ld,
+        'fenced_code_blocks': fenced_code_blocks,
     }
 
 

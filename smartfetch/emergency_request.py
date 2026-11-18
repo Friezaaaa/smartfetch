@@ -68,6 +68,7 @@ SCREENSHOT_INPUT_SCHEMA = {
     "properties": {
         "url": {"type": "string", "format": "uri", "pattern": "^https?://"},
         "viewport": {"type": "string", "enum": ["desktop", "mobile"]},
+        "mobile": {"type": "boolean"},
         "full_page": {"type": "boolean"},
         "image_format": {"type": "string", "enum": ["jpeg", "png"]},
         **_CAPTURE_OPTION_PROPERTIES,
@@ -80,12 +81,18 @@ INSPECT_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "url": {"type": "string", "format": "uri", "pattern": "^https?://"},
+        "urls": {
+            "type": "array",
+            "items": {"type": "string", "format": "uri", "pattern": "^https?://"},
+            "minItems": 1,
+            "maxItems": 5,
+        },
         "render_mode": {"type": "string", "enum": ["auto", "http_only", "browser"]},
         "force_browser": {"type": "boolean"},
         "no_cache": {"type": "boolean"},
         "deep": {"type": "boolean"},
     },
-    "required": ["url"],
+    "anyOf": [{"required": ["url"]}, {"required": ["urls"]}],
 }
 _INSPECT_VALIDATOR = Draft202012Validator(INSPECT_INPUT_SCHEMA, format_checker=FormatChecker())
 
@@ -143,6 +150,7 @@ MCP_SCREENSHOT_ARGUMENT_SCHEMA = {
     "properties": {
         "url": {"type": "string"},
         "viewport": {"type": "string", "enum": ["desktop", "mobile"]},
+        "mobile": {"type": "boolean"},
         "full_page": {"type": "boolean"},
         "image_format": {"type": "string", "enum": ["jpeg", "png"]},
         **_CAPTURE_OPTION_PROPERTIES,
@@ -153,12 +161,13 @@ MCP_INSPECT_ARGUMENT_SCHEMA = {
     "type": "object",
     "properties": {
         "url": {"type": "string"},
+        "urls": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 5},
         "render_mode": {"type": "string", "enum": ["auto", "http_only", "browser"]},
         "force_browser": {"type": "boolean"},
         "no_cache": {"type": "boolean"},
         "deep": {"type": "boolean"},
     },
-    "required": ["url"],
+    "anyOf": [{"required": ["url"]}, {"required": ["urls"]}],
 }
 MCP_BATCH_FETCH_ARGUMENT_SCHEMA = {
     "type": "object",
@@ -337,7 +346,7 @@ def classify_fetch(
     if allow_unpaid_probe:
         try:
             payload = _parse_json(body, headers)
-            if not payload or not payload.get("url"):
+            if not payload or (not payload.get("url") and not payload.get("urls")):
                 return None
         except EmergencyRequestError:
             return None
@@ -361,7 +370,7 @@ def classify_screenshot(
     if allow_unpaid_probe:
         try:
             payload = _parse_json(body, headers)
-            if not payload or not payload.get("url"):
+            if not payload or (not payload.get("url") and not payload.get("urls")):
                 return None
         except EmergencyRequestError:
             return None
@@ -386,7 +395,7 @@ def classify_inspect(
     if allow_unpaid_probe:
         try:
             payload = _parse_json(body, headers)
-            if not payload or not payload.get("url"):
+            if not payload or (not payload.get("url") and not payload.get("urls")):
                 return None
         except EmergencyRequestError:
             return None
@@ -436,7 +445,7 @@ def classify_map(
     if allow_unpaid_probe:
         try:
             payload = _parse_json(body, headers)
-            if not payload or not payload.get("url"):
+            if not payload or (not payload.get("url") and not payload.get("urls")):
                 return None
         except EmergencyRequestError:
             return None

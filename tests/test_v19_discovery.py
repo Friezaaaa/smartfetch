@@ -159,6 +159,10 @@ class V19MCPToolContractTests(unittest.TestCase):
                 self.assertEqual(schema['properties']['urls']['type'], 'array')
                 self.assertIn('max_chars_per_url', schema['properties'])
                 continue
+            if name == 'inspect_webpage':
+                self.assertIn('url', schema['properties'])
+                self.assertIn('urls', schema['properties'])
+                continue
             self.assertEqual(schema['required'], ['url'])
             self.assertEqual(schema['properties']['url']['type'], 'string')
             if name == 'screenshot_webpage':

@@ -567,6 +567,86 @@ class TestV115OptInBehavior(unittest.TestCase):
                         self.assertEqual(r_l_bare.status_code, 200)
                         self.assertEqual(leads_mock.call_args.args[0], "software companies in Austin TX")
 
+    def test_v115_zero_cost_enrichment_fetch_and_batch_fetch(self):
+        from smartfetch.extract import extract_content
+        from smartfetch.limits import shape_output
+
+        html = """<!doctype html>
+        <html>
+          <head>
+            <title>Enriched Page</title>
+            <meta property="og:title" content="Enriched OG Title" />
+            <meta name="twitter:card" content="summary_large_image" />
+            <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"Test"}</script>
+          </head>
+          <body>
+            <main>
+              <h1>Enriched Page</h1>
+              <p>Some content here.</p>
+              <pre><code class="language-python">print("hello")</code></pre>
+            </main>
+          </body>
+        </html>"""
+        extracted = extract_content(html, "https://example.com/article")
+        self.assertEqual(extracted["og_metadata"].get("og:title"), "Enriched OG Title")
+        self.assertEqual(extracted["og_metadata"].get("twitter:card"), "summary_large_image")
+        self.assertEqual(len(extracted["json_ld"]), 1)
+        self.assertEqual(extracted["json_ld"][0].get("@type"), "Article")
+        self.assertTrue(any("print" in b["code"] for b in extracted["fenced_code_blocks"]))
+
+        shaped = shape_output({"success": True, "markdown": "```js\nconsole.log(1)\n```"}, 5000)
+        self.assertIn("og_metadata", shaped)
+        self.assertIn("json_ld", shaped)
+        self.assertEqual(shaped["fenced_code_blocks"], [{"language": "js", "code": "console.log(1)"}])
+
+    def test_v115_inspect_multi_domain_and_screenshot_mobile(self):
+        with patch.dict(os.environ, {"SERPER_API_KEY": "k1", "EXA_API_KEY": "k2", "TWITTERAPI_KEY": "k3"}, clear=False):
+            with patch("smartfetch.remote_browser.RemoteBrowserConfig.from_env", return_value=_fake_remote_cfg()):
+                app = create_app(payment_settings=_test_payment_settings(enabled=False))
+                with TestClient(app) as client:
+
+                    def fake_inspect(url, render_mode="auto", force_browser=False, deep=True, no_cache=False):
+                        if "fail" in url:
+                            return {"success": False, "url": url, "error": "boom"}
+                        return {
+                            "success": True,
+                            "url": url,
+                            "domain": "example.com",
+                            "domain_intel": {"domain_age_days": 1000, "has_spf": True},
+                            "security_headers": {"hsts": True},
+                        }
+
+                    with patch("smartfetch.server.inspect_webpage_url", side_effect=fake_inspect):
+                        r_multi = client.post("/inspect", json={"urls": ["https://a.example.com", "https://fail.example.com"], "deep": True})
+                        self.assertEqual(r_multi.status_code, 200)
+                        body = r_multi.json()
+                        self.assertEqual(body["count"], 2)
+                        self.assertEqual(len(body["results"]), 2)
+                        self.assertEqual(body["url"], "https://a.example.com")
+
+                        r_all_fail = client.post("/inspect", json={"urls": ["https://fail1.example.com", "https://fail2.example.com"]})
+                        self.assertEqual(r_all_fail.status_code, 502)
+
+                    with patch("smartfetch.server.browser_screenshot", return_value={"success": True, "url": "https://example.com", "image_base64": "abc", "mime_type": "image/png", "elapsed_ms": 10}) as shot_mock:
+                        r_shot = client.post("/screenshot", json={"url": "https://example.com", "mobile": True})
+                        self.assertEqual(r_shot.status_code, 200)
+                        self.assertEqual(shot_mock.call_args.kwargs.get("viewport"), "mobile")
+
+    def test_v115_discovery_keywords_and_schemas(self):
+        with patch.dict(os.environ, {"SERPER_API_KEY": "k1", "EXA_API_KEY": "k2", "TWITTERAPI_KEY": "k3"}, clear=False):
+            with patch("smartfetch.remote_browser.RemoteBrowserConfig.from_env", return_value=_fake_remote_cfg()):
+                app = create_app(payment_settings=_test_payment_settings(enabled=False))
+                with TestClient(app) as client:
+                    openapi_text = json.dumps(client.get("/openapi.json").json()).lower()
+                    llms_text = client.get("/llms.txt").text.lower()
+
+                    for kw in ("pdf", "ocr", "rdap", "whois", "spf", "dmarc", "hsts", "csp", "sentiment", "json_ld", "fenced_code_blocks", "mobile"):
+                        self.assertIn(kw, openapi_text, f"Missing {kw} in /openapi.json")
+                    for kw in ("pdf", "ocr", "rdap", "spf", "dmarc", "hsts", "csp", "mobile", "sentiment"):
+                        self.assertIn(kw, llms_text, f"Missing {kw} in /llms.txt")
+                    for field in ("deep", "domain_age_days", "dns_mail", "security_headers"):
+                        self.assertIn(field, openapi_text, f"Missing {field} in /openapi.json")
+
 
 if __name__ == "__main__":
     unittest.main()

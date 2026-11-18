@@ -144,7 +144,7 @@ class V16BazaarDiscoveryTests(unittest.TestCase):
                 sort_keys=True,
                 separators=(',', ':'),
             ).encode('utf-8')).hexdigest(),
-            '04642bfacd7467984ac99fc5dfe91f94c6ce344523d9227591948a6f64bc19be',
+            'bbb4b333188f2e9b6792f912cccf27ac6fb74a83be73216b0d542488971a060f',
         )
 
         serialized = json.dumps(bazaar, sort_keys=True)
